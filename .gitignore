@@ -1,0 +1,21 @@
+﻿node_modules/
+dist/
+build/
+
+.env
+.env.*
+
+Dentalux-Sistema/
+
+.DS_Store
+Thumbs.db
+
+*.log
+*.exe
+*.bat
+**/.env
+**/.env.*
+backend/npm/
+npx
+* - copia.*
+* - copia.*

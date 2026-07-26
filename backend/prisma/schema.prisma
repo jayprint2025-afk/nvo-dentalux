@@ -1,0 +1,86 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Doctor {
+  id           String        @id @default(uuid())
+  name         String
+  color        String?
+  sucursal_id  String        @default("sucursal_1")
+  active       Boolean       @default(true)
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  appointments Appointment[]
+  payments     Payment[]
+  expenses     Expense[]
+  
+  @@map("doctors")
+}
+
+model Service {
+  id          String        @id @default(uuid())
+  name        String
+  sucursal_id String        @default("sucursal_1")
+  createdAt   DateTime      @default(now())
+  appointments Appointment[]
+  payments    Payment[]
+  
+  @@map("services")
+}
+
+model Appointment {
+  id             Int      @id @default(autoincrement())
+  patient        String
+  doctor_id      String
+  doctor         Doctor   @relation(fields: [doctor_id], references: [id], onDelete: Cascade)
+  service_id     String
+  service        Service  @relation(fields: [service_id], references: [id])
+  date           DateTime @db.Date
+  start_time     String
+  duration_hours Float    @default(1)
+  phone          String?
+  status         String   @default("Pendiente")
+  sucursal_id    String   @default("sucursal_1")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  payments       Payment[]
+  
+  @@map("appointments")
+}
+
+model Payment {
+  id             Int          @id @default(autoincrement())
+  appointment_id Int?
+  appointment    Appointment? @relation(fields: [appointment_id], references: [id], onDelete: SetNull)
+  patient        String
+  service_id     String
+  service        Service      @relation(fields: [service_id], references: [id])
+  amount         Float
+  payment_method String       @default("efectivo")
+  date           DateTime     @db.Date
+  doctor_id      String
+  doctor         Doctor       @relation(fields: [doctor_id], references: [id], onDelete: Cascade)
+  sucursal_id    String       @default("sucursal_1")
+  createdAt      DateTime     @default(now())
+  
+  @@map("payments")
+}
+
+model Expense {
+  id             Int      @id @default(autoincrement())
+  concept        String
+  amount         Float
+  date           DateTime @db.Date
+  doctor_id      String?
+  doctor         Doctor?  @relation(fields: [doctor_id], references: [id], onDelete: SetNull)
+  payment_method String?
+  sucursal_id    String   @default("sucursal_1")
+  createdAt      DateTime @default(now())
+  
+  @@map("expenses")
+}

@@ -1,0 +1,957 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CliniqOne – CRM & Demos (Offline)</title>
+  <style>
+    :root{
+      --bg:#0b1220; --card:#121c33; --card2:#0f1730; --txt:#e8eefc; --muted:#9fb0d7;
+      --pri:#4aa3ff; --ok:#30d158; --warn:#ffd60a; --bad:#ff453a; --line:#233055;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;background:linear-gradient(180deg,#070b14, #0b1220 40%, #070b14);color:var(--txt);font:15px/1.35 system-ui, -apple-system, Segoe UI, Roboto, Arial;}
+    a{color:var(--pri)}
+    .wrap{max-width:1080px;margin:0 auto;padding:18px}
+    header{display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+    .brand{display:flex;align-items:center;gap:10px}
+    .logo{
+      width:40px;height:40px;border-radius:12px;
+      background:radial-gradient(circle at 30% 30%, #72d6ff, #3b7cff 55%, #2a2bff 120%);
+      box-shadow:0 10px 30px rgba(74,163,255,.25);
+    }
+    h1{font-size:18px;margin:0}
+    .sub{color:var(--muted);font-size:12px;margin-top:2px}
+    .tabs{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0}
+    .tab{border:1px solid var(--line);background:rgba(18,28,51,.6);color:var(--txt);padding:9px 12px;border-radius:12px;cursor:pointer}
+    .tab.active{border-color:rgba(74,163,255,.7);box-shadow:0 0 0 3px rgba(74,163,255,.15) inset}
+    .grid{display:grid;grid-template-columns:1.1fr .9fr;gap:12px}
+    @media (max-width:920px){.grid{grid-template-columns:1fr}}
+    .card{background:linear-gradient(180deg, rgba(18,28,51,.85), rgba(15,23,48,.85));border:1px solid var(--line);border-radius:16px;padding:14px;box-shadow:0 10px 30px rgba(0,0,0,.25)}
+    .card h2{margin:0 0 10px;font-size:14px;color:#dbe7ff;letter-spacing:.2px}
+    .row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+    @media (max-width:520px){.row{grid-template-columns:1fr}}
+    label{display:block;font-size:12px;color:var(--muted);margin:2px 0 6px}
+    input, select, textarea{
+      width:100%;padding:10px 10px;border-radius:12px;border:1px solid var(--line);
+      background:rgba(8,12,24,.6);color:var(--txt);outline:none
+    }
+    textarea{min-height:88px;resize:vertical}
+    .btns{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+    button{
+      border:1px solid var(--line);background:rgba(18,28,51,.7);color:var(--txt);
+      padding:9px 12px;border-radius:12px;cursor:pointer
+    }
+    button.primary{border-color:rgba(74,163,255,.6);background:rgba(74,163,255,.18)}
+    button.good{border-color:rgba(48,209,88,.6);background:rgba(48,209,88,.14)}
+    button.bad{border-color:rgba(255,69,58,.6);background:rgba(255,69,58,.12)}
+    button.ghost{background:transparent}
+    .toolbar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:10px 0}
+    .pill{padding:6px 10px;border:1px solid var(--line);border-radius:999px;color:var(--muted);font-size:12px}
+    .list{display:flex;flex-direction:column;gap:10px;margin-top:10px}
+    .item{
+      border:1px solid var(--line);border-radius:14px;padding:12px;background:rgba(8,12,24,.35);
+      display:flex;gap:10px;justify-content:space-between;align-items:flex-start
+    }
+    .meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px}
+    .tag{font-size:12px;border:1px solid var(--line);border-radius:999px;padding:4px 8px;color:var(--muted)}
+    .tag.ok{border-color:rgba(48,209,88,.5);color:#bff2cd}
+    .tag.warn{border-color:rgba(255,214,10,.5);color:#ffefb1}
+    .tag.bad{border-color:rgba(255,69,58,.5);color:#ffc2bd}
+    .tag.pri{border-color:rgba(74,163,255,.5);color:#cfe7ff}
+    .title{font-weight:650}
+    .small{font-size:12px;color:var(--muted)}
+    .sep{height:1px;background:var(--line);margin:12px 0}
+    .hide{display:none !important}
+    .right{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+    .toast{
+      position:fixed;left:50%;bottom:18px;transform:translateX(-50%);
+      background:rgba(18,28,51,.95);border:1px solid var(--line);border-radius:14px;
+      padding:10px 12px;box-shadow:0 16px 40px rgba(0,0,0,.35);color:var(--txt);
+      max-width:min(560px, 92vw);z-index:99;opacity:0;pointer-events:none;transition:.2s
+    }
+    .toast.show{opacity:1}
+    .mono{font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div class="brand">
+        <div class="logo" aria-hidden="true"></div>
+        <div>
+          <h1>CliniqOne – CRM & Demos (Offline)</h1>
+          <div class="sub">Sin internet • Guarda datos en tu celular (localStorage) • Exporta/Importa respaldo</div>
+        </div>
+      </div>
+      <div class="pill" id="statsPill">Cargando…</div>
+    </header>
+
+    <div class="tabs" role="tablist">
+      <button class="tab active" data-tab="prospects" role="tab">Prospectos</button>
+      <button class="tab" data-tab="demos" role="tab">Demos</button>
+      <button class="tab" data-tab="clients" role="tab">Clientes</button>
+      <button class="tab" data-tab="backup" role="tab">Respaldo</button>
+    </div>
+
+    <!-- PROSPECTS -->
+    <section id="tab-prospects">
+      <div class="grid">
+        <div class="card">
+          <h2>Nuevo / Editar prospecto</h2>
+          <input type="hidden" id="p_id" />
+          <div class="row">
+            <div>
+              <label>Nombre / Clínica</label>
+              <input id="p_name" placeholder="Ej: Clínica Sonrisas" />
+            </div>
+            <div>
+              <label>Contacto (tel/WhatsApp/email)</label>
+              <input id="p_contact" placeholder="Ej: 6861234567" />
+            </div>
+          </div>
+          <div class="row">
+            <div>
+              <label>Sucursales</label>
+              <input id="p_branches" type="number" min="1" placeholder="Ej: 2" />
+            </div>
+            <div>
+              <label>Estado</label>
+              <select id="p_status">
+                <option value="nuevo">Nuevo</option>
+                <option value="contactado">Contactado</option>
+                <option value="interesado">Interesado</option>
+                <option value="demo_agendada">Demo agendada</option>
+                <option value="propuesta">Propuesta</option>
+                <option value="ganado">Ganado</option>
+                <option value="perdido">Perdido</option>
+              </select>
+            </div>
+          </div>
+          <div>
+            <label>Notas</label>
+            <textarea id="p_notes" placeholder="Dolores, objeciones, lo que necesita, etc."></textarea>
+          </div>
+          <div class="btns">
+            <button class="primary" id="p_save">Guardar prospecto</button>
+            <button class="ghost" id="p_clear">Limpiar</button>
+            <button class="good" id="p_to_client" title="Convierte a Cliente activo">Convertir a Cliente</button>
+          </div>
+          <div class="sep"></div>
+          <div class="small">Tip: puedes buscar y tocar “Editar” para actualizar rápido.</div>
+        </div>
+
+        <div class="card">
+          <h2>Lista de prospectos</h2>
+          <div class="toolbar">
+            <input id="p_search" placeholder="Buscar (nombre, contacto, notas)…" />
+            <select id="p_filter">
+              <option value="">Todos</option>
+              <option value="nuevo">Nuevo</option>
+              <option value="contactado">Contactado</option>
+              <option value="interesado">Interesado</option>
+              <option value="demo_agendada">Demo agendada</option>
+              <option value="propuesta">Propuesta</option>
+              <option value="ganado">Ganado</option>
+              <option value="perdido">Perdido</option>
+            </select>
+          </div>
+          <div class="list" id="p_list"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- DEMOS -->
+    <section id="tab-demos" class="hide">
+      <div class="grid">
+        <div class="card">
+          <h2>Agendar demo</h2>
+          <input type="hidden" id="d_id" />
+          <div>
+            <label>Prospecto</label>
+            <select id="d_prospect"></select>
+            <div class="small">Si no aparece, crea primero el prospecto.</div>
+          </div>
+          <div class="row" style="margin-top:10px">
+            <div>
+              <label>Fecha</label>
+              <input id="d_date" type="date" />
+            </div>
+            <div>
+              <label>Hora</label>
+              <input id="d_time" type="time" />
+            </div>
+          </div>
+          <div class="row">
+            <div>
+              <label>Canal</label>
+              <select id="d_channel">
+                <option value="zoom">Zoom</option>
+                <option value="meet">Google Meet</option>
+                <option value="whatsapp">WhatsApp</option>
+                <option value="llamada">Llamada</option>
+              </select>
+            </div>
+            <div>
+              <label>Estado</label>
+              <select id="d_status">
+                <option value="agendada">Agendada</option>
+                <option value="confirmada">Confirmada</option>
+                <option value="realizada">Realizada</option>
+                <option value="no_show">No show</option>
+                <option value="reprogramar">Reprogramar</option>
+              </select>
+            </div>
+          </div>
+          <div>
+            <label>Notas demo</label>
+            <textarea id="d_notes" placeholder="Link, objetivos, objeciones, próximos pasos…"></textarea>
+          </div>
+          <div class="btns">
+            <button class="primary" id="d_save">Guardar demo</button>
+            <button class="ghost" id="d_clear">Limpiar</button>
+            <button id="d_make_reminder" title="Genera un archivo .ics (si tu navegador lo permite)">Crear recordatorio (.ics)</button>
+          </div>
+          <div class="sep"></div>
+          <div class="small">Tip: marca “Realizada” y luego convierte a Cliente si cierra.</div>
+        </div>
+
+        <div class="card">
+          <h2>Demos próximas</h2>
+          <div class="toolbar">
+            <input id="d_search" placeholder="Buscar por prospecto/notas…" />
+            <select id="d_filter">
+              <option value="">Todas</option>
+              <option value="agendada">Agendada</option>
+              <option value="confirmada">Confirmada</option>
+              <option value="realizada">Realizada</option>
+              <option value="no_show">No show</option>
+              <option value="reprogramar">Reprogramar</option>
+            </select>
+          </div>
+          <div class="list" id="d_list"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- CLIENTS -->
+    <section id="tab-clients" class="hide">
+      <div class="grid">
+        <div class="card">
+          <h2>Nuevo / Editar cliente activo</h2>
+          <input type="hidden" id="c_id" />
+          <div class="row">
+            <div>
+              <label>Clínica / Cliente</label>
+              <input id="c_name" placeholder="Ej: Clínica Victoria" />
+            </div>
+            <div>
+              <label>Contacto</label>
+              <input id="c_contact" placeholder="Tel/WhatsApp/email" />
+            </div>
+          </div>
+          <div class="row">
+            <div>
+              <label>Sucursales</label>
+              <input id="c_branches" type="number" min="1" placeholder="Ej: 2" />
+            </div>
+            <div>
+              <label>Fecha alta</label>
+              <input id="c_start" type="date" />
+            </div>
+          </div>
+          <div class="row">
+            <div>
+              <label>Pago mensual (MXN)</label>
+              <input id="c_price" type="number" min="0" placeholder="Ej: 1490" />
+            </div>
+            <div>
+              <label>Estatus</label>
+              <select id="c_status">
+                <option value="activo">Activo</option>
+                <option value="pausado">Pausado</option>
+                <option value="moroso">Moroso</option>
+                <option value="cancelado">Cancelado</option>
+              </select>
+            </div>
+          </div>
+          <div>
+            <label>Notas</label>
+            <textarea id="c_notes" placeholder="Implementación, módulos usados, pendientes, etc."></textarea>
+          </div>
+          <div class="btns">
+            <button class="primary" id="c_save">Guardar cliente</button>
+            <button class="ghost" id="c_clear">Limpiar</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Clientes registrados</h2>
+          <div class="toolbar">
+            <input id="c_search" placeholder="Buscar cliente…" />
+            <select id="c_filter">
+              <option value="">Todos</option>
+              <option value="activo">Activo</option>
+              <option value="pausado">Pausado</option>
+              <option value="moroso">Moroso</option>
+              <option value="cancelado">Cancelado</option>
+            </select>
+          </div>
+          <div class="list" id="c_list"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- BACKUP -->
+    <section id="tab-backup" class="hide">
+      <div class="card">
+        <h2>Respaldo (Exportar / Importar)</h2>
+        <div class="small">
+          Esto guarda TODO: prospectos, demos y clientes. Útil para cambiar de celular o tener copia.
+        </div>
+        <div class="btns" style="margin-top:12px">
+          <button class="primary" id="b_export">Exportar JSON</button>
+          <button id="b_copy">Copiar JSON al portapapeles</button>
+          <button class="bad" id="b_reset">Borrar TODO (reiniciar)</button>
+        </div>
+        <div class="sep"></div>
+        <div class="row">
+          <div>
+            <label>Importar (pega aquí el JSON)</label>
+            <textarea id="b_import_area" placeholder="Pega el JSON exportado…"></textarea>
+            <div class="btns">
+              <button class="good" id="b_import">Importar</button>
+            </div>
+          </div>
+          <div>
+            <label>Vista rápida de datos</label>
+            <div class="small mono" id="b_preview" style="white-space:pre-wrap"></div>
+          </div>
+        </div>
+        <div class="sep"></div>
+        <div class="small">
+          Tip iPhone: guarda este archivo en <b>Archivos</b> y ábrelo con Safari. Si lo quieres como “app”, usa <b>Compartir → Agregar a pantalla de inicio</b>.
+        </div>
+      </div>
+    </section>
+
+    <div class="toast" id="toast"></div>
+  </div>
+
+<script>
+/* =========================
+   Storage + Utils
+========================= */
+const KEY = "cliniqone_offline_crm_v1";
+
+function nowIso(){ return new Date().toISOString(); }
+function uid(){ return Math.random().toString(16).slice(2) + "-" + Date.now().toString(16); }
+
+function load(){
+  const raw = localStorage.getItem(KEY);
+  if(!raw){
+    const seed = { prospects:[], demos:[], clients:[], created_at: nowIso(), updated_at: nowIso() };
+    localStorage.setItem(KEY, JSON.stringify(seed));
+    return seed;
+  }
+  try{ return JSON.parse(raw); }catch{ return { prospects:[], demos:[], clients:[], created_at: nowIso(), updated_at: nowIso() }; }
+}
+function save(db){
+  db.updated_at = nowIso();
+  localStorage.setItem(KEY, JSON.stringify(db));
+}
+
+function toast(msg){
+  const el = document.getElementById("toast");
+  el.textContent = msg;
+  el.classList.add("show");
+  setTimeout(()=>el.classList.remove("show"), 2200);
+}
+
+function fmtDateTime(dateStr, timeStr){
+  if(!dateStr) return "—";
+  const t = timeStr || "00:00";
+  return dateStr + " " + t;
+}
+function safe(n){ return (n===undefined||n===null||n==="") ? "" : String(n); }
+
+function norm(s){ return (s||"").toLowerCase(); }
+
+function tagStatus(type, status){
+  const map = {
+    prospect: {
+      nuevo:["pri","Nuevo"], contactado:["warn","Contactado"], interesado:["ok","Interesado"],
+      demo_agendada:["pri","Demo agendada"], propuesta:["warn","Propuesta"],
+      ganado:["ok","Ganado"], perdido:["bad","Perdido"]
+    },
+    demo: {
+      agendada:["pri","Agendada"], confirmada:["ok","Confirmada"], realizada:["ok","Realizada"],
+      no_show:["bad","No show"], reprogramar:["warn","Reprogramar"]
+    },
+    client: {
+      activo:["ok","Activo"], pausado:["warn","Pausado"], moroso:["bad","Moroso"], cancelado:["bad","Cancelado"]
+    }
+  };
+  const t = map[type][status] || ["tag","—"];
+  return `<span class="tag ${t[0]}">${t[1]}</span>`;
+}
+
+function whatsappLink(contact, text){
+  // tolerante: si contact trae +52 o espacios
+  let num = (contact||"").replace(/[^\d+]/g,"");
+  // si es solo dígitos sin +, asume MX +52 si 10 dígitos
+  if(num && !num.startsWith("+")){
+    if(num.length===10) num = "+52"+num;
+    else num = "+"+num;
+  }
+  const msg = encodeURIComponent(text || "");
+  return num ? `https://wa.me/${num.replace("+","")}?text=${msg}` : null;
+}
+
+/* =========================
+   Tabs
+========================= */
+document.querySelectorAll(".tab").forEach(btn=>{
+  btn.addEventListener("click", ()=>{
+    document.querySelectorAll(".tab").forEach(x=>x.classList.remove("active"));
+    btn.classList.add("active");
+    const name = btn.dataset.tab;
+    document.querySelectorAll("section[id^='tab-']").forEach(s=>s.classList.add("hide"));
+    document.getElementById("tab-"+name).classList.remove("hide");
+    renderAll();
+  });
+});
+
+/* =========================
+   State
+========================= */
+let DB = load();
+
+/* =========================
+   Prospectos CRUD
+========================= */
+const p_id = document.getElementById("p_id");
+const p_name = document.getElementById("p_name");
+const p_contact = document.getElementById("p_contact");
+const p_branches = document.getElementById("p_branches");
+const p_status = document.getElementById("p_status");
+const p_notes = document.getElementById("p_notes");
+const p_search = document.getElementById("p_search");
+const p_filter = document.getElementById("p_filter");
+const p_list = document.getElementById("p_list");
+
+document.getElementById("p_save").addEventListener("click", ()=>{
+  const item = {
+    id: p_id.value || uid(),
+    name: p_name.value.trim(),
+    contact: p_contact.value.trim(),
+    branches: Number(p_branches.value || 0) || null,
+    status: p_status.value,
+    notes: p_notes.value.trim(),
+    updated_at: nowIso(),
+    created_at: p_id.value ? (DB.prospects.find(x=>x.id===p_id.value)?.created_at || nowIso()) : nowIso(),
+  };
+  if(!item.name){ toast("Falta nombre/clinica"); return; }
+
+  const idx = DB.prospects.findIndex(x=>x.id===item.id);
+  if(idx>=0) DB.prospects[idx]=item;
+  else DB.prospects.unshift(item);
+
+  save(DB);
+  toast("Prospecto guardado");
+  clearProspect();
+  renderAll();
+});
+
+document.getElementById("p_clear").addEventListener("click", clearProspect);
+
+function clearProspect(){
+  p_id.value=""; p_name.value=""; p_contact.value=""; p_branches.value=""; p_status.value="nuevo"; p_notes.value="";
+}
+
+document.getElementById("p_to_client").addEventListener("click", ()=>{
+  const id = p_id.value;
+  if(!id){ toast("Primero selecciona/edita un prospecto"); return; }
+  const p = DB.prospects.find(x=>x.id===id);
+  if(!p){ toast("Prospecto no encontrado"); return; }
+  // crear cliente a partir del prospecto
+  const c = {
+    id: uid(),
+    name: p.name,
+    contact: p.contact,
+    branches: p.branches || 1,
+    start_date: new Date().toISOString().slice(0,10),
+    price_mxn: 1490,
+    status: "activo",
+    notes: `Convertido desde prospecto (${new Date().toLocaleString()}).\n` + (p.notes||""),
+    created_at: nowIso(),
+    updated_at: nowIso()
+  };
+  DB.clients.unshift(c);
+  // marcar prospecto como ganado
+  p.status="ganado";
+  p.updated_at=nowIso();
+  save(DB);
+  toast("Convertido a Cliente ✅");
+  clearProspect();
+  renderAll();
+});
+
+p_search.addEventListener("input", renderProspects);
+p_filter.addEventListener("change", renderProspects);
+
+/* =========================
+   Demos CRUD
+========================= */
+const d_id = document.getElementById("d_id");
+const d_prospect = document.getElementById("d_prospect");
+const d_date = document.getElementById("d_date");
+const d_time = document.getElementById("d_time");
+const d_channel = document.getElementById("d_channel");
+const d_status = document.getElementById("d_status");
+const d_notes = document.getElementById("d_notes");
+const d_list = document.getElementById("d_list");
+const d_search = document.getElementById("d_search");
+const d_filter = document.getElementById("d_filter");
+
+document.getElementById("d_save").addEventListener("click", ()=>{
+  const pid = d_prospect.value;
+  if(!pid){ toast("Selecciona un prospecto"); return; }
+  if(!d_date.value){ toast("Selecciona fecha"); return; }
+
+  const item = {
+    id: d_id.value || uid(),
+    prospect_id: pid,
+    date: d_date.value,
+    time: d_time.value || "10:00",
+    channel: d_channel.value,
+    status: d_status.value,
+    notes: d_notes.value.trim(),
+    created_at: d_id.value ? (DB.demos.find(x=>x.id===d_id.value)?.created_at || nowIso()) : nowIso(),
+    updated_at: nowIso()
+  };
+
+  const idx = DB.demos.findIndex(x=>x.id===item.id);
+  if(idx>=0) DB.demos[idx]=item;
+  else DB.demos.unshift(item);
+
+  // actualizar prospecto status si demo_agendada
+  const p = DB.prospects.find(x=>x.id===pid);
+  if(p && (item.status==="agendada" || item.status==="confirmada")){
+    p.status="demo_agendada";
+    p.updated_at=nowIso();
+  }
+
+  save(DB);
+  toast("Demo guardada");
+  clearDemo();
+  renderAll();
+});
+
+document.getElementById("d_clear").addEventListener("click", clearDemo);
+function clearDemo(){
+  d_id.value=""; d_prospect.value=""; d_date.value=""; d_time.value=""; d_channel.value="zoom"; d_status.value="agendada"; d_notes.value="";
+}
+
+d_search.addEventListener("input", renderDemos);
+d_filter.addEventListener("change", renderDemos);
+
+document.getElementById("d_make_reminder").addEventListener("click", ()=>{
+  const pid = d_prospect.value;
+  const p = DB.prospects.find(x=>x.id===pid);
+  if(!p){ toast("Selecciona un prospecto"); return; }
+  if(!d_date.value){ toast("Selecciona fecha"); return; }
+
+  const dt = new Date(d_date.value + "T" + (d_time.value || "10:00") + ":00");
+  const end = new Date(dt.getTime() + 30*60000);
+  const ics = buildICS({
+    title: `Demo CliniqOne – ${p.name}`,
+    description: `Demo general. Canal: ${d_channel.value}.\\nNotas: ${d_notes.value||""}`,
+    start: dt,
+    end: end
+  });
+  downloadFile(`demo_${p.name.replace(/\\W+/g,"_")}.ics`, ics, "text/calendar");
+  toast("Recordatorio generado (.ics)");
+});
+
+function buildICS({title, description, start, end}){
+  const pad = (n)=>String(n).padStart(2,"0");
+  const fmt = (d)=>(
+    d.getUTCFullYear() + pad(d.getUTCMonth()+1) + pad(d.getUTCDate()) + "T" +
+    pad(d.getUTCHours()) + pad(d.getUTCMinutes()) + pad(d.getUTCSeconds()) + "Z"
+  );
+  const uidv = uid()+"@cliniqone.local";
+  return [
+    "BEGIN:VCALENDAR",
+    "VERSION:2.0",
+    "PRODID:-//CliniqOne Offline CRM//ES",
+    "BEGIN:VEVENT",
+    "UID:"+uidv,
+    "DTSTAMP:"+fmt(new Date()),
+    "DTSTART:"+fmt(start),
+    "DTEND:"+fmt(end),
+    "SUMMARY:"+escapeICS(title),
+    "DESCRIPTION:"+escapeICS(description),
+    "END:VEVENT",
+    "END:VCALENDAR"
+  ].join("\\r\\n");
+}
+function escapeICS(s){
+  return (s||"").replace(/\\\\/g,"\\\\\\\\").replace(/\\n/g,"\\\\n").replace(/,/g,"\\\\,").replace(/;/g,"\\\\;");
+}
+function downloadFile(filename, content, mime){
+  const blob = new Blob([content], {type: mime || "text/plain"});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href=url; a.download=filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url), 1200);
+}
+
+/* =========================
+   Clientes CRUD
+========================= */
+const c_id = document.getElementById("c_id");
+const c_name = document.getElementById("c_name");
+const c_contact = document.getElementById("c_contact");
+const c_branches = document.getElementById("c_branches");
+const c_start = document.getElementById("c_start");
+const c_price = document.getElementById("c_price");
+const c_status = document.getElementById("c_status");
+const c_notes = document.getElementById("c_notes");
+const c_search = document.getElementById("c_search");
+const c_filter = document.getElementById("c_filter");
+const c_list = document.getElementById("c_list");
+
+document.getElementById("c_save").addEventListener("click", ()=>{
+  const item = {
+    id: c_id.value || uid(),
+    name: c_name.value.trim(),
+    contact: c_contact.value.trim(),
+    branches: Number(c_branches.value || 0) || 1,
+    start_date: c_start.value || new Date().toISOString().slice(0,10),
+    price_mxn: Number(c_price.value || 0) || 0,
+    status: c_status.value,
+    notes: c_notes.value.trim(),
+    created_at: c_id.value ? (DB.clients.find(x=>x.id===c_id.value)?.created_at || nowIso()) : nowIso(),
+    updated_at: nowIso()
+  };
+  if(!item.name){ toast("Falta nombre del cliente"); return; }
+
+  const idx = DB.clients.findIndex(x=>x.id===item.id);
+  if(idx>=0) DB.clients[idx]=item;
+  else DB.clients.unshift(item);
+
+  save(DB);
+  toast("Cliente guardado");
+  clearClient();
+  renderAll();
+});
+
+document.getElementById("c_clear").addEventListener("click", clearClient);
+function clearClient(){
+  c_id.value=""; c_name.value=""; c_contact.value=""; c_branches.value=""; c_start.value=""; c_price.value=""; c_status.value="activo"; c_notes.value="";
+}
+
+c_search.addEventListener("input", renderClients);
+c_filter.addEventListener("change", renderClients);
+
+/* =========================
+   Backup
+========================= */
+const b_preview = document.getElementById("b_preview");
+const b_import_area = document.getElementById("b_import_area");
+
+document.getElementById("b_export").addEventListener("click", ()=>{
+  const data = JSON.stringify(DB, null, 2);
+  downloadFile("cliniqone_offline_backup.json", data, "application/json");
+  toast("Exportado ✅");
+});
+
+document.getElementById("b_copy").addEventListener("click", async ()=>{
+  try{
+    const data = JSON.stringify(DB, null, 2);
+    await navigator.clipboard.writeText(data);
+    toast("Copiado al portapapeles ✅");
+  }catch{
+    toast("No se pudo copiar (Safari a veces bloquea). Usa Exportar.");
+  }
+});
+
+document.getElementById("b_import").addEventListener("click", ()=>{
+  const raw = b_import_area.value.trim();
+  if(!raw){ toast("Pega el JSON primero"); return; }
+  try{
+    const obj = JSON.parse(raw);
+    if(!obj || !Array.isArray(obj.prospects) || !Array.isArray(obj.demos) || !Array.isArray(obj.clients)){
+      toast("JSON inválido (estructura no coincide)");
+      return;
+    }
+    DB = obj;
+    save(DB);
+    b_import_area.value="";
+    toast("Importado ✅");
+    renderAll();
+  }catch{
+    toast("JSON inválido");
+  }
+});
+
+document.getElementById("b_reset").addEventListener("click", ()=>{
+  if(confirm("¿Borrar TODO? Esto no se puede deshacer.")){
+    localStorage.removeItem(KEY);
+    DB = load();
+    toast("Reiniciado");
+    renderAll();
+  }
+});
+
+/* =========================
+   Render
+========================= */
+function renderStats(){
+  const totalRevenue = DB.clients
+    .filter(c=>c.status==="activo")
+    .reduce((sum,c)=>sum + (Number(c.price_mxn)||0), 0);
+
+  document.getElementById("statsPill").textContent =
+    `Prospectos: ${DB.prospects.length} • Demos: ${DB.demos.length} • Clientes: ${DB.clients.length} • Ingreso activo: $${totalRevenue.toLocaleString()} MXN/mes`;
+}
+
+function renderProspects(){
+  const q = norm(p_search.value);
+  const f = p_filter.value;
+
+  const items = DB.prospects.filter(p=>{
+    const hay = norm(p.name+" "+p.contact+" "+p.notes);
+    const okQ = !q || hay.includes(q);
+    const okF = !f || p.status===f;
+    return okQ && okF;
+  });
+
+  p_list.innerHTML = items.map(p=>{
+    const wa = whatsappLink(p.contact, `Hola, soy Jonathan de CliniqOne. ¿Te confirmo la demo o te paso info?`);
+    return `
+      <div class="item">
+        <div>
+          <div class="title">${escapeHtml(p.name)}</div>
+          <div class="small">${escapeHtml(p.contact || "—")} • Sucursales: ${p.branches || "—"}</div>
+          <div class="meta">
+            ${tagStatus("prospect", p.status)}
+            <span class="tag">${new Date(p.updated_at||p.created_at||nowIso()).toLocaleString()}</span>
+          </div>
+          ${p.notes ? `<div class="small" style="margin-top:6px">${escapeHtml(p.notes)}</div>` : ``}
+        </div>
+        <div class="right">
+          <button onclick="editProspect('${p.id}')">Editar</button>
+          ${wa ? `<a class="tag pri" href="${wa}" target="_blank" rel="noopener">WhatsApp</a>` : ``}
+          <button class="bad" onclick="deleteProspect('${p.id}')">Borrar</button>
+        </div>
+      </div>
+    `;
+  }).join("") || `<div class="small">Sin resultados.</div>`;
+
+  // refrescar selector de demos
+  renderProspectSelect();
+}
+
+function renderProspectSelect(){
+  const current = d_prospect.value;
+  const opts = DB.prospects
+    .slice()
+    .sort((a,b)=> (a.name||"").localeCompare(b.name||""))
+    .map(p=>`<option value="${p.id}">${escapeHtml(p.name)} (${p.branches||"—"} suc.)</option>`)
+    .join("");
+  d_prospect.innerHTML = `<option value="">— Selecciona —</option>` + opts;
+  if(current) d_prospect.value = current;
+}
+
+function renderDemos(){
+  const q = norm(d_search.value);
+  const f = d_filter.value;
+
+  const items = DB.demos
+    .slice()
+    .sort((a,b)=> (a.date+a.time).localeCompare(b.date+b.time))
+    .filter(d=>{
+      const p = DB.prospects.find(x=>x.id===d.prospect_id);
+      const hay = norm((p?.name||"") + " " + (d.notes||""));
+      const okQ = !q || hay.includes(q);
+      const okF = !f || d.status===f;
+      return okQ && okF;
+    });
+
+  d_list.innerHTML = items.map(d=>{
+    const p = DB.prospects.find(x=>x.id===d.prospect_id);
+    const title = p ? p.name : "(Prospecto eliminado)";
+    const wa = p ? whatsappLink(p.contact, `Hola 👋 te confirmo la demo de CliniqOne para ${fmtDateTime(d.date, d.time)}. ¿Te queda bien?`) : null;
+
+    return `
+      <div class="item">
+        <div>
+          <div class="title">${escapeHtml(title)}</div>
+          <div class="small">${fmtDateTime(d.date, d.time)} • Canal: ${escapeHtml(d.channel)}</div>
+          <div class="meta">
+            ${tagStatus("demo", d.status)}
+            <span class="tag">${p?.branches ? `${p.branches} suc.` : "—"}</span>
+          </div>
+          ${d.notes ? `<div class="small" style="margin-top:6px">${escapeHtml(d.notes)}</div>` : ``}
+        </div>
+        <div class="right">
+          <button onclick="editDemo('${d.id}')">Editar</button>
+          ${wa ? `<a class="tag pri" href="${wa}" target="_blank" rel="noopener">Confirmar WA</a>` : ``}
+          <button class="bad" onclick="deleteDemo('${d.id}')">Borrar</button>
+        </div>
+      </div>
+    `;
+  }).join("") || `<div class="small">Sin demos.</div>`;
+}
+
+function renderClients(){
+  const q = norm(c_search.value);
+  const f = c_filter.value;
+
+  const items = DB.clients.filter(c=>{
+    const hay = norm(c.name+" "+c.contact+" "+c.notes);
+    const okQ = !q || hay.includes(q);
+    const okF = !f || c.status===f;
+    return okQ && okF;
+  });
+
+  c_list.innerHTML = items.map(c=>{
+    const wa = whatsappLink(c.contact, `Hola 👋 soy Jonathan de CliniqOne. ¿Cómo va todo con el sistema?`);
+    return `
+      <div class="item">
+        <div>
+          <div class="title">${escapeHtml(c.name)}</div>
+          <div class="small">${escapeHtml(c.contact || "—")} • ${c.branches||1} suc. • Alta: ${c.start_date||"—"}</div>
+          <div class="meta">
+            ${tagStatus("client", c.status)}
+            <span class="tag">Pago: $${Number(c.price_mxn||0).toLocaleString()} MXN/mes</span>
+          </div>
+          ${c.notes ? `<div class="small" style="margin-top:6px">${escapeHtml(c.notes)}</div>` : ``}
+        </div>
+        <div class="right">
+          <button onclick="editClient('${c.id}')">Editar</button>
+          ${wa ? `<a class="tag pri" href="${wa}" target="_blank" rel="noopener">WhatsApp</a>` : ``}
+          <button class="bad" onclick="deleteClient('${c.id}')">Borrar</button>
+        </div>
+      </div>
+    `;
+  }).join("") || `<div class="small">Aún no tienes clientes registrados.</div>`;
+}
+
+function renderBackup(){
+  const preview = {
+    prospects: DB.prospects.length,
+    demos: DB.demos.length,
+    clients: DB.clients.length,
+    updated_at: DB.updated_at
+  };
+  b_preview.textContent = JSON.stringify(preview, null, 2);
+}
+
+function renderAll(){
+  DB = load();
+  renderStats();
+  renderProspects();
+  renderDemos();
+  renderClients();
+  renderBackup();
+}
+
+function escapeHtml(str){
+  return (str||"").replace(/[&<>"']/g, (m)=>({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;" }[m]));
+}
+
+/* =========================
+   Global actions (edit/delete)
+========================= */
+window.editProspect = (id)=>{
+  const p = DB.prospects.find(x=>x.id===id);
+  if(!p) return;
+  // switch tab
+  document.querySelector(".tab.active").classList.remove("active");
+  document.querySelector(".tab[data-tab='prospects']").classList.add("active");
+  document.querySelectorAll("section[id^='tab-']").forEach(s=>s.classList.add("hide"));
+  document.getElementById("tab-prospects").classList.remove("hide");
+
+  p_id.value=p.id;
+  p_name.value=p.name||"";
+  p_contact.value=p.contact||"";
+  p_branches.value=p.branches||"";
+  p_status.value=p.status||"nuevo";
+  p_notes.value=p.notes||"";
+  toast("Editando prospecto");
+};
+
+window.deleteProspect = (id)=>{
+  if(!confirm("¿Borrar prospecto?")) return;
+  DB.prospects = DB.prospects.filter(x=>x.id!==id);
+  // también demos ligados
+  DB.demos = DB.demos.filter(d=>d.prospect_id!==id);
+  save(DB);
+  toast("Prospecto borrado");
+  renderAll();
+};
+
+window.editDemo = (id)=>{
+  const d = DB.demos.find(x=>x.id===id);
+  if(!d) return;
+  // switch tab
+  document.querySelector(".tab.active").classList.remove("active");
+  document.querySelector(".tab[data-tab='demos']").classList.add("active");
+  document.querySelectorAll("section[id^='tab-']").forEach(s=>s.classList.add("hide"));
+  document.getElementById("tab-demos").classList.remove("hide");
+
+  d_id.value=d.id;
+  d_prospect.value=d.prospect_id;
+  d_date.value=d.date||"";
+  d_time.value=d.time||"";
+  d_channel.value=d.channel||"zoom";
+  d_status.value=d.status||"agendada";
+  d_notes.value=d.notes||"";
+  toast("Editando demo");
+};
+
+window.deleteDemo = (id)=>{
+  if(!confirm("¿Borrar demo?")) return;
+  DB.demos = DB.demos.filter(x=>x.id!==id);
+  save(DB);
+  toast("Demo borrada");
+  renderAll();
+};
+
+window.editClient = (id)=>{
+  const c = DB.clients.find(x=>x.id===id);
+  if(!c) return;
+  // switch tab
+  document.querySelector(".tab.active").classList.remove("active");
+  document.querySelector(".tab[data-tab='clients']").classList.add("active");
+  document.querySelectorAll("section[id^='tab-']").forEach(s=>s.classList.add("hide"));
+  document.getElementById("tab-clients").classList.remove("hide");
+
+  c_id.value=c.id;
+  c_name.value=c.name||"";
+  c_contact.value=c.contact||"";
+  c_branches.value=c.branches||1;
+  c_start.value=c.start_date||"";
+  c_price.value=c.price_mxn||0;
+  c_status.value=c.status||"activo";
+  c_notes.value=c.notes||"";
+  toast("Editando cliente");
+};
+
+window.deleteClient = (id)=>{
+  if(!confirm("¿Borrar cliente?")) return;
+  DB.clients = DB.clients.filter(x=>x.id!==id);
+  save(DB);
+  toast("Cliente borrado");
+  renderAll();
+};
+
+/* Init */
+renderAll();
+</script>
+</body>
+</html>

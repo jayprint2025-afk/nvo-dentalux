@@ -1,0 +1,55 @@
+version: '3.8'
+
+services:
+  db1:
+    image: postgres:15
+    restart: always
+    environment:
+      - POSTGRES_USER=admin_dentalux
+      - POSTGRES_PASSWORD=password_local_123
+      - POSTGRES_DB=dentalux_main
+    volumes:
+      - ./data/db1:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"
+
+  db2:
+    image: postgres:15
+    restart: always
+    environment:
+      - POSTGRES_USER=admin_dentalux
+      - POSTGRES_PASSWORD=password_local_123
+      - POSTGRES_DB=dentalux_suc2
+    volumes:
+      - ./data/db2:/var/lib/postgresql/data
+    ports:
+      - "5434:5432"
+
+  db3:
+    image: postgres:15
+    restart: always
+    environment:
+      - POSTGRES_USER=admin_dentalux
+      - POSTGRES_PASSWORD=password_local_123
+      - POSTGRES_DB=dentalux_suc3
+    volumes:
+      - ./data/db3:/var/lib/postgresql/data
+    ports:
+      - "5435:5432"
+
+  backend:
+    build: .
+    ports:
+      - "4001:4001"
+    depends_on:
+      - db1
+      - db2
+      - db3
+    environment:
+      - NODE_ENV=development
+      - PGSSLMODE=disable
+      - DATABASE_URL=postgresql://admin_dentalux:password_local_123@db1:5432/dentalux_main?sslmode=disable
+      - DATABASE_URL_DB1=postgresql://admin_dentalux:password_local_123@db1:5432/dentalux_main?sslmode=disable
+      - DATABASE_URL_DB2=postgresql://admin_dentalux:password_local_123@db2:5432/dentalux_suc2?sslmode=disable
+      - DATABASE_URL_DB3=postgresql://admin_dentalux:password_local_123@db3:5432/dentalux_suc3?sslmode=disable
+      - SALES_DATABASE_URL=postgresql://admin_dentalux:password_local_123@db1:5432/dentalux_main?sslmode=disable

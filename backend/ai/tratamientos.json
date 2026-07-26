@@ -1,0 +1,818 @@
+{
+  "precios_dentalux": {
+    "nombre": "=== PRECIOS DENTALUX ===",
+    "descripcion": "En Dentalux nos comprometemos a ofrecerte el mejor tratamiento personalizado según tus necesidades específicas.",
+    "costo": "Variable",
+    "nota": "Nuestros precios se ajustan según la complejidad de tu caso particular. Te brindaremos un presupuesto detallado tras tu evaluación."
+  },
+  "consulta": {
+    "nombre": "Consulta",
+    "descripcion": "Una cita completa donde revisaremos tu salud dental y diseñaremos juntos el mejor plan de tratamiento para ti.",
+    "costo": "$200",
+    "nota": "El costo puede ajustarse según las necesidades específicas de tu caso."
+  },
+  "receta": {
+    "nombre": "Receta",
+    "descripcion": "Te proporcionaremos las indicaciones médicas necesarias para complementar tu tratamiento dental de manera segura.",
+    "costo": "$100",
+    "nota": "El precio puede variar según la complejidad de tu tratamiento."
+  },
+  "profilaxis": {
+    "nombre": "Profilaxis",
+    "descripcion": "Una limpieza dental profunda y suave que eliminará la placa y el sarro, dejando tus dientes frescos y saludables.",
+    "costo": "$500",
+    "nota": "El costo puede ajustarse según el estado actual de tu salud dental."
+  },
+  "extraccion": {
+    "nombre": "Extracción",
+    "descripcion": "Cuando sea necesario, realizaremos la extracción de tu pieza dental con el máximo cuidado y comodidad para ti.",
+    "costo": "$500",
+    "nota": "El procedimiento puede ser simple o requerir técnicas especiales según tu caso."
+  },
+  "extraccion_infantil": {
+    "nombre": "Extracción Infantil",
+    "descripcion": "Tratamiento especialmente diseñado para nuestros pequeños pacientes, con técnicas suaves y un ambiente amigable.",
+    "costo": "$400",
+    "nota": "Adaptamos nuestro enfoque para hacer la experiencia lo más cómoda posible para tu pequeño."
+  },
+  "extraccion_con_mini_cirugia": {
+    "nombre": "Extracción con Mini Cirugía",
+    "descripcion": "Un procedimiento mínimamente invasivo para casos que requieren un poco más de cuidado especializado.",
+    "costo": "$500",
+    "nota": "Utilizamos técnicas modernas para minimizar las molestias y acelerar tu recuperación."
+  },
+  "resina": {
+    "nombre": "Resina",
+    "descripcion": "Restauramos tu sonrisa con materiales del color de tus dientes, corrigiendo caries o pequeñas fracturas de manera natural.",
+    "costo": "$550",
+    "nota": "Cada restauración se adapta perfectamente al color y forma de tu diente."
+  },
+  "resina_interproximal": {
+    "nombre": "Resina Interproximal",
+    "descripcion": "Restauración especializada entre los dientes para devolver su función y estética natural.",
+    "costo": "$500",
+    "nota": "Técnica precisa para espacios interdentales que requieren atención especial."
+  },
+  "resina_estetica": {
+    "nombre": "Resina Estética",
+    "descripcion": "Mejoramos la apariencia de tu sonrisa con resinas de alta calidad que lucen completamente naturales.",
+    "costo": "$800",
+    "nota": "Utilizamos materiales premium para resultados estéticos excepcionales."
+  },
+  "endodoncia_anterior": {
+    "nombre": "Endodoncia Anterior",
+    "descripcion": "Salvamos tu diente frontal eliminando cuidadosamente la infección y preservando tu sonrisa natural.",
+    "costo": "$2500",
+    "nota": "Tratamiento especializado para conservar tus dientes anteriores con técnicas modernas."
+  },
+  "endodoncia_posterior": {
+    "nombre": "Endodoncia Posterior",
+    "descripcion": "Preservamos tus molares eliminando la infección interna y manteniendo su función masticatoria.",
+    "costo": "$2500",
+    "nota": "Procedimiento avanzado para salvar tus dientes posteriores importantes para la masticación."
+  },
+  "curetaje_c_cuadrante": {
+    "nombre": "Curetaje por Cuadrante",
+    "descripcion": "Limpieza profunda y especializada debajo de las encías para tratar la enfermedad periodontal y mejorar tu salud oral.",
+    "costo": "$550",
+    "nota": "Tratamiento personalizado según el grado de afectación de tus encías."
+  },
+  "cirugia_3ros_molares": {
+    "nombre": "Cirugía de Terceros Molares",
+    "descripcion": "Extraemos tus muelas del juicio con técnicas modernas, priorizando tu comodidad durante todo el proceso.",
+    "costo": "$2500",
+    "nota": "Procedimiento planificado cuidadosamente para una recuperación más rápida."
+  },
+  "pulpotomia": {
+    "nombre": "Pulpotomía",
+    "descripcion": "Tratamiento conservador para dientes de niños que preserva la vitalidad dental el mayor tiempo posible.",
+    "costo": "$1200",
+    "nota": "Especializado en odontología pediátrica para cuidar los dientes de leche."
+  },
+  "corona_metalica_adulto": {
+    "nombre": "Corona Metálica para Adulto",
+    "descripcion": "Protegemos y fortalecemos tu diente con una corona duradera y resistente, especialmente en áreas de mayor fuerza masticatoria.",
+    "costo": "$2300",
+    "nota": "Solución robusta y duradera para dientes muy dañados o debilitados."
+  },
+  "corona_metal_porcelana": {
+    "nombre": "Corona Metal Porcelana",
+    "descripcion": "Combinamos resistencia y estética con una corona que une la fortaleza del metal con la belleza de la porcelana.",
+    "costo": "$3000",
+    "nota": "La opción perfecta cuando necesitas durabilidad y una apariencia natural."
+  },
+  "guarda_oclusal_c_u": {
+    "nombre": "Guarda Oclusal (Una pieza)",
+    "descripcion": "Protegemos tus dientes del desgaste nocturno con una guarda personalizada que se ajusta perfectamente a tu boca.",
+    "costo": "$900",
+    "nota": "Diseñada especialmente para tu boca, ideal para bruxismo o actividades deportivas."
+  },
+  "guarda_oclusal_inferior_y_superior": {
+    "nombre": "Guarda Oclusal Completa",
+    "descripcion": "Protección total con guardas superior e inferior para casos de bruxismo severo o máxima protección deportiva.",
+    "costo": "$1500",
+    "nota": "Protección integral personalizada para tus necesidades específicas."
+  },
+  "radiografia_c_tratamiento": {
+    "nombre": "Radiografía con Tratamiento",
+    "descripcion": "Imagen diagnóstica incluida en tu tratamiento para asegurar los mejores resultados posibles.",
+    "costo": "$100",
+    "nota": "Tecnología digital moderna para diagnósticos precisos."
+  },
+  "radiografia_p_consulta": {
+    "nombre": "Radiografía para Consulta",
+    "descripcion": "Imagen diagnóstica que nos ayuda a evaluar tu situación dental y planificar el mejor tratamiento.",
+    "costo": "$130",
+    "nota": "Herramienta esencial para un diagnóstico preciso."
+  },
+  "radiografia_p_llevar": {
+    "nombre": "Radiografía para Llevar",
+    "descripcion": "Copia de tu radiografía para que puedas llevarla a otros especialistas o para tus archivos personales.",
+    "costo": "$200",
+    "nota": "Disponible en formato digital o impreso según prefieras."
+  },
+  "endoposte_metalico": {
+    "nombre": "Endoposte Metálico",
+    "descripcion": "Reforzamos internamente tu diente tratado con endodoncia para darle mayor resistencia y durabilidad.",
+    "costo": "$1400",
+    "nota": "Fortalecimiento interno para dientes que han perdido mucha estructura."
+  },
+  "endoposte_fibra_de_vidrio": {
+    "nombre": "Endoposte de Fibra de Vidrio",
+    "descripcion": "Refuerzo interno estético y biocompatible que fortalece tu diente preservando su apariencia natural.",
+    "costo": "$1000",
+    "nota": "Opción estética moderna para dientes anteriores visibles."
+  },
+  "incrustacion_metalica": {
+    "nombre": "Incrustación Metálica",
+    "descripcion": "Restauración precisa y duradera fabricada en laboratorio para reparar daños extensos en tus dientes posteriores.",
+    "costo": "$2100",
+    "nota": "Restauración de alta precisión para casos que requieren máxima durabilidad."
+  },
+  "curacion_zoe": {
+    "nombre": "Curación ZOE",
+    "descripcion": "Tratamiento temporal calmante que alivia el dolor y prepara tu diente para el tratamiento definitivo.",
+    "costo": "$350",
+    "nota": "Solución temporal efectiva para aliviar molestias mientras planificamos tu tratamiento final."
+  },
+  "toma_de_impresion_con_alginato": {
+    "nombre": "Toma de Impresión con Alginato",
+    "descripcion": "Molde preciso y cómodo de tus dientes para crear restauraciones que se ajusten perfectamente.",
+    "costo": "$350",
+    "nota": "Proceso rápido y cómodo para obtener un molde exacto de tu boca."
+  },
+  "extraccion_3er_molar_erupcionda_normal": {
+    "nombre": "Extracción de Tercer Molar (Erupcionado)",
+    "descripcion": "Extracción cuidadosa de tu muela del juicio que ha salido normalmente, con técnicas que minimizan las molestias.",
+    "costo": "$900",
+    "nota": "Procedimiento más sencillo para muelas del juicio completamente erupcionadas."
+  },
+  "retiro_de_brackets": {
+    "nombre": "Retiro de Brackets",
+    "descripcion": "¡Celebramos contigo el final de tu tratamiento de ortodoncia! Retiramos cuidadosamente tus brackets revelando tu nueva sonrisa.",
+    "costo": "$400",
+    "nota": "Proceso cuidadoso para revelar tu hermosa sonrisa recién alineada."
+  },
+  "retiro_mantenedor_de_espacios": {
+    "nombre": "Retiro de Mantenedor de Espacios",
+    "descripcion": "Retiramos suavemente el aparato que ha cumplido su función de mantener el espacio para los dientes permanentes.",
+    "costo": "$400",
+    "nota": "Procedimiento sencillo una vez que ya no se necesita el mantenedor."
+  },
+  "aplicacion_de_fluor_basico": {
+    "nombre": "Aplicación de Flúor Básico",
+    "descripcion": "Fortalecemos el esmalte de tus dientes con flúor profesional para prevenir caries futuras.",
+    "costo": "$250",
+    "nota": "Tratamiento preventivo especialmente beneficioso para niños y adolescentes."
+  },
+  "barniz_fluor": {
+    "nombre": "Barniz de Flúor",
+    "descripcion": "Aplicación de flúor de larga duración que protege tus dientes durante meses, ideal para prevención avanzada.",
+    "costo": "$400",
+    "nota": "Protección prolongada con liberación gradual de flúor."
+  },
+  "ionomero_curacion": {
+    "nombre": "Ionómero de Curación",
+    "descripcion": "Restauración temporal biocompatible que libera flúor y protege tu diente mientras planificamos el tratamiento definitivo.",
+    "costo": "$400",
+    "nota": "Material que ayuda a fortalecer tu diente mientras decide el tratamiento final."
+  },
+  "cambio_de_ligas": {
+    "nombre": "Cambio de Ligas",
+    "descripcion": "Mantenemos tu tratamiento de ortodoncia en progreso con el cambio regular de ligas de colores que tú eliges.",
+    "costo": "$350",
+    "nota": "Parte esencial del mantenimiento de tu ortodoncia para lograr los mejores resultados."
+  },
+  "rebase_de_placas": {
+    "nombre": "Rebase de Placas",
+    "descripcion": "Ajustamos tu prótesis dental para que vuelva a calzar perfectamente y recuperes la comodidad al masticar.",
+    "costo": "$600",
+    "nota": "Renovamos el ajuste de tu prótesis para mayor comodidad y función."
+  },
+  "selladores": {
+    "nombre": "Selladores",
+    "descripcion": "Protegemos las superficies masticatorias de tus molares con una barrera invisible que previene las caries.",
+    "costo": "$450",
+    "nota": "Prevención moderna especialmente efectiva en niños y adolescentes."
+  },
+  "drenar_abscesos": {
+    "nombre": "Drenaje de Abscesos",
+    "descripcion": "Aliviamos rápidamente tu dolor eliminando la infección acumulada y comenzamos el proceso de sanación.",
+    "costo": "$450",
+    "nota": "Procedimiento de urgencia para aliviar el dolor y controlar la infección."
+  },
+  "retenedor_fijo_ortodoncia": {
+    "nombre": "Retenedor Fijo de Ortodoncia",
+    "descripcion": "Mantenemos permanentemente los resultados de tu ortodoncia con un alambre discreto que preserva tu nueva sonrisa.",
+    "costo": "$1600",
+    "nota": "Garantizamos que tu sonrisa se mantenga perfecta después de la ortodoncia."
+  },
+  "mantenedor_de_espacios_unilateral": {
+    "nombre": "Mantenedor de Espacios Unilateral",
+    "descripcion": "Preservamos el espacio necesario para los dientes permanentes de tu pequeño con un aparato cómodo y discreto.",
+    "costo": "$1500",
+    "nota": "Aseguramos que los dientes permanentes tengan suficiente espacio para erupcionar correctamente."
+  },
+  "bracket_cementar": {
+    "nombre": "Bracket para Cementar",
+    "descripcion": "Colocamos o reponemos brackets individuales con precisión para mantener el progreso de tu tratamiento ortodóntico.",
+    "costo": "$150",
+    "nota": "Reposición o ajuste individual para mantener tu tratamiento en marcha."
+  },
+  "cambio_de_arco_alambre_orto": {
+    "nombre": "Cambio de Arco/Alambre de Ortodoncia",
+    "descripcion": "Progresamos en tu tratamiento ortodóntico con alambres que guían suavemente tus dientes hacia su posición ideal.",
+    "costo": "$150",
+    "nota": "Cada cambio nos acerca más a tu sonrisa perfecta."
+  },
+  "pulpectomia": {
+    "nombre": "Pulpectomía",
+    "descripcion": "Salvamos el diente de leche de tu pequeño eliminando completamente la infección interna de manera suave y cuidadosa.",
+    "costo": "$1300",
+    "nota": "Tratamiento especializado para preservar los dientes de leche hasta su cambio natural."
+  },
+  "corona_acero_cromo_pediatrica": {
+    "nombre": "Corona de Acero Cromo Pediátrica",
+    "descripcion": "Protegemos el diente de leche de tu pequeño con una corona resistente y segura hasta que llegue el diente permanente.",
+    "costo": "$1200",
+    "nota": "Protección duradera especialmente diseñada para dientes de niños."
+  },
+  "corona_de_zirconia_pediatrica": {
+    "nombre": "Corona de Zirconia Pediátrica",
+    "descripcion": "Restauramos el diente de tu pequeño con una corona blanca y natural que se ve hermosa y es súper resistente.",
+    "costo": "$2100",
+    "nota": "La opción más estética y duradera para dientes anteriores de niños."
+  },
+  "corona_de_resina_celuloide_anterior_pediatrica": {
+    "nombre": "Corona de Resina (Celuloide Anterior) Pediátrica",
+    "descripcion": "Devolvemos la sonrisa natural a tu pequeño con una corona del color del diente para los dientes frontales.",
+    "costo": "$1500",
+    "nota": "Restauración estética especial para que tu pequeño sonría con confianza."
+  },
+  "corona_de_ceromero_posterior_pediatrica": {
+    "nombre": "Corona de Cerómero (Posterior) Pediátrica",
+    "descripcion": "Restauramos los molares de tu pequeño con coronas resistentes y del color del diente para una masticación cómoda.",
+    "costo": "$1900",
+    "nota": "Combina resistencia y estética para los dientes posteriores de niños."
+  },
+  "placa_hawley": {
+    "nombre": "Placa Hawley",
+    "descripcion": "Mantenemos los resultados ortodónticos con un retenedor personalizado que puedes quitar para comer y cepillarte.",
+    "costo": "$2000",
+    "nota": "Retenedor clásico y efectivo para preservar tu nueva sonrisa."
+  },
+  "placa_hawley_superior_o_inferior": {
+    "nombre": "Placa Hawley Superior o Inferior",
+    "descripcion": "Retenedor removible para una sola arcada que mantiene tus dientes en su nueva posición correcta.",
+    "costo": "$2000",
+    "nota": "Protección específica para mantener los resultados de tu ortodoncia."
+  },
+  "placa_hawley_superior_e_inferior": {
+    "nombre": "Placa Hawley Superior e Inferior",
+    "descripcion": "Set completo de retenedores que protegen toda tu nueva sonrisa, manteniendo cada diente en su lugar perfecto.",
+    "costo": "$3500",
+    "nota": "Protección completa para garantizar resultados ortodónticos duraderos."
+  },
+  "mantenedor_de_espacios_bilateral": {
+    "nombre": "Mantenedor de Espacios Bilateral",
+    "descripcion": "Preservamos los espacios necesarios en ambos lados de la boca para que los dientes permanentes erupcionen correctamente.",
+    "costo": "$2000",
+    "nota": "Protección integral del espacio dental para un desarrollo oral saludable."
+  },
+  "agregar_diente_express_c_u": {
+    "nombre": "Agregar Diente Express (por unidad)",
+    "descripcion": "Agregamos rápidamente un diente a tu prótesis existente para devolverte tu sonrisa completa.",
+    "costo": "$600",
+    "nota": "Solución rápida para completar tu prótesis sin empezar desde cero."
+  },
+  "provisional_c_u": {
+    "nombre": "Provisional (por unidad)",
+    "descripcion": "Te proporcionamos un diente temporal cómodo y estético mientras preparamos tu restauración definitiva.",
+    "costo": "$300",
+    "nota": "Mantienes tu sonrisa mientras trabajamos en tu tratamiento final."
+  },
+  "provisional_sin_cocer_con_el_tecnico_c_u": {
+    "nombre": "Provisional Sin Cocer con Técnico (por unidad)",
+    "descripcion": "Creamos una restauración temporal de mayor calidad con la colaboración directa de nuestro técnico dental.",
+    "costo": "$600",
+    "nota": "Provisional de mejor calidad para tratamientos más complejos."
+  },
+  "provisional_cocido_con_el_tecnico_c_u": {
+    "nombre": "Provisional Cocido con Técnico (por unidad)",
+    "descripcion": "Restauración temporal de alta calidad procesada en laboratorio para mayor durabilidad y estética.",
+    "costo": "$1200",
+    "nota": "Provisional premium para casos que requieren mayor duración temporal."
+  },
+  "provisional_de_3_unidades_c_u": {
+    "nombre": "Provisional de 3+ Unidades (por unidad)",
+    "descripcion": "Cada unidad adicional de tu puente provisional que te permite mantener función y estética durante el tratamiento.",
+    "costo": "$200",
+    "nota": "Costo por unidad adicional en puentes provisionales extensos."
+  },
+  "alargamiento_de_corona_c_u": {
+    "nombre": "Alargamiento de Corona (por unidad)",
+    "descripcion": "Modificamos delicadamente el contorno de tu encía para exponer más superficie dental y lograr una corona perfecta.",
+    "costo": "$1700",
+    "nota": "Procedimiento que optimiza la estética y función de tu futura corona."
+  },
+  "estudio_radiologico": {
+    "nombre": "Estudio Radiológico",
+    "descripcion": "Análisis completo con múltiples radiografías para planificar detalladamente tu tratamiento más complejo.",
+    "costo": "$700",
+    "nota": "Estudio integral para casos que requieren planificación avanzada."
+  },
+  "cention": {
+    "nombre": "Cention",
+    "descripcion": "Restauración con material bioactivo de última generación que libera flúor y fortalece tu diente continuamente.",
+    "costo": "$500",
+    "nota": "Material moderno que ayuda a prevenir futuras caries."
+  },
+  "cementado_de_corona_c_u": {
+    "nombre": "Cementado de Corona (por unidad)",
+    "descripcion": "Colocamos permanentemente tu corona personalizada con técnicas que aseguran un ajuste perfecto y duradero.",
+    "costo": "$400",
+    "nota": "Procedimiento final para fijar definitivamente tu restauración."
+  },
+  "lavado_de_alveolo": {
+    "nombre": "Lavado de Alvéolo",
+    "descripcion": "Limpieza especializada del sitio de extracción para promover una cicatrización saludable y sin complicaciones.",
+    "costo": "$400",
+    "nota": "Cuidado post-extracción para asegurar una sanación óptima."
+  },
+  "corona_metal_porcelana_c_u": {
+    "nombre": "Corona Metal Porcelana (por unidad)",
+    "descripcion": "Restauración que combina la resistencia del metal con la belleza natural de la porcelana, perfecta para cualquier zona de tu boca.",
+    "costo": "$3000",
+    "nota": "Equilibrio perfecto entre durabilidad y estética natural."
+  },
+  "corona_metalica_adulto_c_u": {
+    "nombre": "Corona Metálica Adulto (por unidad)",
+    "descripcion": "Protección máxima para tus molares con coronas metálicas que resisten las fuerzas masticatorias más intensas.",
+    "costo": "$2500",
+    "nota": "La opción más duradera para dientes posteriores con mucho desgaste."
+  },
+  "incrustacion_metalica_c_u": {
+    "nombre": "Incrustación Metálica (por unidad)",
+    "descripcion": "Restauración de precisión fabricada en laboratorio que repara perfectamente cavidades grandes preservando la estructura dental.",
+    "costo": "$2500",
+    "nota": "Restauración conservadora que preserva la mayor cantidad de diente natural."
+  },
+  "poste_liga_dorada_o_metal_ceramico_c_u": {
+    "nombre": "Poste Liga Dorada o Metal Cerámico (por unidad)",
+    "descripcion": "Reforzamos tu diente con postes de materiales nobles que brindan la máxima resistencia y biocompatibilidad.",
+    "costo": "$2500",
+    "nota": "Materiales premium para casos que requieren la máxima calidad y durabilidad."
+  },
+  "corona_emax_porcelana_c_u": {
+    "nombre": "Corona EMAX/Porcelana (por unidad)",
+    "descripcion": "La corona más estética disponible, que imita perfectamente la translucidez y color de tus dientes naturales.",
+    "costo": "$5500",
+    "nota": "Tecnología de punta para resultados estéticos excepcionales."
+  },
+  "carilla_emax_porcelana_c_u": {
+    "nombre": "Carilla EMAX/Porcelana (por unidad)",
+    "descripcion": "Transformamos tu sonrisa con láminas ultrafinas que corrigen color, forma y tamaño de manera espectacular.",
+    "costo": "$5500",
+    "nota": "La opción más avanzada para una sonrisa de hollywood."
+  },
+  "incrustacion_emax_porcelana_c_u": {
+    "nombre": "Incrustación EMAX/Porcelana (por unidad)",
+    "descripcion": "Restauración invisible de alta gama que repara tu diente manteniendo una apariencia completamente natural.",
+    "costo": "$5500",
+    "nota": "Restauración premium que nadie notará que tienes."
+  },
+  "poste_emax_c_u": {
+    "nombre": "Poste EMAX (por unidad)",
+    "descripcion": "Refuerzo interno estético de última generación que fortalece tu diente sin comprometer la belleza de tu sonrisa.",
+    "costo": "$3000",
+    "nota": "Tecnología estética avanzada para dientes frontales visibles."
+  },
+  "corona_zirconia_monolitica_c_u": {
+    "nombre": "Corona Zirconia Monolítica (por unidad)",
+    "descripcion": "Corona de una sola pieza súper resistente y natural, perfecta para cualquier diente de tu boca.",
+    "costo": "$5500",
+    "nota": "Máxima resistencia con estética natural en una sola pieza."
+  },
+  "corona_zirconia_estratificada_c_u": {
+    "nombre": "Corona Zirconia Estratificada (por unidad)",
+    "descripcion": "La corona más sofisticada, con capas de porcelana sobre zirconia para una estética y resistencia incomparables.",
+    "costo": "$5800",
+    "nota": "El más alto nivel de estética y tecnología dental disponible."
+  },
+  "encia_simulada_c_u": {
+    "nombre": "Encía Simulada (por unidad)",
+    "descripcion": "Recreamos el contorno natural de tu encía para que tu restauración se vea completamente integrada y natural.",
+    "costo": "$600",
+    "nota": "Detalle estético que completa la naturalidad de tu restauración."
+  },
+  "meryland_metal_porcelana_c_u": {
+    "nombre": "Meryland Metal Porcelana (por unidad)",
+    "descripcion": "Reemplazamos tu diente faltante con un puente adhesivo conservador que no requiere tallar los dientes vecinos.",
+    "costo": "$4000",
+    "nota": "Solución conservadora que preserva tus dientes naturales adyacentes."
+  },
+  "meryland_emax_c_u": {
+    "nombre": "Meryland EMAX (por unidad)",
+    "descripcion": "Puente adhesivo de máxima estética que reemplaza tu diente perdido sin afectar los dientes vecinos.",
+    "costo": "$6000",
+    "nota": "La opción más conservadora y estética para reemplazar un diente."
+  },
+  "provisonal_puente_meryland_c_u": {
+    "nombre": "Provisional Puente Meryland (por unidad)",
+    "descripcion": "Mantenemos tu sonrisa completa con un puente temporal mientras preparamos tu restauración definitiva.",
+    "costo": "$700",
+    "nota": "Solución temporal que mantiene tu estética durante el tratamiento."
+  },
+  "tcs_semirigido_o_semiflexible_unilaterla": {
+    "nombre": "TCS Semirígido o Semiflexible Unilateral",
+    "descripcion": "Prótesis parcial flexible de un lado que se adapta cómodamente y ofrece una apariencia muy natural.",
+    "costo": "$5000",
+    "nota": "Comodidad superior con ganchos invisibles para una sonrisa natural."
+  },
+  "tcs_semirigido_o_semiflexible_bilaterla": {
+    "nombre": "TCS Semirígido o Semiflexible Bilateral",
+    "descripcion": "Prótesis flexible que abraza suavemente ambos lados de tu boca para máxima comodidad y retención.",
+    "costo": "$6000",
+    "nota": "Tecnología flexible para el máximo confort en prótesis parciales."
+  },
+  "tcs_semirigido_o_semiflexible_superior_o_inferior_c_u": {
+    "nombre": "TCS Semirígido o Semiflexible Superior o Inferior (por unidad)",
+    "descripcion": "Prótesis flexible completa para una arcada que ofrece comodidad excepcional y aspecto natural.",
+    "costo": "$6000",
+    "nota": "Tecnología avanzada para prótesis totales más cómodas."
+  },
+  "tcs_flexible_val": {
+    "nombre": "TCS Flexible Valplast",
+    "descripcion": "Prótesis parcial de material termoplástico flexible que se integra invisiblemente con tus dientes naturales.",
+    "costo": "plast bilateral - $5000",
+    "nota": "Material hipoalergénico y flexible para máxima comodidad."
+  },
+  "juego_de_placas": {
+    "nombre": "Prótesis Dental Completa (Superior e Inferior)",
+    "descripcion": "Te devolvemos una sonrisa completa y funcional con prótesis dentales cómodas y naturales para ambas arcadas.",
+    "costo": "$8000",
+    "nota": "Solución integral personalizada para recuperar completamente tu función masticatoria y estética."
+  },
+  "placa_superior_o_inferior": {
+    "nombre": "Prótesis Dental (Superior o Inferior)",
+    "descripcion": "Reemplazamos todos los dientes de una arcada con una prótesis cómoda y de aspecto natural.",
+    "costo": "$4000",
+    "nota": "Restauración completa para una arcada dental con materiales de calidad."
+  },
+  "placa_provisional_o_placa_de_acrilico_sin_cocer": {
+    "nombre": "Prótesis Provisional o de Acrílico Sin Cocer",
+    "descripcion": "Solución temporal inmediata que te permite sonreír y comer mientras preparamos tu prótesis definitiva.",
+    "costo": "$3000",
+    "nota": "Prótesis temporal para no quedarte sin dientes durante el tratamiento."
+  },
+  "placa_parcial": {
+    "nombre": "Prótesis Parcial",
+    "descripcion": "Reemplazamos los dientes faltantes con una prótesis removible que se integra armoniosamente con tus dientes naturales.",
+    "costo": "$2500",
+    "nota": "Solución cómoda y estética para reemplazar varios dientes perdidos."
+  },
+  "mariposita_unilateral": {
+    "nombre": "Mariposita Unilateral",
+    "descripcion": "Prótesis parcial pequeña y discreta que reemplaza uno o pocos dientes en un lado de tu boca.",
+    "costo": "$3000",
+    "nota": "Solución compacta y cómoda para espacios pequeños."
+  },
+  "provisonal_cocido": {
+    "nombre": "Provisional Cocido",
+    "descripcion": "Restauración temporal procesada en laboratorio con mayor durabilidad y estética durante tu tratamiento.",
+    "costo": "$1200",
+    "nota": "Provisional de alta calidad para tratamientos que requieren más tiempo."
+  },
+  "protesis_parcial_removible_con_ganchos_wiplas": {
+    "nombre": "Prótesis Parcial Removible con Ganchos Wiplas",
+    "descripcion": "Prótesis flexible con ganchos estéticos que se adaptan suavemente sin dañar tus dientes naturales.",
+    "costo": "$4000",
+    "nota": "Ganchos flexibles que protegen tus dientes naturales y lucen discretos."
+  },
+  "agregar_diente_c_u": {
+    "nombre": "Agregar Diente (por unidad)",
+    "descripcion": "Completamos tu prótesis existente agregando el diente que necesitas para restaurar tu sonrisa.",
+    "costo": "$700",
+    "nota": "Modificación de tu prótesis actual para incluir dientes adicionales."
+  },
+  "agregar_gancho_c_u": {
+    "nombre": "Agregar Gancho (por unidad)",
+    "descripcion": "Mejoramos la retención de tu prótesis agregando ganchos adicionales para mayor estabilidad.",
+    "costo": "$700",
+    "nota": "Modificación para mejorar la sujeción de tu prótesis actual."
+  },
+  "agregar_de_1_diente_c_u": {
+    "nombre": "Agregar Más de 1 Diente (por unidad)",
+    "descripcion": "Precio por cada diente adicional cuando agregamos múltiples piezas a tu prótesis existente.",
+    "costo": "$400",
+    "nota": "Costo reducido por unidad adicional en modificaciones múltiples."
+  },
+  "provisonales_autocurables": {
+    "nombre": "Provisionales Autocurables",
+    "descripcion": "Restauraciones temporales que fabricamos directamente en tu boca para soluciones inmediatas.",
+    "costo": "$500",
+    "nota": "Solución rápida fabricada en el momento para urgencias estéticas."
+  },
+  "cada_unidad_para_ppr_metalica": {
+    "nombre": "Cada Unidad para PPR Metálica",
+    "descripcion": "Costo por cada diente en tu prótesis parcial removible con estructura metálica ultra-resistente.",
+    "costo": "$400",
+    "nota": "Precio por unidad dental en prótesis parciales de alta gama."
+  },
+  "esqueleto_para_ppr_metalica": {
+    "nombre": "Esqueleto para PPR Metálica",
+    "descripcion": "Estructura metálica de precisión que sirve como base sólida para tu prótesis parcial removible.",
+    "costo": "$200",
+    "nota": "Armazón metálico personalizado para máxima durabilidad."
+  },
+  "acrilado_para_ppr_metalica": {
+    "nombre": "Acrilado para PPR Metálica",
+    "descripcion": "Terminado en acrílico de tu prótesis metálica que le da el aspecto final natural y cómodo.",
+    "costo": "$1500",
+    "nota": "Acabado estético que completa tu prótesis parcial metálica."
+  },
+  "blanqueamiento_dental": {
+    "nombre": "Blanqueamiento Dental",
+    "descripcion": "Iluminamos tu sonrisa de forma segura y efectiva, devolviendo el brillo natural a tus dientes.",
+    "costo": "$2000",
+    "nota": "Tratamiento profesional que respeta la salud de tus dientes mientras mejora su color."
+  },
+  "especialidad": {
+    "nombre": "=== ESPECIALIDAD ===",
+    "descripcion": "Tratamientos especializados realizados por nuestros expertos en diferentes áreas de la odontología.",
+    "costo": "Variable",
+    "nota": "Cada especialista te brindará un presupuesto personalizado según tu caso."
+  },
+  "colocacion_de_brackets": {
+    "nombre": "Colocación de Brackets",
+    "descripcion": "Iniciamos tu transformación hacia una sonrisa perfecta colocando cuidadosamente cada bracket en su posición ideal.",
+    "costo": "$2000",
+    "nota": "El primer paso hacia la sonrisa que siempre has soñado."
+  },
+  "ajustes": {
+    "nombre": "Ajustes",
+    "descripcion": "Mantenemos tu tratamiento en progreso con ajustes regulares que van acercando tus dientes a su posición perfecta.",
+    "costo": "$500",
+    "nota": "Cada ajuste nos acerca más a completar tu hermosa sonrisa."
+  },
+  "especialidad_endodoncia": {
+    "nombre": "=======ESPECIALIDAD ENDODONCIA==============",
+    "descripcion": "Tratamientos especializados de conductos radiculares para salvar tus dientes naturales.",
+    "costo": "Variable",
+    "nota": "Nuestro endodoncista evaluará tu caso para ofrecerte el mejor tratamiento."
+  },
+  "endodoncia": {
+    "nombre": "Endodoncia",
+    "descripcion": "Salvamos tu diente natural eliminando la infección interna con técnicas modernas y cómodas.",
+    "costo": "$3000",
+    "nota": "Tratamiento especializado para preservar tu diente evitando la extracción."
+  },
+  "retratamiendo_de_endodoncia": {
+    "nombre": "Retratamiento de Endodoncia",
+    "descripcion": "Damos una segunda oportunidad a tu diente con un nuevo tratamiento de conducto cuando el anterior necesita ser renovado.",
+    "costo": "$3200",
+    "nota": "Procedimiento más complejo para casos que requieren un nuevo enfoque."
+  },
+  "especialidad_cirujia": {
+    "nombre": "=======ESPECIALIDAD CIRUGÍA==============",
+    "descripcion": "Procedimientos quirúrgicos dentales especializados realizados por nuestro cirujano oral.",
+    "costo": "Variable",
+    "nota": "Evaluación personalizada con nuestro especialista en cirugía oral."
+  },
+  "cirujia_tercer_molar": {
+    "nombre": "Cirugía de Tercer Molar",
+    "descripcion": "Extraemos tu muela del juicio impactada con técnicas quirúrgicas avanzadas y el máximo cuidado post-operatorio.",
+    "costo": "$2300",
+    "nota": "Cirugía especializada con protocolo completo de recuperación."
+  },
+  "extraccion_simple": {
+    "nombre": "Extracción Simple",
+    "descripcion": "Retiramos tu diente de manera suave y eficiente cuando la extracción no requiere procedimientos complejos.",
+    "costo": "$1300",
+    "nota": "Procedimiento directo realizado por nuestro especialista."
+  },
+  "extraccion_por_cirujia": {
+    "nombre": "Extracción por Cirugía",
+    "descripcion": "Extraemos dientes complejos mediante técnicas quirúrgicas especializadas para casos más desafiantes.",
+    "costo": "$1700",
+    "nota": "Cirugía especializada para extracciones que requieren técnicas avanzadas."
+  },
+  "cirujia_mucocele": {
+    "nombre": "Cirugía de Mucocele",
+    "descripcion": "Eliminamos esas molestas bolitas en tu boca que se forman por glándulas salivales obstruidas.",
+    "costo": "$1700",
+    "nota": "Procedimiento menor para resolver definitivamente esta molestia común."
+  },
+  "frenilectomia": {
+    "nombre": "Frenilectomía",
+    "descripcion": "Liberamos la tensión de los frenillos que pueden causar separación entre dientes o dificultades al hablar.",
+    "costo": "$1700",
+    "nota": "Procedimiento que mejora tanto la función como la estética de tu sonrisa."
+  },
+  "cirijia_canino_retenido": {
+    "nombre": "Cirugía de Canino Retenido",
+    "descripcion": "Ayudamos a tu canino a encontrar su lugar en tu sonrisa mediante cirugía especializada y cuidadosa.",
+    "costo": "$2500",
+    "nota": "Procedimiento complejo para rescatar un diente importante para tu mordida."
+  },
+  "cirujia_de_torus": {
+    "nombre": "Cirugía de Torus",
+    "descripcion": "Eliminamos esos crecimientos óseos benignos que pueden causar molestias o interferir con prótesis.",
+    "costo": "$2300",
+    "nota": "Cirugía que mejora la comodidad y permite mejores opciones protésicas."
+  },
+  "cirujia_de_exostosis": {
+    "nombre": "Cirugía de Exostosis",
+    "descripcion": "Contorneamos el hueso para eliminar protuberancias que causan molestias o interfieren con tu comodidad.",
+    "costo": "$2300",
+    "nota": "Procedimiento que suaviza el contorno óseo para mayor comodidad."
+  },
+  "regularizacion_de_proceso_albeolar_c_u": {
+    "nombre": "Regularización de Proceso Alveolar (por unidad)",
+    "descripcion": "Preparamos el hueso de soporte para recibir prótesis cómodas mediante contorneado especializado.",
+    "costo": "$2100",
+    "nota": "Preparación ósea para asegurar el mejor ajuste de futuras prótesis."
+  },
+  "cirujia_ranula": {
+    "nombre": "Cirugía de Ránula",
+    "descripcion": "Tratamos esas molestias vesículas en el piso de la boca causadas por glándulas salivales obstruidas.",
+    "costo": "$1700",
+    "nota": "Procedimiento especializado para resolver definitivamente esta condición."
+  },
+  "descubrimiento_mucoso": {
+    "nombre": "Descubrimiento Mucoso",
+    "descripcion": "Exponemos cuidadosamente estructuras dentales cubiertas por encía para permitir tratamientos posteriores.",
+    "costo": "$1300",
+    "nota": "Procedimiento preparatorio para facilitar otros tratamientos."
+  },
+  "ulectomia": {
+    "nombre": "Ulectomía",
+    "descripcion": "Eliminamos tejido gingival excesivo que puede estar causando molestias o problemas estéticos.",
+    "costo": "$1100",
+    "nota": "Cirugía menor para mejorar la salud y apariencia de tus encías."
+  },
+  "operculectomia": {
+    "nombre": "Operculectomía",
+    "descripcion": "Retiramos la capucha de encía que cubre parcialmente un diente y puede acumular bacteria.",
+    "costo": "$1100",
+    "nota": "Procedimiento que elimina áreas difíciles de limpiar y previene infecciones."
+  },
+  "biopsia": {
+    "nombre": "Biopsia",
+    "descripcion": "Tomamos una muestra pequeña de tejido para análisis y darte tranquilidad sobre tu salud oral.",
+    "costo": "$1100",
+    "nota": "Procedimiento diagnóstico importante para tu tranquilidad y salud."
+  },
+  "especialidad_pediatria": {
+    "nombre": "=======ESPECIALIDAD PEDIATRÍA==============",
+    "descripcion": "Cuidado dental especializado para nuestros pacientes más pequeños en un ambiente divertido y acogedor.",
+    "costo": "Variable",
+    "nota": "Tratamientos diseñados especialmente para hacer que los niños se diviertan mientras cuidan su salud dental."
+  },
+  "atencion_urgencias_domingo": {
+    "nombre": "Atención de Urgencias Dominicales",
+    "descripcion": "Estamos aquí para ti cuando más nos necesitas, incluso los domingos, para aliviar tu dolor dental de emergencia.",
+    "costo": "$1000",
+    "nota": "Servicio de emergencia para cuando no puedes esperar hasta el lunes."
+  },
+  "limpieza_consulta": {
+    "nombre": "Limpieza y Consulta",
+    "descripcion": "Combinamos una limpieza dental completa con una revisión integral para mantener tu sonrisa en perfectas condiciones.",
+    "costo": "$800",
+    "nota": "Cuidado preventivo completo en una sola cita."
+  },
+  "limpieza_barniz": {
+    "nombre": "Limpieza + Barniz de Flúor",
+    "descripcion": "Limpieza profesional seguida de protección con barniz de flúor para una prevención superior.",
+    "costo": "$900",
+    "nota": "Combinación perfecta de limpieza y protección prolongada."
+  },
+  "fluoruro_diamino_de_plata": {
+    "nombre": "Fluoruro Diamino de Plata",
+    "descripcion": "Tratamiento innovador que detiene las caries en niños de manera no invasiva y efectiva.",
+    "costo": "$800",
+    "nota": "Alternativa moderna para tratar caries en niños sin necesidad de anestesia."
+  },
+  "corona_de_acero_cromo": {
+    "nombre": "Corona de Acero Cromo",
+    "descripcion": "Protegemos el diente de leche de tu pequeño con una corona súper resistente hasta que llegue el diente permanente.",
+    "costo": "$1100",
+    "nota": "Protección duradera especialmente diseñada para dientes de niños."
+  },
+  "corona_zirconea": {
+    "nombre": "Corona de Zirconia",
+    "descripcion": "Restauramos el diente de tu pequeño con una corona blanca y natural que se ve hermosa y es súper resistente.",
+    "costo": "$2100",
+    "nota": "La opción más estética y duradera para dientes anteriores de niños."
+  },
+  "corona_de_resina_celuloide_anterior": {
+    "nombre": "Corona de Resina (Celuloide Anterior)",
+    "descripcion": "Devolvemos la sonrisa natural a tu pequeño con una corona del color del diente para los dientes frontales.",
+    "costo": "$1500",
+    "nota": "Restauración estética especial para que tu pequeño sonría con confianza."
+  },
+  "corona_de_ceromero_posterior": {
+    "nombre": "Corona de Cerómero (Posterior)",
+    "descripcion": "Restauramos los molares de tu pequeño con coronas resistentes y del color del diente para una masticación cómoda.",
+    "costo": "$1900",
+    "nota": "Combina resistencia y estética para los dientes posteriores de niños."
+  },
+  "pulpectomia_pediatrica": {
+    "nombre": "Pulpectomía Pediátrica",
+    "descripcion": "Salvamos el diente de leche de tu pequeño eliminando completamente la infección interna de manera suave y cuidadosa.",
+    "costo": "$1300",
+    "nota": "Tratamiento especializado para preservar los dientes de leche hasta su cambio natural."
+  },
+  "resina_ionomero_de_vidrio": {
+    "nombre": "Resina/Ionómero de Vidrio",
+    "descripcion": "Reparamos los dientes de tu pequeño con materiales que liberan flúor y protegen contra futuras caries.",
+    "costo": "$1100",
+    "nota": "Material especial para niños que ayuda a prevenir nuevas caries."
+  },
+  "extraccion_pediatra": {
+    "nombre": "Extracción Pediátrica",
+    "descripcion": "Cuando es necesario, retiramos suavemente el diente de leche de tu pequeño en un ambiente cómodo y tranquilo.",
+    "costo": "$1000",
+    "nota": "Procedimiento gentil diseñado especialmente para niños."
+  },
+  "aplicacion_de_barniz_de_fluor_sinlimpieza": {
+    "nombre": "Aplicación de Barniz de Flúor (Sin Limpieza)",
+    "descripcion": "Protegemos los dientes de tu pequeño con flúor de larga duración sin necesidad de limpieza previa.",
+    "costo": "$800",
+    "nota": "Protección rápida y efectiva para visitas de mantenimiento."
+  },
+  "tratamiento_de_diente_con_hmi": {
+    "nombre": "Tratamiento de Diente con HMI",
+    "descripcion": "Cuidamos especialmente los dientes con hipomineralización de tu pequeño con tratamientos suaves y efectivos.",
+    "costo": "$1700",
+    "nota": "Tratamiento especializado para dientes con defectos del esmalte."
+  },
+  "ventana_quirurgica": {
+    "nombre": "Ventana Quirúrgica",
+    "descripcion": "Ayudamos a los dientes permanentes a salir correctamente mediante una pequeña cirugía cuidadosa.",
+    "costo": "$1500",
+    "nota": "Procedimiento menor para facilitar la erupción dental normal."
+  },
+  "sellador": {
+    "nombre": "Sellador",
+    "descripcion": "Protegemos las muelas de tu pequeño con una barrera invisible que previene las caries en los surcos profundos.",
+    "costo": "$700",
+    "nota": "Prevención moderna especialmente efectiva en niños y adolescentes."
+  },
+  "protesis_total": {
+    "nombre": "=== PRÓTESIS TOTAL ===",
+    "descripcion": "Soluciones completas para reemplazar todos los dientes y devolverte una sonrisa funcional y hermosa.",
+    "costo": "Variable",
+    "nota": "Cada caso es único y nuestro especialista te dará un presupuesto personalizado."
+  },
+  "prot_fija": {
+    "nombre": "=== PRÓTESIS FIJA ===",
+    "descripcion": "Restauraciones permanentes que no se quitan, diseñadas para funcionar como tus dientes naturales.",
+    "costo": "Variable",
+    "nota": "Soluciones fijas personalizadas según tus necesidades específicas."
+  },
+  "corona_sobre_implante_metal_porcelana_con_ventana": {
+    "nombre": "Corona sobre Implante (Metal-Porcelana con Ventana)",
+    "descripcion": "Completamos tu implante dental con una corona hermosa y funcional que incluye acceso para mantenimiento futuro.",
+    "costo": "$5500",
+    "nota": "Restauración de alta gama con acceso para mantenimiento cuando sea necesario."
+  },
+  "corona_sobre_implante_metal_porcelana_sin_ventana": {
+    "nombre": "Corona sobre Implante (Metal-Porcelana sin Ventana)",
+    "descripcion": "Corona definitiva sobre tu implante que combina durabilidad y estética para una sonrisa completa y natural.",
+    "costo": "$4500",
+    "nota": "Solución permanente y estética para reemplazar tu diente perdido."
+  },
+  "corona_3_4": {
+    "nombre": "Corona 3/4",
+    "descripcion": "Restauración conservadora que cubre las partes dañadas de tu diente preservando la máxima estructura natural posible.",
+    "costo": "$2000",
+    "nota": "Opción conservadora que mantiene la mayor cantidad de diente original."
+  },
+  "corona_oro_c_u_el_px_trae_el_oro_ceramico_el_costo_es_solo_mano_de_obra_por_cada_diente_se_requieren_3_tablillas": {
+    "nombre": "Corona de Oro (el paciente proporciona el oro)",
+    "descripcion": "Creamos tu corona con el oro que tú proporcionas, cobrando únicamente por la mano de obra especializada de nuestros técnicos.",
+    "costo": "$4000.0",
+    "nota": "Costo únicamente por fabricación cuando tú proporcionas el material de oro. Se requieren 3 tablillas por diente."
+  }
+}  

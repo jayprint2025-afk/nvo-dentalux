@@ -1,0 +1,27 @@
+{
+  "background_color": "#82f1ea",
+  "dir": "ltr",
+  "display": "standalone",
+  "name": "CliniqOne",
+  "orientation": "any",
+  "scope": "/",
+  "short_name": "CliniqOne",
+  "start_url": "/",
+  "theme_color": "#3a44ee",
+  "id": "cliniqone-v2",
+  "description": "CliniqOne - Agenda y gestión dental",
+  "icons": [
+    {
+      "src": "/cliniqone-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/cliniqone-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

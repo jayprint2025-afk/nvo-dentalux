@@ -1,0 +1,4556 @@
+console.log('🚨 EMERGENCY - server.js INICIADO EN BACKEND FOLDER');
+console.log('🗂️ Directorio de trabajo:', process.cwd());
+console.log('🗂️ __dirname:', __dirname);
+
+// server.js — Dentalux Backend (Render-ready)
+/**
+ * - CORS permisivo (incluye cache-control, x-sucursal) para preflights
+ * - Lee sucursal via ?sucursal=, header x-sucursal o body.sucursal_id
+ * - Filtro por sucursal en todas las rutas
+ * - Esquema multi-sucursal + (laboratorios, trabajos, abonos, pagos_laboratorio, objetivos)
+ * - FACTURACIÓN: /api/facturacion/* (configuración, facturas+conceptos, clientes, productos)
+ */
+
+if (process.env.NODE_ENV !== 'production') {
+  require('dotenv').config();
+}
+
+console.log('🔥 SERVER.JS INICIANDO - LÍNEA 13');
+
+const express = require('express');
+const cors = require('cors');
+const morgan = require('morgan');
+const { Pool } = require('pg');
+const { AsyncLocalStorage } = require('async_hooks');
+
+
+// Helper para async/await con manejo de errores
+const ah = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
+
+
+// Verificación explícita del módulo médico
+console.log('🚀 INICIANDO CARGA DEL MÓDULO MÉDICO...');
+console.log('📁 Directorio actual:', __dirname);
+console.log('🗂️ Archivos en directorio:', require('fs').readdirSync(__dirname).filter(f => f.includes('medical')));
+
+let medicalRecordModule;
+try {
+  console.log('🔍 Intentando cargar ./medical-record-server.js...');
+  medicalRecordModule = require('./medical-record-server.js');
+  console.log('✅ Módulo médico cargado exitosamente');
+  console.log('🔍 Funciones disponibles:', Object.keys(medicalRecordModule));
+} catch (error) {
+  console.error('❌ ERROR CARGANDO MÓDULO MÉDICO:', error.message);
+  console.error('❌ Stack:', error.stack);
+  
+  // Intentar con path absoluto
+  try {
+    console.log('🔄 Intentando con path absoluto...');
+    medicalRecordModule = require(__dirname + '/medical-record-server.js');
+    console.log('✅ Módulo médico cargado con path absoluto');
+    console.log('🔍 Funciones disponibles:', Object.keys(medicalRecordModule));
+  } catch (error2) {
+    console.error('❌ ERROR TAMBIÉN CON PATH ABSOLUTO:', error2.message);
+    medicalRecordModule = null;
+  }
+}
+
+// ================================
+// 🤖 CARGA DEL MÓDULO IA (externo)
+// ================================
+console.log('🤖 INICIANDO CARGA DEL MÓDULO IA...');
+let aiModule;
+try {
+  console.log('🔍 Intentando cargar ./ai-conversations-module.js...');
+  aiModule = require('./ai-conversations-module.js');
+  console.log('✅ Módulo IA cargado exitosamente');
+  console.log('🔍 Funciones disponibles IA:', Object.keys(aiModule));
+} catch (error) {
+  console.error('❌ ERROR CARGANDO MÓDULO IA:', error.message);
+  console.error('❌ Stack:', error.stack);
+
+  // Intentar con path absoluto
+  try {
+    console.log('🔄 Intentando con path absoluto (IA)...');
+    aiModule = require(__dirname + '/ai-conversations-module.js');
+    console.log('✅ Módulo IA cargado con path absoluto');
+    console.log('🔍 Funciones disponibles IA:', Object.keys(aiModule));
+  } catch (error2) {
+    console.error('❌ ERROR TAMBIÉN CON PATH ABSOLUTO (IA):', error2.message);
+    aiModule = null;
+  }
+}
+
+
+const PORT = Number(process.env.PORT || 4001);
+// =========================================================
+// 🧠 DB MULTI-BASE (UN SOLO BACKEND, 2 DATABASE_URL)
+// =========================================================
+// Configura en Render:
+//   DATABASE_URL_DB1=... (ej. dentalux_db)
+//   DATABASE_URL_DB2=... (ej. base_de_datos_multisucursal)
+// Si no se definen, usa DATABASE_URL como DB1 (compatibilidad)
+
+const DB1_URL = process.env.DATABASE_URL_DB1 || process.env.DATABASE_URL;
+const DB2_URL = process.env.DATABASE_URL_DB2 || '';
+if (!DB1_URL) throw new Error('DATABASE_URL_DB1/DATABASE_URL no está definida');
+
+const sslCfg = process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false;
+
+const poolDB1 = new Pool({ connectionString: DB1_URL, ssl: sslCfg });
+const poolDB2 = DB2_URL ? new Pool({ connectionString: DB2_URL, ssl: sslCfg }) : null;
+
+const DB3_URL = process.env.DATABASE_URL_DB3;
+const poolDB3 = DB3_URL ? new Pool({ connectionString: DB3_URL, ssl: sslCfg }) : null;
+
+
+// Para no reescribir TODO el archivo, usamos AsyncLocalStorage:
+// cada request corre con un "pool actual" y q() consulta al pool correcto.
+const als = new AsyncLocalStorage();
+
+function pickOne(v) { return (Array.isArray(v) ? v[v.length - 1] : v); }
+function getSucursal(req) {
+  return (
+    pickOne(req.query?.sucursal) ||
+    pickOne(req.headers['x-sucursal']) ||
+    pickOne(req.body?.sucursal_id) ||
+    'sucursal_1'
+  );
+}
+
+// Cómo decidimos DB:
+// - Header/query explícito (x-db, ?db=db2)
+// - Si sucursal_2 => DB2
+// - Default => DB1
+function pickDbKey(req) {
+  const forced = String(pickOne(req.headers['x-db']) || pickOne(req.query?.db) || '').toLowerCase();
+  if (forced === 'db2' || forced === '2') return 'db2';
+  if (forced === 'db1' || forced === '1') return 'db1';
+  // ✅ Enrutamiento por APP (prioridad total)
+  // Usa header x-app (app1/app2) o query ?app_id= / ?app=
+  const xApp = String(pickOne(req.headers["x-app"]) || pickOne(req.query?.app_id) || pickOne(req.query?.app) || "").toLowerCase().trim();
+  if (xApp === "app2" || xApp === "2") return "db2";
+  if (xApp === "app1" || xApp === "1") return "db1";
+  if (xApp === "app3" || xApp === "3") return "db3";
+
+  // ✅ Enrutamiento por IDs de Meta (cuando NO hay origin/referer, ej. webhooks)
+  // - Messenger (Page): entry[0].id
+  // - WhatsApp: entry[0].changes[0].value.metadata.phone_number_id
+  // Configura en Render (separado por comas):
+  //   DB1_FB_PAGE_IDS=...
+  //   DB2_FB_PAGE_IDS=...
+  //   DB3_FB_PAGE_IDS=313213175214373
+  //   DB1_WA_PHONE_IDS=...
+  //   DB2_WA_PHONE_IDS=704780742729954
+  //   DB3_WA_PHONE_IDS=...
+  try {
+    const fbPageId = String(req.body?.object === 'page' ? (req.body?.entry?.[0]?.id || '') : '').trim();
+    const waPhoneId = String(req.body?.entry?.[0]?.changes?.[0]?.value?.metadata?.phone_number_id || '').trim();
+
+
+    // ✅ Force DB for Messenger webhooks if configured (e.g., always send this Page to DB2)
+    const forceMessengerDb = String(process.env.MESSENGER_FORCE_DB || '').toLowerCase().trim(); // 'db1' | 'db2' | 'db3'
+    const forceMessengerPageIds = String(process.env.MESSENGER_FORCE_PAGE_IDS || '').split(',').map(s => s.trim()).filter(Boolean);
+    if (fbPageId && forceMessengerDb && (!forceMessengerPageIds.length || forceMessengerPageIds.includes(fbPageId))) {
+      if (forceMessengerDb === 'db1' || forceMessengerDb === '1') return 'db1';
+      if (forceMessengerDb === 'db2' || forceMessengerDb === '2') return 'db2';
+      if (forceMessengerDb === 'db3' || forceMessengerDb === '3') return 'db3';
+    }
+
+    const fb1 = String(process.env.DB1_FB_PAGE_IDS || '').split(',').map(s => s.trim()).filter(Boolean);
+    const fb2 = String(process.env.DB2_FB_PAGE_IDS || '').split(',').map(s => s.trim()).filter(Boolean);
+    const fb3 = String(process.env.DB3_FB_PAGE_IDS || '').split(',').map(s => s.trim()).filter(Boolean);
+
+    const wa1 = String(process.env.DB1_WA_PHONE_IDS || '').split(',').map(s => s.trim()).filter(Boolean);
+    const wa2 = String(process.env.DB2_WA_PHONE_IDS || (process.env.AI_DEFAULT_PHONE_NUMBER_ID || '')).split(',').map(s => s.trim()).filter(Boolean);
+    const wa3 = String(process.env.DB3_WA_PHONE_IDS || '').split(',').map(s => s.trim()).filter(Boolean);
+
+    if (fbPageId) {
+      if (fb2.includes(fbPageId)) return 'db2';
+      if (fb1.includes(fbPageId)) return 'db1';
+      if (fb3.includes(fbPageId)) return 'db3';
+    }
+    if (waPhoneId) {
+      if (wa3.includes(waPhoneId)) return 'db3';
+      if (wa2.includes(waPhoneId)) return 'db2';
+      if (wa1.includes(waPhoneId)) return 'db1';
+    }
+  } catch (_) {}
+
+  // ✅ Enrutamiento por ORIGIN/REFERER (ideal cuando ambas apps apuntan al MISMO backend)
+
+  // ✅ Enrutamiento por ORIGIN/REFERER (ideal cuando ambas apps apuntan al MISMO backend)
+  // Configurable por ENV (separado por comas):
+  //   DB1_ORIGINS_MATCH=app1-dominio,onrender-app1
+  //   DB2_ORIGINS_MATCH=app2-dominio,onrender-app2
+  //   DB3_ORIGINS_MATCH=app3-dominio,onrender-app3
+  const origin = String(req.headers.origin || '').toLowerCase();
+  const referer = String(req.headers.referer || '').toLowerCase();
+  const hay = `${origin} ${referer}`.trim();
+  const m1 = String(process.env.DB1_ORIGINS_MATCH || 'dentalux-sucsursales').toLowerCase().split(',').map(s => s.trim()).filter(Boolean);
+  const m2 = String(process.env.DB2_ORIGINS_MATCH || 'staticdemo-94eq').toLowerCase().split(',').map(s => s.trim()).filter(Boolean);
+  const m3 = String(process.env.DB3_ORIGINS_MATCH || 'cliniqoneenterprice').toLowerCase().split(',').map(s => s.trim()).filter(Boolean);
+if (hay) {
+  // Orden defensivo: DB3 (enterprise), luego DB1 (prod), luego DB2 (demo)
+  if (m3.some(s => hay.includes(s))) return 'db3';
+  if (m1.some(s => hay.includes(s))) return 'db1';
+  if (m2.some(s => hay.includes(s))) return 'db2';
+}
+
+
+  // ⚠️ IMPORTANTE:
+  // NO decidir la DB por sucursal. La sucursal solo debe filtrar datos *dentro* de la DB.
+  // Si no se pudo inferir por x-db / x-app / origin, caemos a DB1 por compatibilidad.
+  return 'db1';
+}
+
+function poolForReq(req) {
+  const key = pickDbKey(req);
+if (key === 'db3' && poolDB3) return poolDB3;  
+if (key === 'db2' && poolDB2) return poolDB2;
+  return poolDB1;
+}
+
+// q() global: usa el pool del contexto de la request (ALS)
+const q = (text, params = []) => {
+  const store = als.getStore();
+  const p = store?.pool || poolDB1;
+  return p.query(text, params);
+};
+
+poolDB1.on('connect', () => console.log('✅ Conectado a DB1 (DATABASE_URL_DB1/DATABASE_URL)'));
+if (poolDB2) poolDB2.on('connect', () => console.log('✅ Conectado a DB2 (DATABASE_URL_DB2)'));
+if (poolDB3) poolDB3.on('connect', () => console.log('✅ Conectado a DB3 (DATABASE_URL_DB3)'));
+
+
+
+// ✅ Migración defensiva (crear o completar tablas/índices)
+async function ensureWhatsAppTables() {
+  // --- whatsapp_messages ---
+  await q(`
+    CREATE TABLE IF NOT EXISTS whatsapp_messages (
+      id SERIAL PRIMARY KEY,
+      direction TEXT,               -- incoming | outgoing
+      phone TEXT,
+      message TEXT,
+      status TEXT,
+      appointment_id INTEGER,
+      sucursal_id TEXT,
+      wa_message_id TEXT,
+      manual BOOLEAN DEFAULT FALSE,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+  // Asegurar columnas por si la tabla ya existía con menos campos
+  await q(`ALTER TABLE whatsapp_messages ADD COLUMN IF NOT EXISTS direction TEXT`);
+  await q(`ALTER TABLE whatsapp_messages ADD COLUMN IF NOT EXISTS phone TEXT`);
+  await q(`ALTER TABLE whatsapp_messages ADD COLUMN IF NOT EXISTS message TEXT`);
+  await q(`ALTER TABLE whatsapp_messages ADD COLUMN IF NOT EXISTS status TEXT`);
+  await q(`ALTER TABLE whatsapp_messages ADD COLUMN IF NOT EXISTS appointment_id INTEGER`);
+  await q(`ALTER TABLE whatsapp_messages ADD COLUMN IF NOT EXISTS sucursal_id TEXT`);
+  await q(`ALTER TABLE whatsapp_messages ADD COLUMN IF NOT EXISTS wa_message_id TEXT`);
+  await q(`ALTER TABLE whatsapp_messages ADD COLUMN IF NOT EXISTS manual BOOLEAN DEFAULT FALSE`);
+  await q(`ALTER TABLE whatsapp_messages ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW()`);
+  // Índices
+  await q(`CREATE INDEX IF NOT EXISTS idx_wa_msgs_phone    ON whatsapp_messages(phone)`);
+  await q(`CREATE INDEX IF NOT EXISTS idx_wa_msgs_sucursal ON whatsapp_messages(sucursal_id)`);
+  await q(`CREATE INDEX IF NOT EXISTS idx_wa_msgs_created  ON whatsapp_messages(created_at DESC)`);
+
+  // --- whatsapp_rules ---
+  await q(`
+    CREATE TABLE IF NOT EXISTS whatsapp_rules (
+      id TEXT PRIMARY KEY DEFAULT substring(md5(random()::text || clock_timestamp()::text) for 24),
+      name TEXT NOT NULL,
+      active BOOLEAN DEFAULT TRUE,
+      priority INTEGER DEFAULT 100,
+      match JSONB NOT NULL,
+      action JSONB NOT NULL,
+      cooldown_secs INTEGER DEFAULT 0,
+      sucursal_id TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+  // Asegurar columnas (por si ya existía)
+  await q(`ALTER TABLE whatsapp_rules ADD COLUMN IF NOT EXISTS name TEXT`);
+  await q(`ALTER TABLE whatsapp_rules ADD COLUMN IF NOT EXISTS active BOOLEAN DEFAULT TRUE`);
+  await q(`ALTER TABLE whatsapp_rules ADD COLUMN IF NOT EXISTS priority INTEGER DEFAULT 100`);
+  await q(`ALTER TABLE whatsapp_rules ADD COLUMN IF NOT EXISTS match JSONB`);
+  await q(`ALTER TABLE whatsapp_rules ADD COLUMN IF NOT EXISTS action JSONB`);
+  await q(`ALTER TABLE whatsapp_rules ADD COLUMN IF NOT EXISTS cooldown_secs INTEGER DEFAULT 0`);
+  await q(`ALTER TABLE whatsapp_rules ADD COLUMN IF NOT EXISTS sucursal_id TEXT`);
+  await q(`ALTER TABLE whatsapp_rules ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW()`);
+  await q(`ALTER TABLE whatsapp_rules ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()`);
+  await q(`CREATE INDEX IF NOT EXISTS idx_wa_rules_active ON whatsapp_rules(active, priority)`);
+
+  // --- whatsapp_rule_execs (cooldown) ---
+  await q(`
+    CREATE TABLE IF NOT EXISTS whatsapp_rule_execs (
+      id BIGSERIAL PRIMARY KEY,
+      rule_id TEXT REFERENCES whatsapp_rules(id) ON DELETE CASCADE,
+      phone TEXT NOT NULL,
+      sucursal_id TEXT,
+      executed_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+  await q(`ALTER TABLE whatsapp_rule_execs ADD COLUMN IF NOT EXISTS rule_id TEXT`);
+  await q(`ALTER TABLE whatsapp_rule_execs ADD COLUMN IF NOT EXISTS phone TEXT`);
+  await q(`ALTER TABLE whatsapp_rule_execs ADD COLUMN IF NOT EXISTS sucursal_id TEXT`);
+  await q(`ALTER TABLE whatsapp_rule_execs ADD COLUMN IF NOT EXISTS executed_at TIMESTAMPTZ DEFAULT NOW()`);
+  await q(`CREATE INDEX IF NOT EXISTS idx_wa_rule_execs_rule_phone ON whatsapp_rule_execs(rule_id, phone)`);
+  await q(`CREATE INDEX IF NOT EXISTS idx_wa_rule_execs_recent     ON whatsapp_rule_execs(executed_at DESC)`);
+}
+
+// Lánzalo en el arranque (antes de app.listen)
+// Importante: crear tablas en DB1, DB2 y DB3 (si existen)
+ensureWhatsAppTables()
+  .then(async () => {
+    console.log('✅ Tablas WhatsApp OK (DB1)');
+
+    if (poolDB2) {
+      await als.run({ pool: poolDB2, dbKey: 'db2' }, () => ensureWhatsAppTables());
+      console.log('✅ Tablas WhatsApp OK (DB2)');
+    }
+
+    if (poolDB3) {
+      await als.run({ pool: poolDB3, dbKey: 'db3' }, () => ensureWhatsAppTables());
+      console.log('✅ Tablas WhatsApp OK (DB3)');
+    }
+  })
+  .catch(err => console.error('❌ ensureWhatsAppTables', err));
+
+// 🆕 Helper: enviar encuesta de satisfacción por WhatsApp (usando API real)
+async function triggerSatisfaccionWhatsApp(appointment, sucursalId) {
+  try {
+    if (!appointment || !appointment.phone) {
+      console.log('📵 Cita sin teléfono, no se envía WhatsApp de satisfacción');
+      return;
+    }
+
+    // Evitar duplicados para la misma cita
+    const existente = await q(`
+      SELECT id
+      FROM whatsapp_messages
+      WHERE appointment_id = $1
+        AND (sucursal_id = $2 OR sucursal_id IS NULL)
+        AND message ILIKE '%calificar%'
+      LIMIT 1
+    `, [appointment.id, sucursalId]);
+
+    if (existente.rows.length > 0) {
+      console.log('ℹ️ Ya se envió WhatsApp de satisfacción para esta cita', {
+        appointment_id: appointment.id
+      });
+      return;
+    }
+
+    const message =
+      `Hola ${appointment.patient || 'paciente'}, gracias por tu visita a la clínica dental. ` +
+      `Del 1 al 5, ¿cómo calificarías tu experiencia de hoy? Responde solo con un número.`;
+
+    // 👉 Enviar mensaje REAL por WhatsApp usando el helper del módulo
+    const data = await sendWhatsAppText({
+      to: appointment.phone,
+      text: message
+    });
+
+    // 👉 Registrar en whatsapp_messages como mensaje enviado
+    try {
+      await logWa({
+        direction: 'outgoing',
+        phone: appointment.phone,
+        message,
+        status: 'sent',
+        appointmentId: appointment.id,
+        sucursalId,
+        waMessageId:
+          (data && data.messages && data.messages[0] && data.messages[0].id) || null,
+        manual: false
+      });
+    } catch (e) {
+      console.error('logWa fail (satisfacción):', e.message);
+    }
+
+    console.log('📲 Mensaje de satisfacción ENVIADO por WhatsApp:', {
+      appointment_id: appointment.id,
+      phone: appointment.phone,
+      sucursal: sucursalId
+    });
+  } catch (error) {
+    console.error('❌ Error en triggerSatisfaccionWhatsApp:', error);
+  }
+}
+
+
+
+// 🔹 AGREGAR AQUÍ (línea 119):
+// Migración defensiva para campos faltantes
+async function ensureRequiredFields() {
+  try {
+    await q(`ALTER TABLE services ADD COLUMN IF NOT EXISTS price NUMERIC DEFAULT 0`);
+    await q(`ALTER TABLE inventory ADD COLUMN IF NOT EXISTS stock INTEGER DEFAULT 0`);
+    await q(`ALTER TABLE inventory ADD COLUMN IF NOT EXISTS min_stock INTEGER DEFAULT 5`);
+    await q(`ALTER TABLE inventory ADD COLUMN IF NOT EXISTS max_stock INTEGER DEFAULT 100`);
+    await q(`ALTER TABLE inventory ADD COLUMN IF NOT EXISTS price NUMERIC DEFAULT 0`);
+    
+    await q(`
+      CREATE TABLE IF NOT EXISTS alertas_inventario (
+        id SERIAL PRIMARY KEY,
+        producto_id INTEGER,
+        tipo TEXT DEFAULT 'stock_bajo',
+        mensaje TEXT,
+        prioridad INTEGER DEFAULT 1,
+        resuelta BOOLEAN DEFAULT FALSE,
+        sucursal_id TEXT,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    
+    await q(`ALTER TABLE appointments ADD COLUMN IF NOT EXISTS patient TEXT DEFAULT 'Paciente Sin Nombre'`);
+    await q(`ALTER TABLE appointments ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'Pendiente'`);
+    await q(`ALTER TABLE appointments ADD COLUMN IF NOT EXISTS date DATE DEFAULT CURRENT_DATE`);
+    await q(`ALTER TABLE payments ADD COLUMN IF NOT EXISTS amount NUMERIC DEFAULT 0`);
+    await q(`ALTER TABLE payments ADD COLUMN IF NOT EXISTS date DATE DEFAULT CURRENT_DATE`);
+    await q(`ALTER TABLE payments ADD COLUMN IF NOT EXISTS payment_method TEXT DEFAULT 'efectivo'`);
+    await q(`ALTER TABLE expenses ADD COLUMN IF NOT EXISTS amount NUMERIC DEFAULT 0`);
+    await q(`ALTER TABLE expenses ADD COLUMN IF NOT EXISTS date DATE DEFAULT CURRENT_DATE`);
+    
+    console.log('✅ Migración defensiva completada');
+  } catch (error) {
+    console.error('❌ Error en migración defensiva:', error);
+  }
+}
+
+
+
+const app = express();
+
+
+const corsOptions = {
+  origin: true,
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: [
+    // ✅ Importante: permitir headers de enrutamiento multi-app/db
+    'content-type','authorization','x-requested-with','x-sucursal','x-app','x-db',
+    'x-wa-phone-number-id','x-phone-number-id','x-wa-phone',
+    'accept','origin','referer','cache-control','pragma'
+  ],
+  exposedHeaders: ['content-length'],
+  optionsSuccessStatus: 204,
+};
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
+
+// Acepta JSON grandes (p.ej. logo en base64 del fallback)
+app.use(express.json({ limit: '10mb' }));
+// Si algún formulario te llega urlencoded, igual amplía el límite
+app.use(express.urlencoded({ limit: '10mb', extended: true }));
+
+app.use(morgan('dev'));
+
+// =========================================================
+// 🧭 Selector de DB por request (ALS)
+// =========================================================
+// Por defecto:
+//   - sucursal_1 => DB1
+//   - sucursal_2 => DB2 (si existe)
+// Overrides:
+//   - header: x-db: db1 | db2
+//   - query:  ?db=db1 | db2
+//   - (opcional) header: x-sucursal / body.sucursal_id
+app.use((req, _res, next) => {
+  const p = poolForReq(req);
+  const key = pickDbKey(req);
+  return als.run({ pool: p, dbKey: key }, next);
+});
+
+// === WhatsApp API ===
+const whatsappRoutes = require('./routes/whatsapp'); 
+const { sendWhatsAppText, logWa } = whatsappRoutes;
+
+// =========================================================
+// 🔄 MULTI-BACKEND WHATSAPP ROUTER (controlado por ENV)
+// =========================================================
+//
+// Usa este mismo server.js en varios servicios:
+//   - backenddemo (router): WHATSAPP_ROLE=router
+//   - dentalite (worker):   sin WHATSAPP_ROLE
+//
+// En modo router, este servicio SOLO reenvía el webhook a otros backends.
+// En modo normal (worker), procesa /api/whatsapp/webhook con routes/whatsapp.js.
+//
+
+if (process.env.WHATSAPP_ROLE === 'router') {
+
+  const VERIFY =
+    process.env.VERIFY_TOKEN ||
+    process.env.WHATSAPP_VERIFY_TOKEN ||
+    'dentalux_webhook_2024';
+
+  // Ideal: usa ENV para no hardcodear
+  const WHATSAPP_FORWARD = [
+    "https:https://api.clinicadentalux.app",
+    "https://api.clinicadentalux.app",
+  ];
+
+  // ✅ 1) GET verificación (hub.challenge)
+  app.get("/api/whatsapp/webhook", (req, res) => {
+    const mode = req.query["hub.mode"];
+    const token = req.query["hub.verify_token"];
+    const challenge = req.query["hub.challenge"];
+
+    if (mode === "subscribe" && token === VERIFY) {
+      console.log("✅ [ROUTER] Webhook verificado");
+      return res.status(200).send(challenge);
+    }
+
+    console.log("❌ [ROUTER] Verificación fallida", { mode, token });
+    return res.sendStatus(403);
+  });
+
+  // ✅ 2) POST eventos entrantes: SOLO reenvía y responde 200
+  app.post("/api/whatsapp/webhook", async (req, res) => {
+    console.log("📩 [ROUTER] Evento entrante → reenviando...");
+
+    await Promise.allSettled(
+      WHATSAPP_FORWARD.map(base =>
+        fetch(`${base}/api/whatsapp/webhook`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" }, // ✅ NO copies req.headers
+          body: JSON.stringify(req.body),
+        })
+      )
+    );
+
+    return res.sendStatus(200); // ✅ cortar aquí (NO next)
+  });
+}
+
+
+// 👇 Esto siempre debe ir, tanto en router como en worker
+app.use('/api/whatsapp', whatsappRoutes);
+
+
+// === Facturama API ===
+const facturama = require('./routes/facturama');
+app.use('/api/facturama', facturama);
+app.use('/facturama', facturama);
+
+// 👇 Alias v2 para que tu frontend deje de fallar
+app.use('/api/facturacion-v2', facturama);
+
+
+// === 🆕 Historia Clínica API ===
+if (medicalRecordModule && typeof medicalRecordModule.setupMedicalRecordRoutes === 'function') {
+  try {
+    medicalRecordModule.setupMedicalRecordRoutes(app, q);
+    console.log('✅ Rutas médicas configuradas exitosamente');
+    console.log('🏥 Endpoints disponibles:');
+    console.log('   • GET  /api/expediente-medico/paciente/:nombrePaciente');
+    console.log('   • POST /api/expediente-medico');
+    console.log('   • POST /api/historia-clinica-dental');
+    console.log('   • POST /api/odontograma');
+    console.log('   • POST /api/tratamiento-dental');
+    console.log('   • POST /api/consentimiento-informado');
+    console.log('   • POST /api/documento-radiografia');
+  } catch (error) {
+    console.error('❌ Error configurando rutas médicas:', error);
+  }
+} else {
+  console.error('❌ Módulo médico no disponible o función setupMedicalRecordRoutes no encontrada');
+  // Crear endpoints de fallback para evitar errores 404
+  app.get('/api/expediente-medico/*', (req, res) => {
+    res.status(503).json({ error: 'Módulo médico no disponible' });
+  });
+  app.post('/api/expediente-medico/*', (req, res) => {
+    res.status(503).json({ error: 'Módulo médico no disponible' });
+  });
+  app.all('/api/historia-clinica-dental', (req, res) => {
+    res.status(503).json({ error: 'Módulo médico no disponible' });
+  });
+  app.all('/api/odontograma', (req, res) => {
+    res.status(503).json({ error: 'Módulo médico no disponible' });
+  });
+  app.all('/api/tratamiento-dental', (req, res) => {
+    res.status(503).json({ error: 'Módulo médico no disponible' });
+  });
+  app.all('/api/consentimiento-informado', (req, res) => {
+    res.status(503).json({ error: 'Módulo médico no disponible' });
+  });
+  app.all('/api/documento-radiografia', (req, res) => {
+    res.status(503).json({ error: 'Módulo médico no disponible' });
+  });
+}
+
+// ================================
+// 🤖 IA: tablas + rutas
+// ================================
+if (aiModule && typeof aiModule.setupAiRoutes === 'function') {
+  try {
+    // Crear tablas IA en TODAS las DB disponibles (DB1/DB2/DB3)
+    if (typeof aiModule.createAiTables === 'function') {
+      // DB1 (default)
+      aiModule.createAiTables(q)
+        .then(() => console.log('✅ Tablas IA OK (DB1)'))
+        .catch((e) => console.error('❌ Error creando tablas IA (DB1):', e));
+
+      // DB2
+      if (poolDB2) {
+        als.run({ pool: poolDB2, dbKey: 'db2' }, () => aiModule.createAiTables(q))
+          .then(() => console.log('✅ Tablas IA OK (DB2)'))
+          .catch((e) => console.error('❌ Error creando tablas IA (DB2):', e));
+      }
+
+      // DB3
+      if (poolDB3) {
+        als.run({ pool: poolDB3, dbKey: 'db3' }, () => aiModule.createAiTables(q))
+          .then(() => console.log('✅ Tablas IA OK (DB3)'))
+          .catch((e) => console.error('❌ Error creando tablas IA (DB3):', e));
+      }
+    }
+
+    // Montar rutas
+    aiModule.setupAiRoutes(app, q);
+    console.log('✅ Rutas IA configuradas: /api/ai/*');
+  } catch (error) {
+    console.error('❌ Error configurando rutas IA:', error);
+    // Fallback 503 si falló el montaje (evita 404 silencioso)
+    app.all('/api/ai/*', (_req, res) => res.status(503).json({ error: 'Módulo IA con error al configurar rutas' }));
+  }
+} else {
+  console.error('❌ Módulo IA no disponible o función setupAiRoutes no encontrada');
+  // Fallback 503
+  app.all('/api/ai/*', (_req, res) => res.status(503).json({ error: 'Módulo IA no disponible' }));
+}
+
+
+// Test endpoint para verificar que el servidor funciona
+app.get('/api/health', (req, res) => {
+  res.json({
+    status: 'OK',
+    timestamp: new Date().toISOString(),
+    medicalModule: medicalRecordModule ? 'Disponible' : 'No disponible',
+    sucursal: getSucursal(req)
+  });
+});
+
+app.get('/api/expediente-medico/test', ah(async (req, res) => {
+  const sucursalId = getSucursal(req);
+  
+  try {
+    if (!medicalRecordModule) {
+      return res.status(503).json({ 
+        error: 'Módulo médico no disponible',
+        sucursal: sucursalId
+      });
+    }
+
+    // Test simple de conectividad a la base de datos
+    const testQuery = await q('SELECT NOW() as current_time');
+    
+    res.json({
+      status: 'OK',
+      message: 'Módulo médico funcionando correctamente',
+      sucursal: sucursalId,
+      database: 'Conectada',
+      timestamp: testQuery.rows[0].current_time
+    });
+  } catch (error) {
+    console.error('Error en test médico:', error);
+    res.status(500).json({ 
+      error: error.message,
+      sucursal: sucursalId
+    });
+  }
+}));
+
+
+
+// Logging detallado para escrituras
+app.use((req, _res, next) => {
+  if (['POST','PUT','PATCH','DELETE'].includes(req.method)) {
+    console.log(`\n=== ${req.method} ${req.path} ===`);
+    console.log('Headers:', JSON.stringify({
+      'content-type': req.headers['content-type'],
+      'x-sucursal': req.headers['x-sucursal'],
+      'x-app': req.headers['x-app'],
+      'x-db': req.headers['x-db'],
+      'origin': req.headers.origin
+    }, null, 2));
+    console.log('Query params:', req.query);
+    console.log('Body received:', JSON.stringify(req.body, null, 2));
+    console.log('Sucursal detected:', getSucursal(req));
+    console.log('========================\n');
+  }
+  next();
+});
+app.disable('etag');
+app.use((_, res, next) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  next();
+});
+
+const sucWhereN = (idx, alias = '') => {
+  const p = alias ? `${alias}.` : '';
+  return `(${p}sucursal_id = $${idx} OR ${p}sucursal_id IS NULL)`;
+};
+
+
+// 🔹 AGREGAR AQUÍ (línea 194):
+// Función para números seguros
+function safeNumber(value) {
+  if (value === null || value === undefined || value === '') return 0;
+  const num = parseFloat(value);
+  return isNaN(num) ? 0 : num;
+}
+
+// ===================================================================
+// Esquema / migraciones (incluye migraciones defensivas de facturación)
+// ===================================================================
+async function ensureMultiSucursalSchema() {
+  await q(`CREATE EXTENSION IF NOT EXISTS pgcrypto;`);
+
+  // Laboratorios
+  await q(`
+    CREATE TABLE IF NOT EXISTS laboratorios (
+      id SERIAL PRIMARY KEY,
+      nombre TEXT NOT NULL,
+      contacto TEXT,
+      sucursal_id TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+  `);
+
+  // Trabajos de laboratorio
+  await q(`
+    CREATE TABLE IF NOT EXISTS lab_trabajos (
+      id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+      paciente TEXT NOT NULL,
+      laboratorio_id INTEGER REFERENCES laboratorios(id),
+      servicio_id INTEGER REFERENCES services(id),
+      presupuesto NUMERIC NOT NULL,
+      fecha_inicio DATE,
+      fecha_entrega_estimada DATE,
+      etapa TEXT DEFAULT 'Toma de impresión',
+      notas TEXT,
+      sucursal_id TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+  `);
+
+  // Abonos de laboratorio
+  await q(`
+    CREATE TABLE IF NOT EXISTS lab_abonos (
+      id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+      trabajo_id TEXT REFERENCES lab_trabajos(id),
+      monto NUMERIC NOT NULL,
+      fecha DATE DEFAULT CURRENT_DATE,
+      nota TEXT,
+      sucursal_id TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+  `);
+
+  // Listado de tablas multi-sucursal existentes
+  const tables = [
+    'doctors','services','appointments','payments','expenses',
+    'laboratorios','lab_trabajos','lab_abonos','objetivos'
+  ];
+  for (const t of tables) {
+    await q(`ALTER TABLE ${t} ADD COLUMN IF NOT EXISTS sucursal_id TEXT;`);
+    await q(`CREATE INDEX IF NOT EXISTS idx_${t}_sucursal ON ${t}(sucursal_id);`);
+    await q(`UPDATE ${t} SET sucursal_id='sucursal_1' WHERE sucursal_id IS NULL;`);
+  }
+  await q(`ALTER TABLE objetivos ADD COLUMN IF NOT EXISTS doctor_id INTEGER;`);
+  await q(`CREATE INDEX IF NOT EXISTS idx_objetivos_doctor ON objetivos(doctor_id);`);
+
+  // Normalizar appointments.date a DATE
+  try {
+    const { rows: dateTypeCheck } = await q(`
+      SELECT data_type 
+      FROM information_schema.columns 
+      WHERE table_name = 'appointments' AND column_name = 'date'
+    `);
+    if (dateTypeCheck.length > 0 && dateTypeCheck[0].data_type !== 'date') {
+      await q(`ALTER TABLE appointments ALTER COLUMN date TYPE DATE`);
+    } else if (dateTypeCheck.length === 0) {
+      await q(`ALTER TABLE appointments ADD COLUMN date DATE`);
+    }
+  } catch (error) {
+    console.error('❌ Error configurando tipo DATE:', error.message);
+  }
+// 🆕 Tabla de inventario
+  await q(`
+    CREATE TABLE IF NOT EXISTS inventory (
+      id SERIAL PRIMARY KEY,
+      sku VARCHAR(50) UNIQUE NOT NULL,
+      name VARCHAR(255) NOT NULL,
+      category VARCHAR(50) NOT NULL CHECK (category IN ('instrumental', 'desechable', 'anestesia', 'resina', 'endodoncia', 'ortodoncia')),
+      type VARCHAR(50) NOT NULL CHECK (type IN ('equipment', 'material')),
+      quantity INTEGER DEFAULT 0 CHECK (quantity >= 0),
+      min_stock INTEGER DEFAULT 10 CHECK (min_stock >= 0),
+      max_stock INTEGER DEFAULT 100 CHECK (max_stock >= min_stock),
+      price NUMERIC(10,2) DEFAULT 0 CHECK (price >= 0),
+      supplier VARCHAR(255),
+      last_purchase DATE,
+      usage_per_patient NUMERIC(5,2) DEFAULT 1 CHECK (usage_per_patient > 0),
+      expiration_date DATE,
+      sucursal_id TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    )
+  `);
+
+  await q(`CREATE INDEX IF NOT EXISTS idx_inventory_sucursal ON inventory(sucursal_id)`);
+  await q(`CREATE INDEX IF NOT EXISTS idx_inventory_category ON inventory(category)`);
+  await q(`CREATE INDEX IF NOT EXISTS idx_inventory_type ON inventory(type)`);
+  await q(`CREATE INDEX IF NOT EXISTS idx_inventory_sku ON inventory(sku)`);
+  await q(`UPDATE inventory SET sucursal_id = 'sucursal_1' WHERE sucursal_id IS NULL`);
+  
+  console.log('✅ Tabla de inventario verificada');
+
+  // Pagos laboratorio
+  await q(`
+    CREATE TABLE IF NOT EXISTS pagos_laboratorio (
+      id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+      trabajo_id TEXT NOT NULL,
+      monto NUMERIC NOT NULL,
+      fecha DATE DEFAULT CURRENT_DATE,
+      sucursal_id TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+  `);
+  await q(`CREATE INDEX IF NOT EXISTS idx_pagos_laboratorio_trabajo ON pagos_laboratorio(trabajo_id);`);
+  await q(`CREATE INDEX IF NOT EXISTS idx_pagos_laboratorio_sucursal ON pagos_laboratorio(sucursal_id);`);
+  await q(`UPDATE pagos_laboratorio SET sucursal_id='sucursal_1' WHERE sucursal_id IS NULL;`);
+
+  // ==============================
+  // FACTURACIÓN: tablas base
+  // ==============================
+  await q(`
+    CREATE TABLE IF NOT EXISTS facturas (
+      id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+      cliente TEXT NOT NULL,
+      tipo TEXT NOT NULL,               -- 'ingreso', 'egreso', 'traslado', etc.
+      forma_pago TEXT,                  -- catálogo SAT
+      metodo_pago TEXT,                 -- PUE/PPD
+      cita_id INTEGER REFERENCES appointments(id),
+      notas TEXT,
+      total NUMERIC NOT NULL DEFAULT 0,
+      sucursal_id TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+  `);
+
+// 👉 Nuevas columnas para timbrado/estado (idempotente)
+await q(`
+  ALTER TABLE facturas
+    ADD COLUMN IF NOT EXISTS estado TEXT DEFAULT 'borrador',
+    ADD COLUMN IF NOT EXISTS uuid TEXT,
+    ADD COLUMN IF NOT EXISTS serie TEXT,
+    ADD COLUMN IF NOT EXISTS folio INTEGER,
+    ADD COLUMN IF NOT EXISTS fecha_timbrado TIMESTAMP,
+    ADD COLUMN IF NOT EXISTS timbrada_at TIMESTAMP,
+    ADD COLUMN IF NOT EXISTS status TEXT,
+    ADD COLUMN IF NOT EXISTS cancelada_at TIMESTAMP,
+    ADD COLUMN IF NOT EXISTS cfdi_id TEXT,
+    ADD COLUMN IF NOT EXISTS motivo_cancelacion TEXT
+`);
+await q(`CREATE INDEX IF NOT EXISTS idx_facturas_estado ON facturas(estado)`);
+
+
+  await q(`
+    CREATE TABLE IF NOT EXISTS factura_conceptos (
+      id SERIAL PRIMARY KEY,
+      factura_id TEXT REFERENCES facturas(id) ON DELETE CASCADE,
+      descripcion TEXT NOT NULL,
+      cantidad NUMERIC NOT NULL,
+      valor_unitario NUMERIC NOT NULL,
+      importe NUMERIC NOT NULL,
+      clave_prod_serv TEXT,
+      unidad TEXT,
+      objeto_imp TEXT,
+      sucursal_id TEXT
+    );
+  `);
+
+  // Clientes de facturación (opcional, usado por la UI)
+  await q(`
+    CREATE TABLE IF NOT EXISTS facturacion_clientes (
+      id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+      rfc TEXT NOT NULL,
+      razon_social TEXT NOT NULL,
+      email TEXT,
+      telefono TEXT,
+      direccion TEXT,
+      uso_cfdi TEXT,
+      sucursal_id TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+  `);
+  // 🔧 Nuevas columnas (idempotentes)
+  await q(`
+    ALTER TABLE facturacion_clientes
+      ADD COLUMN IF NOT EXISTS codigo_postal  TEXT,
+      ADD COLUMN IF NOT EXISTS regimen_fiscal TEXT;
+  `);
+
+  // === Catálogo de productos/servicios de facturación
+  await q(`
+    CREATE TABLE IF NOT EXISTS facturacion_productos (
+      id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+      descripcion TEXT NOT NULL,
+      clave_prod_serv TEXT,  -- e.g. 85121800
+      unidad TEXT,           -- e.g. E48
+      objeto_imp TEXT,       -- e.g. 02
+      precio NUMERIC DEFAULT 0,
+      sucursal_id TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+  `);
+
+ // === Configuración de facturación por sucursal
+await q(`
+  CREATE TABLE IF NOT EXISTS facturacion_configuracion (
+    sucursal_id     TEXT PRIMARY KEY,
+    rfc             TEXT NOT NULL,
+    razon_social    TEXT NOT NULL,
+    regimen_fiscal  TEXT NOT NULL,
+    codigo_postal   TEXT NOT NULL,
+    pac_proveedor   TEXT NOT NULL DEFAULT 'facturama',
+    pac_usuario     TEXT NOT NULL,
+    pac_password    TEXT NOT NULL,
+    pac_url_timbrado     TEXT,
+    pac_url_cancelacion  TEXT,
+    serie_facturas  TEXT DEFAULT '',
+    ultimo_folio    INTEGER DEFAULT 1,
+    ambiente        TEXT NOT NULL CHECK (ambiente IN ('pruebas','produccion')),
+    activo          BOOLEAN DEFAULT TRUE,
+    logo_url        TEXT,
+    logo_image      BYTEA,
+    logo_mime       TEXT,
+    cer_file        BYTEA,
+    key_file        BYTEA,
+    key_password    TEXT,
+    created_at      TIMESTAMP DEFAULT NOW(),
+    updated_at      TIMESTAMP DEFAULT NOW()
+  );
+`);
+
+// Agregar columnas a tablas existentes (migración defensiva)
+await q(`
+  ALTER TABLE facturacion_configuracion 
+    ADD COLUMN IF NOT EXISTS cer_file BYTEA,
+    ADD COLUMN IF NOT EXISTS key_file BYTEA,
+    ADD COLUMN IF NOT EXISTS key_password TEXT,
+    ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW()
+`);
+
+
+  // Índices y backfills
+  await q(`CREATE INDEX IF NOT EXISTS idx_facturas_sucursal ON facturas(sucursal_id);`);
+  await q(`CREATE INDEX IF NOT EXISTS idx_factura_conceptos_factura ON factura_conceptos(factura_id);`);
+  await q(`CREATE INDEX IF NOT EXISTS idx_fact_cli_sucursal ON facturacion_clientes(sucursal_id);`);
+  await q(`CREATE INDEX IF NOT EXISTS idx_fact_prod_sucursal ON facturacion_productos(sucursal_id);`);
+  await q(`UPDATE facturas SET sucursal_id='sucursal_1' WHERE sucursal_id IS NULL;`);
+  await q(`UPDATE factura_conceptos SET sucursal_id='sucursal_1' WHERE sucursal_id IS NULL;`);
+  await q(`UPDATE facturacion_clientes SET sucursal_id='sucursal_1' WHERE sucursal_id IS NULL;`);
+  await q(`UPDATE facturacion_productos SET sucursal_id='sucursal_1' WHERE sucursal_id IS NULL;`);
+
+  // ==============================
+  // FACTURACIÓN: migraciones defensivas (si existían tablas viejas)
+  // ==============================
+  await q(`
+    ALTER TABLE facturas
+      ADD COLUMN IF NOT EXISTS cliente TEXT,
+      ADD COLUMN IF NOT EXISTS tipo TEXT,
+      ADD COLUMN IF NOT EXISTS forma_pago TEXT,
+      ADD COLUMN IF NOT EXISTS metodo_pago TEXT,
+      ADD COLUMN IF NOT EXISTS cita_id INTEGER,
+      ADD COLUMN IF NOT EXISTS notas TEXT,
+      ADD COLUMN IF NOT EXISTS total NUMERIC DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS sucursal_id TEXT,
+      ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW();
+  `);
+  await q(`UPDATE facturas SET cliente = COALESCE(cliente,'Sin nombre');`);
+  await q(`UPDATE facturas SET tipo    = COALESCE(tipo,'ingreso');`);
+
+  await q(`
+    ALTER TABLE factura_conceptos
+      ADD COLUMN IF NOT EXISTS factura_id TEXT,
+      ADD COLUMN IF NOT EXISTS descripcion TEXT,
+      ADD COLUMN IF NOT EXISTS cantidad NUMERIC,
+      ADD COLUMN IF NOT EXISTS valor_unitario NUMERIC,
+      ADD COLUMN IF NOT EXISTS importe NUMERIC,
+      ADD COLUMN IF NOT EXISTS clave_prod_serv TEXT,
+      ADD COLUMN IF NOT EXISTS unidad TEXT,
+      ADD COLUMN IF NOT EXISTS objeto_imp TEXT,
+      ADD COLUMN IF NOT EXISTS sucursal_id TEXT;
+  `);
+
+  await q(`
+    ALTER TABLE facturacion_productos
+      ADD COLUMN IF NOT EXISTS descripcion TEXT,
+      ADD COLUMN IF NOT EXISTS clave_prod_serv TEXT,
+      ADD COLUMN IF NOT EXISTS unidad TEXT,
+      ADD COLUMN IF NOT EXISTS objeto_imp TEXT,
+      ADD COLUMN IF NOT EXISTS precio NUMERIC DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS sucursal_id TEXT,
+      ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW();
+  `);
+
+  // === OBJETIVOS (garantizar columnas/índices)
+  await q(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name='objetivos') THEN
+        CREATE TABLE objetivos (
+          id SERIAL PRIMARY KEY,
+          doctor_id INTEGER,
+          meta NUMERIC DEFAULT 0,
+          sueldo_base NUMERIC DEFAULT 0,
+          periodo_inicio DATE,
+          periodo_fin DATE,
+          sucursal_id TEXT,
+          created_at TIMESTAMP DEFAULT NOW()
+        );
+      END IF;
+    END$$;
+  `);
+
+  await q(`
+    ALTER TABLE objetivos
+      ADD COLUMN IF NOT EXISTS doctor_id INTEGER,
+      ADD COLUMN IF NOT EXISTS meta NUMERIC DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS sueldo_base NUMERIC DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS periodo_inicio DATE,
+      ADD COLUMN IF NOT EXISTS periodo_fin DATE,
+      ADD COLUMN IF NOT EXISTS sucursal_id TEXT,
+      ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW();
+  `);
+
+  await q(`CREATE INDEX IF NOT EXISTS idx_objetivos_sucursal ON objetivos(sucursal_id);`);
+  await q(`CREATE INDEX IF NOT EXISTS idx_objetivos_periodo ON objetivos(periodo_inicio, periodo_fin);`);
+  await q(`CREATE INDEX IF NOT EXISTS idx_objetivos_doctor ON objetivos(doctor_id);`);
+  await q(`UPDATE objetivos SET sucursal_id='sucursal_1' WHERE sucursal_id IS NULL;`);
+  // 🆕 Tabla de satisfacción del servicio
+  await q(`
+    CREATE TABLE IF NOT EXISTS satisfaccion_servicio (
+      id SERIAL PRIMARY KEY,
+      appointment_id INTEGER,
+      service_id INTEGER,
+      patient_id UUID,
+      doctor_id INTEGER,
+      rating NUMERIC(3,1),
+      comentario TEXT,
+      sucursal_id TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  // Asegurar columna sucursal_id por si la tabla se creó manual antes
+  await q(`ALTER TABLE satisfaccion_servicio ADD COLUMN IF NOT EXISTS sucursal_id TEXT`);
+  await q(`CREATE INDEX IF NOT EXISTS idx_satisfaccion_sucursal ON satisfaccion_servicio(sucursal_id)`);
+  await q(`CREATE INDEX IF NOT EXISTS idx_satisfaccion_service  ON satisfaccion_servicio(service_id)`);
+  await q(`CREATE INDEX IF NOT EXISTS idx_satisfaccion_created  ON satisfaccion_servicio(created_at DESC)`);
+
+
+
+  console.log('✅ Esquema multi-sucursal verificado/actualizado (incluye FACTURACIÓN + migraciones defensivas + catálogo de productos).');
+}
+
+// =========================================
+// RUTAS PARA MELISSA-APP-DB
+// =========================================
+
+// Health check para MELISSA
+app.get('/api/melissa/health', ah(async (req, res) => {
+  if (!qMelissa) {
+    return res.status(503).json({ 
+      ok: false, 
+      error: 'MELISSA_DATABASE_URL no configurada' 
+    });
+  }
+  try {
+    await qMelissa('SELECT 1');
+    res.json({ ok: true, database: 'MELISSA-APP-DB' });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message });
+  }
+}));
+
+// Appointments en MELISSA
+app.get('/api/melissa/appointments', ah(async (req, res) => {
+  if (!qMelissa) {
+    return res.status(503).json({ error: 'MELISSA_DATABASE_URL no configurada' });
+  }
+  const { rows } = await qMelissa('SELECT * FROM appointments ORDER BY date DESC');
+  res.json(rows);
+}));
+
+app.post('/api/melissa/appointments', ah(async (req, res) => {
+  if (!qMelissa) {
+    return res.status(503).json({ error: 'MELISSA_DATABASE_URL no configurada' });
+  }
+  const { patient, doctor_id, date, start_time, service_id, phone } = req.body || {};
+  const { rows } = await qMelissa(
+    `INSERT INTO appointments (patient, doctor_id, date, start_time, service_id, phone, status)
+     VALUES ($1, $2, $3, $4, $5, $6, 'Pendiente')
+     RETURNING *`,
+    [patient, doctor_id || null, date, start_time || '09:00', service_id || null, phone || null]
+  );
+  res.json(rows[0]);
+}));
+
+// Patients en MELISSA
+app.get('/api/melissa/patients', ah(async (req, res) => {
+  if (!qMelissa) {
+    return res.status(503).json({ error: 'MELISSA_DATABASE_URL no configurada' });
+  }
+  const { rows } = await qMelissa('SELECT * FROM patients ORDER BY id DESC');
+  res.json(rows);
+}));
+
+app.post('/api/melissa/patients', ah(async (req, res) => {
+  if (!qMelissa) {
+    return res.status(503).json({ error: 'MELISSA_DATABASE_URL no configurada' });
+  }
+  const { name, email, phone } = req.body || {};
+  const { rows } = await qMelissa(
+    `INSERT INTO patients (name, email, phone) VALUES ($1, $2, $3) RETURNING *`,
+    [name, email || null, phone || null]
+  );
+  res.json(rows[0]);
+}));
+
+// Services en MELISSA
+app.get('/api/melissa/services', ah(async (req, res) => {
+  if (!qMelissa) {
+    return res.status(503).json({ error: 'MELISSA_DATABASE_URL no configurada' });
+  }
+  const { rows } = await qMelissa('SELECT * FROM services ORDER BY id ASC');
+  res.json(rows);
+}));
+
+app.post('/api/melissa/services', ah(async (req, res) => {
+  if (!qMelissa) {
+    return res.status(503).json({ error: 'MELISSA_DATABASE_URL no configurada' });
+  }
+  const { name } = req.body || {};
+  const { rows } = await qMelissa(
+    `INSERT INTO services (name) VALUES ($1) RETURNING *`,
+    [name]
+  );
+  res.json(rows[0]);
+}));
+
+// Payments en MELISSA
+app.get('/api/melissa/payments', ah(async (req, res) => {
+  if (!qMelissa) {
+    return res.status(503).json({ error: 'MELISSA_DATABASE_URL no configurada' });
+  }
+  const { rows } = await qMelissa('SELECT * FROM payments ORDER BY date DESC');
+  res.json(rows);
+}));
+
+app.post('/api/melissa/payments', ah(async (req, res) => {
+  if (!qMelissa) {
+    return res.status(503).json({ error: 'MELISSA_DATABASE_URL no configurada' });
+  }
+  const { patient, amount, payment_method, date } = req.body || {};
+  const { rows } = await qMelissa(
+    `INSERT INTO payments (patient, amount, payment_method, date) 
+     VALUES ($1, $2, $3, $4) RETURNING *`,
+    [patient, Number(amount), payment_method, date]
+  );
+  res.json(rows[0]);
+}));
+
+// Doctors en MELISSA
+app.get('/api/melissa/doctors', ah(async (req, res) => {
+  if (!qMelissa) {
+    return res.status(503).json({ error: 'MELISSA_DATABASE_URL no configurada' });
+  }
+  const { rows } = await qMelissa('SELECT * FROM doctors ORDER BY id ASC');
+  res.json(rows);
+}));
+
+app.post('/api/melissa/doctors', ah(async (req, res) => {
+  if (!qMelissa) {
+    return res.status(503).json({ error: 'MELISSA_DATABASE_URL no configurada' });
+  }
+  const { name, color } = req.body || {};
+  
+  // Primero verifica la estructura de la tabla
+  const tableInfo = await qMelissa(`
+    SELECT column_name, column_default 
+    FROM information_schema.columns 
+    WHERE table_name = 'doctors' 
+    ORDER BY ordinal_position
+  `);
+  console.log('📋 Estructura de doctors en MELISSA:', tableInfo.rows);
+  
+  // Intenta el insert con manejo de columnas opcionales
+  const { rows } = await qMelissa(
+    `INSERT INTO doctors (name, color, active) 
+     VALUES ($1, $2, true) RETURNING *`,
+    [name, color || null]
+  );
+  res.json(rows[0]);
+}));
+
+// Expenses en MELISSA
+app.get('/api/melissa/expenses', ah(async (req, res) => {
+  if (!qMelissa) {
+    return res.status(503).json({ error: 'MELISSA_DATABASE_URL no configurada' });
+  }
+  const { rows } = await qMelissa('SELECT * FROM expenses ORDER BY date DESC');
+  res.json(rows);
+}));
+
+app.post('/api/melissa/expenses', ah(async (req, res) => {
+  if (!qMelissa) {
+    return res.status(503).json({ error: 'MELISSA_DATABASE_URL no configurada' });
+  }
+  const { concept, amount, date } = req.body || {};
+  const { rows } = await qMelissa(
+    `INSERT INTO expenses (concept, amount, date) VALUES ($1, $2, $3) RETURNING *`,
+    [concept, Number(amount), date]
+  );
+  res.json(rows[0]);
+}));
+
+// Laboratorios en MELISSA
+app.get('/api/melissa/laboratorios', ah(async (req, res) => {
+  if (!qMelissa) {
+    return res.status(503).json({ error: 'MELISSA_DATABASE_URL no configurada' });
+  }
+  const { rows } = await qMelissa('SELECT * FROM laboratorios ORDER BY id ASC');
+  res.json(rows);
+}));
+app.post('/api/melissa/laboratorios', ah(async (req, res) => {
+  if (!qMelissa) {
+    return res.status(503).json({ error: 'MELISSA_DATABASE_URL no configurada' });
+  }
+  const { nombre, contacto } = req.body || {};
+  const { rows } = await qMelissa(
+    `INSERT INTO laboratorios (nombre, contacto) VALUES ($1, $2) RETURNING *`,
+    [nombre, contacto || null]
+  );
+  res.json(rows[0]);
+}));
+
+// Trabajos laboratorio en MELISSA
+app.get('/api/melissa/trabajos-laboratorio', ah(async (req, res) => {
+  if (!qMelissa) {
+    return res.status(503).json({ error: 'MELISSA_DATABASE_URL no configurada' });
+  }
+  const { rows } = await qMelissa('SELECT * FROM lab_trabajos ORDER BY id DESC');
+  res.json(rows);
+}));
+
+app.post('/api/melissa/trabajos-laboratorio', ah(async (req, res) => {
+  if (!qMelissa) return res.status(503).json({ error: 'MELISSA_DATABASE_URL no configurada' });
+  const { paciente, laboratorio_id, servicio_id, presupuesto, fecha_inicio, fecha_entrega_estimada, etapa, notas } = req.body || {};
+  const { rows } = await qMelissa(
+    `INSERT INTO lab_trabajos (paciente, laboratorio_id, servicio_id, presupuesto, fecha_inicio, fecha_entrega_estimada, etapa, notas)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+    [paciente, laboratorio_id || null, servicio_id || null, presupuesto || 0, fecha_inicio || null, fecha_entrega_estimada || null, etapa || 'Toma de impresión', notas || null]
+  );
+  res.json(rows[0]);
+}));
+
+app.patch('/api/melissa/trabajos-laboratorio/:id', ah(async (req, res) => {
+  if (!qMelissa) return res.status(503).json({ error: 'MELISSA_DATABASE_URL no configurada' });
+  const { etapa, notas } = req.body || {};
+  const { rows } = await qMelissa(
+    `UPDATE lab_trabajos SET etapa=COALESCE($1,etapa), notas=COALESCE($2,notas) WHERE id=$3 RETURNING *`,
+    [etapa, notas, req.params.id]
+  );
+  res.json(rows[0] || null);
+}));
+
+app.post('/api/melissa/trabajos-laboratorio/:id/abonos', ah(async (req, res) => {
+  if (!qMelissa) return res.status(503).json({ error: 'MELISSA_DATABASE_URL no configurada' });
+  const { monto, fecha, nota } = req.body || {};
+  const { rows } = await qMelissa(
+    `INSERT INTO lab_abonos (trabajo_id, monto, fecha, nota) VALUES ($1,$2,$3,$4) RETURNING *`,
+    [req.params.id, Number(monto), fecha || null, nota || null]
+  );
+  res.json(rows[0]);
+}));
+
+// Debug sucursales para MELISSA
+app.get('/api/melissa/debug/sucursales', ah(async (req, res) => {
+  if (!qMelissa) return res.status(503).json({ error: 'MELISSA_DATABASE_URL no configurada' });
+  const tables = ['doctors','services','appointments','payments','expenses','laboratorios','lab_trabajos'];
+  const stats = {};
+  for (const t of tables) {
+    try {
+      const { rows } = await qMelissa(`SELECT COUNT(*)::text AS count FROM ${t}`);
+      stats[t] = [{ count: rows[0]?.count || '0' }];
+    } catch (e) {
+      stats[t] = [{ count: '0', error: e.message }];
+    }
+  }
+  res.json({ sucursales: ['melissa'], estadisticas: stats });
+}));
+
+
+app.put('/api/melissa/facturacion/configuracion', ah(async (req, res) => {
+  if (!qMelissa) return res.status(503).json({ error: 'MELISSA_DATABASE_URL no configurada' });
+  const { rfc, razon_social, regimen_fiscal, codigo_postal, pac_proveedor, pac_usuario, pac_password } = req.body || {};
+  const { rows } = await qMelissa(
+    `INSERT INTO facturacion_configuracion (sucursal_id, rfc, razon_social, regimen_fiscal, codigo_postal, pac_proveedor, pac_usuario, pac_password, ambiente, activo)
+     VALUES ('sucursal_1', $1, $2, $3, $4, $5, $6, $7, 'pruebas', true)
+     ON CONFLICT (sucursal_id) DO UPDATE SET rfc=$1, razon_social=$2, regimen_fiscal=$3, codigo_postal=$4, pac_proveedor=$5, pac_usuario=$6, pac_password=$7
+     RETURNING *`,
+    [rfc, razon_social, regimen_fiscal, codigo_postal, pac_proveedor, pac_usuario, pac_password]
+  );
+  res.json(rows[0]);
+}));
+
+// FACTURACIÓN - Clientes
+app.get('/api/melissa/facturacion/clientes', ah(async (req, res) => {
+  if (!qMelissa) return res.status(503).json({ error: 'MELISSA_DATABASE_URL no configurada' });
+  const { rows } = await qMelissa(`SELECT * FROM facturacion_clientes ORDER BY created_at DESC`);
+  res.json(rows);
+}));
+
+app.post('/api/melissa/facturacion/clientes', ah(async (req, res) => {
+  if (!qMelissa) return res.status(503).json({ error: 'MELISSA_DATABASE_URL no configurada' });
+  const { rfc, razon_social, email, telefono, direccion, uso_cfdi, codigo_postal, regimen_fiscal } = req.body || {};
+  if (!rfc) return res.status(400).json({ error: 'RFC requerido' });
+  const { rows } = await qMelissa(
+    `INSERT INTO facturacion_clientes (rfc, razon_social, email, telefono, direccion, uso_cfdi, codigo_postal, regimen_fiscal)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+    [rfc, razon_social, email || null, telefono || null, direccion || null, uso_cfdi || null, codigo_postal || null, regimen_fiscal || null]
+  );
+  res.json(rows[0]);
+}));
+
+app.put('/api/melissa/facturacion/clientes/:id', ah(async (req, res) => {
+  if (!qMelissa) return res.status(503).json({ error: 'MELISSA_DATABASE_URL no configurada' });
+  const { rfc, razon_social, email, telefono, direccion, uso_cfdi, codigo_postal, regimen_fiscal } = req.body || {};
+  const { rows } = await qMelissa(
+    `UPDATE facturacion_clientes SET rfc=COALESCE($1,rfc), razon_social=COALESCE($2,razon_social), email=COALESCE($3,email), 
+     telefono=COALESCE($4,telefono), direccion=COALESCE($5,direccion), uso_cfdi=COALESCE($6,uso_cfdi), 
+     codigo_postal=COALESCE($7,codigo_postal), regimen_fiscal=COALESCE($8,regimen_fiscal)
+     WHERE id=$9 RETURNING *`,
+    [rfc, razon_social, email, telefono, direccion, uso_cfdi, codigo_postal, regimen_fiscal, req.params.id]
+  );
+  res.json(rows[0] || null);
+}));
+
+// FACTURACIÓN - Productos
+app.get('/api/melissa/facturacion/productos', ah(async (req, res) => {
+  if (!qMelissa) return res.status(503).json({ error: 'MELISSA_DATABASE_URL no configurada' });
+  const { rows } = await qMelissa(`SELECT * FROM facturacion_productos ORDER BY created_at DESC`);
+  res.json(rows);
+}));
+
+app.post('/api/melissa/facturacion/productos', ah(async (req, res) => {
+  if (!qMelissa) return res.status(503).json({ error: 'MELISSA_DATABASE_URL no configurada' });
+  const { descripcion, clave_prod_serv, unidad, objeto_imp, precio } = req.body || {};
+  const { rows } = await qMelissa(
+    `INSERT INTO facturacion_productos (descripcion, clave_prod_serv, unidad, objeto_imp, precio) VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+    [descripcion, clave_prod_serv || null, unidad || null, objeto_imp || null, precio || 0]
+  );
+  res.json(rows[0]);
+}));
+
+app.put('/api/melissa/facturacion/productos/:id', ah(async (req, res) => {
+  if (!qMelissa) return res.status(503).json({ error: 'MELISSA_DATABASE_URL no configurada' });
+  const { descripcion, clave_prod_serv, unidad, objeto_imp, precio } = req.body || {};
+  const { rows } = await qMelissa(
+    `UPDATE facturacion_productos SET descripcion=COALESCE($1,descripcion), clave_prod_serv=COALESCE($2,clave_prod_serv),
+     unidad=COALESCE($3,unidad), objeto_imp=COALESCE($4,objeto_imp), precio=COALESCE($5,precio) WHERE id=$6 RETURNING *`,
+    [descripcion, clave_prod_serv, unidad, objeto_imp, precio, req.params.id]
+  );
+  res.json(rows[0] || null);
+}));
+
+app.delete('/api/melissa/facturacion/productos/:id', ah(async (req, res) => {
+  if (!qMelissa) return res.status(503).json({ error: 'MELISSA_DATABASE_URL no configurada' });
+  await qMelissa(`DELETE FROM facturacion_productos WHERE id=$1`, [req.params.id]);
+  res.status(204).end();
+}));
+
+// FACTURACIÓN - Facturas
+app.get('/api/melissa/facturacion/facturas', ah(async (req, res) => {
+  if (!qMelissa) return res.status(503).json({ error: 'MELISSA_DATABASE_URL no configurada' });
+  const { desde, hasta, estado } = req.query;
+  const params = [];
+  const conds = [];
+  if (desde) { params.push(desde); conds.push(`created_at::date >= $${params.length}`); }
+  if (hasta) { params.push(hasta); conds.push(`created_at::date <= $${params.length}`); }
+  if (estado && ['timbrada','borrador','cancelada'].includes(estado)) { params.push(estado); conds.push(`estado = $${params.length}`); }
+  const whereClause = conds.length > 0 ? `WHERE ${conds.join(' AND ')}` : '';
+  const { rows } = await qMelissa(`SELECT * FROM facturas ${whereClause} ORDER BY created_at DESC`, params);
+  res.json(rows);
+}));
+
+app.get('/api/melissa/facturacion/facturas/:id', ah(async (req, res) => {
+  if (!qMelissa) return res.status(503).json({ error: 'MELISSA_DATABASE_URL no configurada' });
+  const { rows } = await qMelissa(`SELECT * FROM facturas WHERE id=$1`, [req.params.id]);
+  if (rows.length === 0) return res.status(404).json({ error: 'Factura no encontrada' });
+  const conceptos = await qMelissa(`SELECT * FROM factura_conceptos WHERE factura_id=$1`, [req.params.id]);
+  res.json({ ...rows[0], conceptos: conceptos.rows });
+}));
+
+app.post('/api/melissa/facturacion/facturas', ah(async (req, res) => {
+  if (!qMelissa) return res.status(503).json({ error: 'MELISSA_DATABASE_URL no configurada' });
+  const { cliente, tipo, forma_pago, metodo_pago, cita_id, notas, total, conceptos } = req.body || {};
+  const { rows } = await qMelissa(
+    `INSERT INTO facturas (cliente, tipo, forma_pago, metodo_pago, cita_id, notas, total) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+    [cliente, tipo, forma_pago || null, metodo_pago || null, cita_id || null, notas || null, total || 0]
+  );
+  const factura = rows[0];
+  if (Array.isArray(conceptos)) {
+    for (const c of conceptos) {
+      await qMelissa(
+        `INSERT INTO factura_conceptos (factura_id, descripcion, cantidad, valor_unitario, importe, clave_prod_serv, unidad, objeto_imp)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [factura.id, c.descripcion, c.cantidad, c.valor_unitario, c.importe, c.clave_prod_serv || null, c.unidad || null, c.objeto_imp || null]
+      );
+    }
+  }
+  res.json(factura);
+}));
+
+app.put('/api/melissa/facturacion/facturas/:id', ah(async (req, res) => {
+  if (!qMelissa) return res.status(503).json({ error: 'MELISSA_DATABASE_URL no configurada' });
+  const { cliente, tipo, forma_pago, metodo_pago, notas, total, conceptos } = req.body || {};
+  const { rows } = await qMelissa(
+    `UPDATE facturas SET cliente=COALESCE($1,cliente), tipo=COALESCE($2,tipo), forma_pago=COALESCE($3,forma_pago),
+     metodo_pago=COALESCE($4,metodo_pago), notas=COALESCE($5,notas), total=COALESCE($6,total) WHERE id=$7 RETURNING *`,
+    [cliente, tipo, forma_pago, metodo_pago, notas, total, req.params.id]
+  );
+  if (rows.length === 0) return res.status(404).json({ error: 'Factura no encontrada' });
+  if (Array.isArray(conceptos)) {
+    await qMelissa(`DELETE FROM factura_conceptos WHERE factura_id=$1`, [req.params.id]);
+    for (const c of conceptos) {
+      await qMelissa(
+        `INSERT INTO factura_conceptos (factura_id, descripcion, cantidad, valor_unitario, importe, clave_prod_serv, unidad, objeto_imp)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [req.params.id, c.descripcion, c.cantidad, c.valor_unitario, c.importe, c.clave_prod_serv || null, c.unidad || null, c.objeto_imp || null]
+      );
+    }
+  }
+  res.json(rows[0]);
+}));
+
+app.delete('/api/melissa/facturacion/facturas/:id', ah(async (req, res) => {
+  if (!qMelissa) return res.status(503).json({ error: 'MELISSA_DATABASE_URL no configurada' });
+  await qMelissa(`DELETE FROM facturas WHERE id=$1`, [req.params.id]);
+  res.status(204).end();
+}));
+
+app.post('/api/melissa/facturacion/facturas/:id/timbrar', ah(async (req, res) => {
+  if (!qMelissa) return res.status(503).json({ error: 'MELISSA_DATABASE_URL no configurada' });
+  const { rows } = await qMelissa(
+    `UPDATE facturas SET estado='timbrada', fecha_timbrado=NOW(), uuid=$1 WHERE id=$2 RETURNING *`,
+    ['UUID-EJEMPLO-' + Date.now(), req.params.id]
+  );
+  res.json({ ok: true, ...rows[0] });
+}));
+
+app.post('/api/melissa/facturacion/facturas/:id/cancelar', ah(async (req, res) => {
+  if (!qMelissa) return res.status(503).json({ error: 'MELISSA_DATABASE_URL no configurada' });
+  const { rows } = await qMelissa(
+    `UPDATE facturas SET estado='cancelada', cancelada_at=NOW() WHERE id=$1 RETURNING *`,
+    [req.params.id]
+  );
+  res.json({ ok: true, ...rows[0] });
+}));
+
+// WHATSAPP - Messages
+app.get('/api/melissa/whatsapp/messages', ah(async (req, res) => {
+  if (!qMelissa) return res.status(503).json({ error: 'MELISSA_DATABASE_URL no configurada' });
+  const limit = req.query.limit || 200;
+  const { rows } = await qMelissa(`SELECT * FROM whatsapp_messages ORDER BY created_at DESC LIMIT $1`, [limit]);
+  res.json(rows);
+}));
+
+app.post('/api/melissa/whatsapp/messages', ah(async (req, res) => {
+  if (!qMelissa) return res.status(503).json({ error: 'MELISSA_DATABASE_URL no configurada' });
+  const { direction, phone, message, status, appointment_id } = req.body || {};
+  const { rows } = await qMelissa(
+    `INSERT INTO whatsapp_messages (direction, phone, message, status, appointment_id, manual) VALUES ($1,$2,$3,$4,$5,true) RETURNING *`,
+    [direction, phone, message, status || 'sent', appointment_id || null]
+  );
+  res.json(rows[0]);
+}));
+
+// WHATSAPP - Stats
+app.get('/api/melissa/whatsapp/stats', ah(async (req, res) => {
+  if (!qMelissa) return res.status(503).json({ error: 'MELISSA_DATABASE_URL no configurada' });
+  const { from, to } = req.query;
+  const { rows } = await qMelissa(
+    `SELECT COUNT(*) as total, direction FROM whatsapp_messages 
+     WHERE created_at >= $1 AND created_at <= $2 GROUP BY direction`,
+    [from || '2025-01-01', to || '2025-12-31']
+  );
+  res.json({ incoming: 0, outgoing: 0, ...Object.fromEntries(rows.map(r => [r.direction, Number(r.total)])) });
+}));
+
+// WHATSAPP - Test
+app.get('/api/melissa/whatsapp/test', (req, res) => {
+  res.json({ ok: true, message: 'WhatsApp API disponible', timestamp: new Date().toISOString() });
+});
+
+// WHATSAPP - Rules
+app.get('/api/melissa/whatsapp/rules', ah(async (req, res) => {
+  if (!qMelissa) return res.status(503).json({ error: 'MELISSA_DATABASE_URL no configurada' });
+  const { rows } = await qMelissa(`SELECT * FROM whatsapp_rules ORDER BY priority DESC, created_at DESC`);
+  res.json(rows);
+}));
+
+app.post('/api/melissa/whatsapp/rules', ah(async (req, res) => {
+  if (!qMelissa) return res.status(503).json({ error: 'MELISSA_DATABASE_URL no configurada' });
+  const { name, active, priority, match, action, cooldown_secs } = req.body || {};
+  const { rows } = await qMelissa(
+    `INSERT INTO whatsapp_rules (name, active, priority, match, action, cooldown_secs) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+    [name, active !== false, priority || 100, JSON.stringify(match), JSON.stringify(action), cooldown_secs || 0]
+  );
+  res.json(rows[0]);
+}));
+
+app.put('/api/melissa/whatsapp/rules/:id', ah(async (req, res) => {
+  if (!qMelissa) return res.status(503).json({ error: 'MELISSA_DATABASE_URL no configurada' });
+  const { name, active, priority, match, action, cooldown_secs } = req.body || {};
+  const { rows } = await qMelissa(
+    `UPDATE whatsapp_rules SET name=COALESCE($1,name), active=COALESCE($2,active), priority=COALESCE($3,priority),
+     match=COALESCE($4,match), action=COALESCE($5,action), cooldown_secs=COALESCE($6,cooldown_secs) WHERE id=$7 RETURNING *`,
+    [name, active, priority, match ? JSON.stringify(match) : null, action ? JSON.stringify(action) : null, cooldown_secs, req.params.id]
+  );
+  res.json(rows[0] || null);
+}));
+
+app.delete('/api/melissa/whatsapp/rules/:id', ah(async (req, res) => {
+  if (!qMelissa) return res.status(503).json({ error: 'MELISSA_DATABASE_URL no configurada' });
+  await qMelissa(`DELETE FROM whatsapp_rules WHERE id=$1`, [req.params.id]);
+  res.status(204).end();
+}));
+
+// POST/PUT adicionales que faltan
+app.put('/api/melissa/appointments/:id', ah(async (req, res) => {
+  if (!qMelissa) return res.status(503).json({ error: 'MELISSA_DATABASE_URL no configurada' });
+  const { patient, doctor_id, date, start_time, service_id, phone, status } = req.body || {};
+  const { rows } = await qMelissa(
+    `UPDATE appointments SET patient=COALESCE($1,patient), doctor_id=COALESCE($2,doctor_id), date=COALESCE($3,date),
+     start_time=COALESCE($4,start_time), service_id=COALESCE($5,service_id), phone=COALESCE($6,phone), status=COALESCE($7,status)
+     WHERE id=$8 RETURNING *`,
+    [patient, doctor_id, date, start_time, service_id, phone, status, Number(req.params.id)]
+  );
+  res.json(rows[0] || null);
+}));
+
+app.delete('/api/melissa/appointments/:id', ah(async (req, res) => {
+  if (!qMelissa) return res.status(503).json({ error: 'MELISSA_DATABASE_URL no configurada' });
+  await qMelissa(`DELETE FROM appointments WHERE id=$1`, [Number(req.params.id)]);
+  res.status(204).end();
+}));
+
+app.put('/api/melissa/payments/:id', ah(async (req, res) => {
+  if (!qMelissa) return res.status(503).json({ error: 'MELISSA_DATABASE_URL no configurada' });
+  const { patient, amount, payment_method, date } = req.body || {};
+  const { rows } = await qMelissa(
+    `UPDATE payments SET patient=$1, amount=$2, payment_method=$3, date=$4 WHERE id=$5 RETURNING *`,
+    [patient, amount, payment_method, date, Number(req.params.id)]
+  );
+  res.json(rows[0] || null);
+}));
+
+app.delete('/api/melissa/payments/:id', ah(async (req, res) => {
+  if (!qMelissa) return res.status(503).json({ error: 'MELISSA_DATABASE_URL no configurada' });
+  await qMelissa(`DELETE FROM payments WHERE id=$1`, [Number(req.params.id)]);
+  res.status(204).end();
+}));
+
+app.delete('/api/melissa/doctors/:id', ah(async (req, res) => {
+  if (!qMelissa) return res.status(503).json({ error: 'MELISSA_DATABASE_URL no configurada' });
+  await qMelissa(`DELETE FROM doctors WHERE id=$1`, [Number(req.params.id)]);
+  res.status(204).end();
+}));
+
+app.delete('/api/melissa/services/:id', ah(async (req, res) => {
+  if (!qMelissa) return res.status(503).json({ error: 'MELISSA_DATABASE_URL no configurada' });
+  await qMelissa(`DELETE FROM services WHERE id=$1`, [Number(req.params.id)]);
+  res.status(204).end();
+}));
+
+// Alias para facturacion-v2
+app.get('/api/melissa/facturacion-v2/configuracion', ah(async (req, res) => {
+  if (!qMelissa) return res.status(503).json({ error: 'MELISSA_DATABASE_URL no configurada' });
+  const { rows } = await qMelissa(`SELECT * FROM facturacion_configuracion LIMIT 1`);
+  if (rows.length > 0) return res.json(rows[0]);
+  res.json({
+    rfc: 'XAXX010101000',
+    razon_social: 'Sin configurar',
+    regimen_fiscal: '601',
+    codigo_postal: '00000',
+    pac_proveedor: 'facturama',
+    ultimo_folio: 1,
+    ambiente: 'pruebas',
+    activo: false
+  });
+}));
+// ==============================
+// Health & debug
+// ==============================
+app.get('/api/health', ah(async (req, res) => {
+  await q('SELECT 1');
+  res.json({ ok: true, sucursal: getSucursal(req) });
+}));
+
+app.get('/api/test', (req, res) => {
+  res.json({
+    ok: true,
+    timestamp: new Date().toISOString(),
+    sucursal: getSucursal(req),
+    headers: req.headers,
+    query: req.query
+  });
+});
+
+app.get('/api/debug/sucursales', ah(async (_req, res) => {
+  const tables = [
+    'doctors','services','appointments','payments','expenses',
+    'laboratorios','lab_trabajos','lab_abonos','objetivos',
+    'pagos_laboratorio','facturas','factura_conceptos','facturacion_clientes','facturacion_productos'
+  ];
+  const stats = {};
+  const sucursales = new Set();
+  for (const t of tables) {
+    const { rows } = await q(
+      `SELECT COALESCE(sucursal_id,'(null)') AS sucursal_id, COUNT(*)::text AS count
+       FROM ${t} GROUP BY sucursal_id ORDER BY sucursal_id`
+    );
+    stats[t] = rows;
+    rows.forEach(r => { if (r.sucursal_id !== '(null)') sucursales.add(r.sucursal_id); });
+  }
+  res.json({ sucursales: Array.from(sucursales), estadisticas: stats });
+}));
+
+// ==============================
+// DOCTORS
+// ==============================
+app.get('/api/doctors', ah(async (req, res) => {
+  const s = getSucursal(req);
+  const { rows } = await q(
+    `SELECT id, name, color, sucursal_id
+     FROM doctors
+     WHERE ${sucWhereN(1)}
+     ORDER BY id ASC`, [s]
+  );
+  res.json(rows);
+}));
+
+app.post('/api/doctors', ah(async (req, res) => {
+  const s = getSucursal(req);
+  const { name, color } = req.body || {};
+  const { rows } = await q(
+    `INSERT INTO doctors (name, color, sucursal_id)
+     VALUES ($1,$2,$3) RETURNING *`,
+    [name, color || null, s]
+  );
+  res.json(rows[0]);
+}));
+
+app.put('/api/doctors/:id', ah(async (req, res) => {
+  const s = getSucursal(req);
+  const id = Number(req.params.id);
+  const { name, color } = req.body || {};
+  const { rows } = await q(
+    `UPDATE doctors
+     SET name = COALESCE($1, name),
+         color = COALESCE($2, color)
+     WHERE id=$3 AND ${sucWhereN(4)}
+     RETURNING *`,
+    [name || null, color || null, id, s]
+  );
+  res.json(rows[0] || null);
+}));
+
+app.delete('/api/doctors/:id', ah(async (req, res) => {
+  const s = getSucursal(req);
+  await q(
+    `DELETE FROM doctors
+     WHERE id=$1 AND ${sucWhereN(2)}`,
+    [Number(req.params.id), s]
+  );
+  res.status(204).end();
+}));
+
+// ==============================
+// SERVICES
+// ==============================
+app.get('/api/services', ah(async (req, res) => {
+  const s = getSucursal(req);
+  const { rows } = await q(
+    `SELECT id, name, sucursal_id
+     FROM services
+     WHERE ${sucWhereN(1)}
+     ORDER BY id ASC`, [s]
+  );
+  res.json(rows);
+}));
+
+app.post('/api/services', ah(async (req, res) => {
+  const s = getSucursal(req);
+  const { name } = req.body || {};
+  const { rows } = await q(
+    `INSERT INTO services (name, sucursal_id)
+     VALUES ($1,$2) RETURNING *`,
+    [name, s]
+  );
+  res.json(rows[0]);
+}));
+
+app.delete('/api/services/:id', ah(async (req, res) => {
+  const s = getSucursal(req);
+  await q(
+    `DELETE FROM services
+     WHERE id=$1 AND ${sucWhereN(2)}`,
+    [Number(req.params.id), s]
+  );
+  res.status(204).end();
+}));
+
+// 🔢 Fórmulas de materiales por tratamiento/servicio
+const TREATMENT_FORMULAS = {
+  // 🔹 Consultas
+  'Primera consulta': [
+    { item: 'Guantes de Latex', quantity: 2 },
+    { item: 'Cubrebocas Tricapa', quantity: 1 },
+    { item: 'Gasas Estériles', quantity: 2 },
+  ],
+  'primera consulta': [
+    { item: 'Guantes de Latex', quantity: 2 },
+    { item: 'Cubrebocas Tricapa', quantity: 1 },
+    { item: 'Gasas Estériles', quantity: 2 },
+  ],
+
+  // 🔹 Limpiezas
+  'Limpieza Dental': [
+    { item: 'Guantes de Latex', quantity: 2 },
+    { item: 'Cubrebocas Tricapa', quantity: 1 },
+    { item: 'Gasas Estériles', quantity: 3 },
+  ],
+  'Limpieza dental': [
+    { item: 'Guantes de Latex', quantity: 2 },
+    { item: 'Cubrebocas Tricapa', quantity: 1 },
+    { item: 'Gasas Estériles', quantity: 3 },
+  ],
+  'Limpieza': [
+    { item: 'Guantes de Latex', quantity: 2 },
+    { item: 'Cubrebocas Tricapa', quantity: 1 },
+    { item: 'Gasas Estériles', quantity: 3 },
+  ],
+
+  // 🔹 Resina / Restauraciones
+  'Resina': [
+    { item: 'Guantes de Latex', quantity: 2 },
+    { item: 'Cubrebocas Tricapa', quantity: 1 },
+    { item: 'Resina A2', quantity: 0.5 },
+    { item: 'Ácido Grabador', quantity: 0.3 },
+    { item: 'Gasas Estériles', quantity: 2 },
+  ],
+  'Resinas': [
+    { item: 'Guantes de Latex', quantity: 2 },
+    { item: 'Cubrebocas Tricapa', quantity: 1 },
+    { item: 'Resina A2', quantity: 0.5 },
+    { item: 'Ácido Grabador', quantity: 0.3 },
+    { item: 'Gasas Estériles', quantity: 2 },
+  ],
+
+  // 🔹 Endodoncia
+  'Endodoncia': [
+    { item: 'Guantes de Latex', quantity: 4 },
+    { item: 'Cubrebocas Tricapa', quantity: 1 },
+    { item: 'Lidocaína 2%', quantity: 2 },
+    { item: 'Limas K', quantity: 0.5 },
+    { item: 'Gasas Estériles', quantity: 8 },
+  ],
+  'Endodoncia terminar': [
+    { item: 'Guantes de Latex', quantity: 2 },
+    { item: 'Cubrebocas Tricapa', quantity: 1 },
+    { item: 'Limas K', quantity: 0.3 },
+    { item: 'Gasas Estériles', quantity: 4 },
+  ],
+
+  // 🔹 Extracciones / Cirugías
+  'Extraccion': [
+    { item: 'Guantes de Latex', quantity: 2 },
+    { item: 'Cubrebocas Tricapa', quantity: 1 },
+    { item: 'Lidocaína 2%', quantity: 2 },
+    { item: 'Gasas Estériles', quantity: 10 },
+  ],
+  'Extracción': [
+    { item: 'Guantes de Latex', quantity: 2 },
+    { item: 'Cubrebocas Tricapa', quantity: 1 },
+    { item: 'Lidocaína 2%', quantity: 2 },
+    { item: 'Gasas Estériles', quantity: 10 },
+  ],
+  'Cirugia': [
+    { item: 'Guantes de Latex', quantity: 4 },
+    { item: 'Cubrebocas Tricapa', quantity: 2 },
+    { item: 'Lidocaína 2%', quantity: 4 },
+    { item: 'Gasas Estériles', quantity: 20 },
+  ],
+  'Extirpación de absceso': [
+    { item: 'Guantes de Latex', quantity: 2 },
+    { item: 'Cubrebocas Tricapa', quantity: 1 },
+    { item: 'Lidocaína 2%', quantity: 2 },
+    { item: 'Gasas Estériles', quantity: 8 },
+  ],
+  'Extirpaci¾n de absceso': [ // por si viene con encoding raro
+    { item: 'Guantes de Latex', quantity: 2 },
+    { item: 'Cubrebocas Tricapa', quantity: 1 },
+    { item: 'Lidocaína 2%', quantity: 2 },
+    { item: 'Gasas Estériles', quantity: 8 },
+  ],
+
+  // 🔹 Ortodoncia
+  'Brackets': [
+    { item: 'Guantes de Latex', quantity: 2 },
+    { item: 'Cubrebocas Tricapa', quantity: 1 },
+    { item: 'Gasas Estériles', quantity: 2 },
+  ],
+  'Cambio de ligas': [
+    { item: 'Guantes de Latex', quantity: 2 },
+    { item: 'Cubrebocas Tricapa', quantity: 1 },
+  ],
+  'Retiro brackets': [
+    { item: 'Guantes de Latex', quantity: 2 },
+    { item: 'Cubrebocas Tricapa', quantity: 1 },
+    { item: 'Gasas Estériles', quantity: 2 },
+  ],
+  'Retiro de brackets': [
+    { item: 'Guantes de Latex', quantity: 2 },
+    { item: 'Cubrebocas Tricapa', quantity: 1 },
+    { item: 'Gasas Estériles', quantity: 2 },
+  ],
+  'Estudio Ortodontico': [
+    { item: 'Guantes de Latex', quantity: 2 },
+    { item: 'Cubrebocas Tricapa', quantity: 1 },
+  ],
+  'Mensualidad de orto': [
+    { item: 'Guantes de Latex', quantity: 2 },
+    { item: 'Cubrebocas Tricapa', quantity: 1 },
+  ],
+  'ortodoncia': [
+    { item: 'Guantes de Latex', quantity: 2 },
+    { item: 'Cubrebocas Tricapa', quantity: 1 },
+  ],
+
+  // 🔹 Prótesis / Placas / Coronas / Puentes
+  'Corona': [
+    { item: 'Guantes de Latex', quantity: 2 },
+    { item: 'Cubrebocas Tricapa', quantity: 1 },
+    { item: 'Gasas Estériles', quantity: 4 },
+  ],
+  'Corona metal porcelana': [
+    { item: 'Guantes de Latex', quantity: 2 },
+    { item: 'Cubrebocas Tricapa', quantity: 1 },
+    { item: 'Gasas Estériles', quantity: 4 },
+  ],
+  'Corona zirconia': [
+    { item: 'Guantes de Latex', quantity: 2 },
+    { item: 'Cubrebocas Tricapa', quantity: 1 },
+    { item: 'Gasas Estériles', quantity: 4 },
+  ],
+  'Puente 3 unidades': [
+    { item: 'Guantes de Latex', quantity: 2 },
+    { item: 'Cubrebocas Tricapa', quantity: 1 },
+    { item: 'Gasas Estériles', quantity: 6 },
+  ],
+  'Cementar puente': [
+    { item: 'Guantes de Latex', quantity: 2 },
+    { item: 'Cubrebocas Tricapa', quantity: 1 },
+    { item: 'Gasas Estériles', quantity: 3 },
+  ],
+  'Puente de metal porcelana': [
+    { item: 'Guantes de Latex', quantity: 2 },
+    { item: 'Cubrebocas Tricapa', quantity: 1 },
+    { item: 'Gasas Estériles', quantity: 6 },
+  ],
+  'Prótesis Fija con acrílico cosido': [
+    { item: 'Guantes de Latex', quantity: 2 },
+    { item: 'Cubrebocas Tricapa', quantity: 1 },
+    { item: 'Gasas Estériles', quantity: 6 },
+  ],
+  'Pr¾tesis Fija con acrÝlico cosido': [
+    { item: 'Guantes de Latex', quantity: 2 },
+    { item: 'Cubrebocas Tricapa', quantity: 1 },
+    { item: 'Gasas Estériles', quantity: 6 },
+  ],
+  'Placa removible': [
+    { item: 'Guantes de Latex', quantity: 2 },
+    { item: 'Cubrebocas Tricapa', quantity: 1 },
+  ],
+  'Placa removible con ganchos wiplas': [
+    { item: 'Guantes de Latex', quantity: 2 },
+    { item: 'Cubrebocas Tricapa', quantity: 1 },
+  ],
+  'Placa total inferior': [
+    { item: 'Guantes de Latex', quantity: 2 },
+    { item: 'Cubrebocas Tricapa', quantity: 1 },
+  ],
+  'Toma de impresión para placa totales': [
+    { item: 'Guantes de Latex', quantity: 2 },
+    { item: 'Cubrebocas Tricapa', quantity: 1 },
+    { item: 'Gasas Estériles', quantity: 2 },
+  ],
+  'Toma de impresi¾n para placa totales': [
+    { item: 'Guantes de Latex', quantity: 2 },
+    { item: 'Cubrebocas Tricapa', quantity: 1 },
+    { item: 'Gasas Estériles', quantity: 2 },
+  ],
+
+  // 🔹 Pulpa / Postes
+  'Pulpectomia': [
+    { item: 'Guantes de Latex', quantity: 2 },
+    { item: 'Cubrebocas Tricapa', quantity: 1 },
+    { item: 'Gasas Estériles', quantity: 6 },
+  ],
+  'Pulpotomia': [
+    { item: 'Guantes de Latex', quantity: 2 },
+    { item: 'Cubrebocas Tricapa', quantity: 1 },
+    { item: 'Gasas Estériles', quantity: 6 },
+  ],
+  'Poste de Fibra de vidrio': [
+    { item: 'Guantes de Latex', quantity: 2 },
+    { item: 'Cubrebocas Tricapa', quantity: 1 },
+    { item: 'Gasas Estériles', quantity: 4 },
+  ],
+
+  // 🔹 Rx / Radiografías / Estudios
+  'Rx': [
+    { item: 'Guantes de Latex', quantity: 1 },
+    { item: 'Cubrebocas Tricapa', quantity: 1 },
+  ],
+  'Radiografia': [
+    { item: 'Guantes de Latex', quantity: 1 },
+    { item: 'Cubrebocas Tricapa', quantity: 1 },
+  ],
+  'Estudios Rx': [
+    { item: 'Guantes de Latex', quantity: 1 },
+    { item: 'Cubrebocas Tricapa', quantity: 1 },
+  ],
+
+  // 🔹 Blanqueamiento
+  'Blanqueamiento': [
+    { item: 'Guantes de Latex', quantity: 2 },
+    { item: 'Cubrebocas Tricapa', quantity: 1 },
+    { item: 'Gasas Estériles', quantity: 4 },
+  ],
+
+  // 🔹 Ajustes / Tallados / Guarda
+  'Ajustes': [
+    { item: 'Guantes de Latex', quantity: 1 },
+    { item: 'Cubrebocas Tricapa', quantity: 1 },
+  ],
+  'Tallados': [
+    { item: 'Guantes de Latex', quantity: 1 },
+    { item: 'Cubrebocas Tricapa', quantity: 1 },
+  ],
+  'Guarda': [
+    { item: 'Guantes de Latex', quantity: 1 },
+    { item: 'Cubrebocas Tricapa', quantity: 1 },
+  ],
+
+  // 🔹 Cementación
+  'Cementación': [
+    { item: 'Guantes de Latex', quantity: 2 },
+    { item: 'Cubrebocas Tricapa', quantity: 1 },
+    { item: 'Gasas Estériles', quantity: 2 },
+  ],
+  'Cementaci¾n': [
+    { item: 'Guantes de Latex', quantity: 2 },
+    { item: 'Cubrebocas Tricapa', quantity: 1 },
+    { item: 'Gasas Estériles', quantity: 2 },
+  ],
+};
+
+// Estados que consideramos "finalizados"
+const FINAL_APPOINTMENT_STATUSES = [
+  'atendida',
+  'completada',
+  'finalizada',
+  'realizada',
+];
+
+// 🧮 Función reutilizable para aplicar fórmula al inventario de una sucursal
+async function aplicarFormulaInventario(sucursalId, formulaItems) {
+  if (!Array.isArray(formulaItems) || formulaItems.length === 0) return;
+
+  for (const f of formulaItems) {
+    const nombre = (f.item || '').toString().toLowerCase();
+    const cantidad = Number(f.quantity) || 0;
+
+    if (!nombre || cantidad <= 0) continue;
+
+    // Buscar el producto más parecido por nombre en el inventario
+    const { rows } = await q(
+      `
+      SELECT id, quantity
+      FROM inventory
+      WHERE LOWER(name) LIKE '%' || $1 || '%'
+        AND ${sucWhereN(2)}
+      ORDER BY LENGTH(name) ASC
+      LIMIT 1
+      `,
+      [nombre, sucursalId]
+    );
+
+    if (!rows[0]) {
+      console.log('⚠️ Item de fórmula no encontrado en inventario:', nombre);
+      continue;
+    }
+
+    const producto = rows[0];
+    const nuevoStock = Math.max(0, Number(producto.quantity) - cantidad);
+
+    await q(
+      `
+      UPDATE inventory
+      SET quantity = $1
+      WHERE id = $2
+        AND ${sucWhereN(3)}
+      `,
+      [nuevoStock, producto.id, sucursalId]
+    );
+  }
+}
+
+// ==============================
+// APPOINTMENTS
+// ==============================
+app.get('/api/appointments', ah(async (req, res) => {
+  const s = getSucursal(req);
+  const { rows } = await q(
+    `SELECT id, patient, doctor_id, date, start_time, duration_hours, service_id, phone, status, sucursal_id
+     FROM appointments
+     WHERE ${sucWhereN(1)}
+     ORDER BY date DESC, start_time DESC`, [s]
+  );
+  res.json(rows);
+}));
+
+app.post('/api/appointments', ah(async (req, res) => {
+  const s = getSucursal(req);
+  const { patient, doctor_id, date, start_time, duration_hours, service_id, phone, status } = req.body || {};
+
+  if (!patient || (typeof patient === 'string' && !patient.trim())) {
+    return res.status(400).json({ error: 'El nombre del paciente es requerido' });
+  }
+  const cleanPatient = typeof patient === 'string' ? patient.trim() : String(patient);
+
+  const { rows } = await q(
+    `INSERT INTO appointments (patient, doctor_id, date, start_time, duration_hours, service_id, phone, status, sucursal_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,COALESCE($8,'Pendiente'),$9)
+     RETURNING *`,
+    [
+      cleanPatient,
+      doctor_id ? Number(doctor_id) : null,
+      date,
+      start_time || '09:00',
+      duration_hours ? Number(duration_hours) : 1,
+      service_id ? Number(service_id) : null,
+      phone || null,
+      status || 'Pendiente',
+      s
+    ]
+  );
+  res.json(rows[0]);
+}));
+
+app.put('/api/appointments/:id', ah(async (req, res) => {
+  const s = getSucursal(req);
+  const id = Number(req.params.id);
+  const {
+    patient,
+    doctor_id,
+    date,
+    start_time,
+    duration_hours,
+    service_id,
+    phone,
+    status,
+  } = req.body || {};
+
+  // 1️⃣ Leer el estado anterior para no descontar dos veces
+  const { rows: prevRows } = await q(
+    `SELECT status, service_id
+     FROM appointments
+     WHERE id=$1 AND ${sucWhereN(2)}`,
+    [id, s]
+  );
+  const prev = prevRows[0] || null;
+  const prevStatus = (prev?.status || '').toLowerCase();
+  const yaEraFinalizada = FINAL_APPOINTMENT_STATUSES.includes(prevStatus);
+
+  // 2️⃣ Actualizar cita
+  const { rows } = await q(
+    `UPDATE appointments
+     SET patient = COALESCE($1, patient),
+         doctor_id = COALESCE($2, doctor_id),
+         date = COALESCE($3, date),
+         start_time = COALESCE($4, start_time),
+         duration_hours = COALESCE($5, duration_hours),
+         service_id = COALESCE($6, service_id),
+         phone = COALESCE($7, phone),
+         status = COALESCE($8, status)
+     WHERE id=$9 AND ${sucWhereN(10)}
+     RETURNING *`,
+    [patient, doctor_id, date, start_time, duration_hours, service_id, phone, status, id, s]
+  );
+
+  const updated = rows[0] || null;
+
+  if (updated) {
+    const finalStatus = (status || updated.status || '').toLowerCase();
+    const esFinalizadaAhora = FINAL_APPOINTMENT_STATUSES.includes(finalStatus);
+
+    // Solo si ANTES no estaba finalizada y AHORA sí:
+    if (esFinalizadaAhora && !yaEraFinalizada) {
+      console.log('✅ Cita finalizada, disparando acciones de cierre...', {
+        appointment_id: updated.id,
+        status: finalStatus,
+        phone: updated.phone,
+      });
+
+      // 3️⃣ Enviar encuesta de satisfacción por WhatsApp
+      try {
+        await triggerSatisfaccionWhatsApp(updated, s);
+      } catch (err) {
+        console.error('⚠️ Error enviando WhatsApp de satisfacción:', err);
+      }
+
+      // 4️⃣ Buscar el servicio para obtener el nombre
+      const servicioId = updated.service_id || service_id || prev?.service_id;
+      if (servicioId) {
+        const { rows: serviceRows } = await q(
+          `SELECT id, name
+           FROM services
+           WHERE id=$1 AND ${sucWhereN(2)}`,
+          [servicioId, s]
+        );
+        const service = serviceRows[0] || null;
+
+        if (service) {
+          const serviceName = service.name;
+          const formulaItems = TREATMENT_FORMULAS[serviceName];
+
+          if (formulaItems && formulaItems.length) {
+            console.log('🧮 Aplicando fórmula de inventario por servicio finalizado...', {
+              appointment_id: updated.id,
+              service_id: servicioId,
+              service_name: serviceName,
+            });
+
+            try {
+              await aplicarFormulaInventario(s, formulaItems);
+            } catch (err) {
+              console.error('⚠️ Error aplicando fórmula de inventario:', err);
+            }
+          } else {
+            console.log('ℹ️ Cita finalizada sin fórmula de inventario asignada', {
+              appointment_id: updated.id,
+              service_id: servicioId,
+              service_name: service?.name,
+            });
+          }
+        }
+      }
+    }
+  }
+
+  res.json(updated);
+}));
+
+app.delete('/api/appointments/:id', ah(async (req, res) => {
+  const s = getSucursal(req);
+  await q(
+    `DELETE FROM appointments
+     WHERE id=$1 AND ${sucWhereN(2)}`,
+    [Number(req.params.id), s]
+  );
+  res.status(204).end();
+}));
+
+// ==============================
+// PAYMENTS
+// ==============================
+app.get('/api/payments', ah(async (req, res) => {
+  const s = getSucursal(req);
+  const { rows } = await q(
+    `SELECT id, appointment_id, patient, service_id, amount, payment_method, date, doctor_id, sucursal_id
+     FROM payments
+     WHERE ${sucWhereN(1)}
+     ORDER BY date DESC, id DESC`, [s]
+  );
+  res.json(rows);
+}));
+
+app.post('/api/payments', ah(async (req, res) => {
+  const s = getSucursal(req);
+  const { appointment_id, patient, service_id, amount, payment_method, date, doctor_id } = req.body || {};
+
+  if (!patient || !patient.trim()) return res.status(400).json({ error: 'El nombre del paciente es requerido' });
+  if (!amount || amount <= 0)     return res.status(400).json({ error: 'El monto debe ser mayor a 0' });
+  if (!payment_method || !payment_method.trim()) return res.status(400).json({ error: 'El método de pago es requerido' });
+  if (!date) return res.status(400).json({ error: 'La fecha es requerida' });
+
+  const { rows } = await q(
+    `INSERT INTO payments (appointment_id, patient, service_id, amount, payment_method, date, doctor_id, sucursal_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+    [
+      appointment_id || null,
+      patient.trim(),
+      service_id ? Number(service_id) : null,
+      Number(amount),
+      payment_method.trim(),
+      date,
+      doctor_id ? Number(doctor_id) : null,
+      s
+    ]
+  );
+  res.json(rows[0]);
+}));
+
+app.put('/api/payments/:id', ah(async (req, res) => {
+  const s = getSucursal(req);
+  const id = Number(req.params.id);
+  const { patient, amount, payment_method, date } = req.body || {};
+  const { rows } = await q(
+    `UPDATE payments
+     SET patient=$1, amount=$2, payment_method=$3, date=$4
+     WHERE id=$5 AND ${sucWhereN(6)}
+     RETURNING *`,
+    [patient, amount, payment_method, date, id, s]
+  );
+  res.json(rows[0] || null);
+}));
+
+app.delete('/api/payments/:id', ah(async (req, res) => {
+  const s = getSucursal(req);
+  await q(
+    `DELETE FROM payments
+     WHERE id=$1 AND ${sucWhereN(2)}`,
+    [Number(req.params.id), s]
+  );
+  res.status(204).end();
+}));
+
+// ==============================
+// EXPENSES
+// ==============================
+app.get('/api/expenses', ah(async (req, res) => {
+  const s = getSucursal(req);
+  const { rows } = await q(
+    `SELECT id, concept, amount, date, doctor_id, payment_method, sucursal_id
+     FROM expenses
+     WHERE ${sucWhereN(1)}
+     ORDER BY date DESC, id DESC`, [s]
+  );
+  res.json(rows);
+}));
+
+app.post('/api/expenses', ah(async (req, res) => {
+  const s = getSucursal(req);
+  const { concept, amount, date, doctor_id, payment_method } = req.body || {};
+
+  if (!concept || !concept.trim()) return res.status(400).json({ error: 'El concepto del gasto es requerido' });
+  if (!amount || amount <= 0)     return res.status(400).json({ error: 'El monto debe ser mayor a 0' });
+  if (!date)                      return res.status(400).json({ error: 'La fecha es requerida' });
+
+  const { rows } = await q(
+    `INSERT INTO expenses (concept, amount, date, doctor_id, payment_method, sucursal_id)
+     VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+    [
+      concept.trim(),
+      Number(amount),
+      date,
+      doctor_id ? Number(doctor_id) : null,
+      payment_method || null,
+      s
+    ]
+  );
+  res.json(rows[0]);
+}));
+
+app.put('/api/expenses/:id', ah(async (req, res) => {
+  const s = getSucursal(req);
+  const id = Number(req.params.id);
+  const { concept, amount, date, doctor_id, payment_method } = req.body || {};
+  const { rows } = await q(
+    `UPDATE expenses
+     SET concept=$1, amount=$2, date=$3, doctor_id=$4, payment_method=$5
+     WHERE id=$6 AND ${sucWhereN(7)}
+     RETURNING *`,
+    [concept, amount, date, doctor_id || null, payment_method || null, id, s]
+  );
+  res.json(rows[0] || null);
+}));
+
+app.delete('/api/expenses/:id', ah(async (req, res) => {
+  const s = getSucursal(req);
+  await q(
+    `DELETE FROM expenses
+     WHERE id=$1 AND ${sucWhereN(2)}`,
+    [Number(req.params.id), s]
+  );
+  res.status(204).end();
+}));
+
+// ==============================
+// SATISFACCIÓN DEL SERVICIO
+// ==============================
+app.post('/api/satisfaccion-servicio', ah(async (req, res) => {
+  const s = getSucursal(req);
+  const {
+    appointment_id,
+    service_id,
+    patient_id,
+    doctor_id,
+    rating,
+    comentario
+  } = req.body || {};
+
+  if (!appointment_id) {
+    return res.status(400).json({ error: 'appointment_id es requerido' });
+  }
+  if (!service_id) {
+    return res.status(400).json({ error: 'service_id es requerido' });
+  }
+  if (rating === undefined || rating === null) {
+    return res.status(400).json({ error: 'rating es requerido' });
+  }
+
+  const r = Number(rating);
+  if (isNaN(r) || r < 0 || r > 5) {
+    return res.status(400).json({ error: 'rating debe estar entre 0 y 5' });
+  }
+
+  const { rows } = await q(`
+    INSERT INTO satisfaccion_servicio (
+      appointment_id,
+      service_id,
+      patient_id,
+      doctor_id,
+      rating,
+      comentario,
+      sucursal_id
+    )
+    VALUES ($1,$2,$3,$4,$5,$6,$7)
+    RETURNING *
+  `, [
+    appointment_id,
+    service_id,
+    patient_id || null,
+    doctor_id || null,
+    r,
+    comentario || null,
+    s
+  ]);
+
+  res.json(rows[0]);
+}));
+
+// Listado (para debug / reportes / dashboard puntual)
+app.get('/api/satisfaccion-servicio', ah(async (req, res) => {
+  const s = getSucursal(req);
+  const { desde, hasta } = req.query;
+
+  const params = [s];
+  let where = `WHERE (ss.sucursal_id = $1 OR ss.sucursal_id IS NULL)`;
+
+  if (desde) {
+    params.push(desde);
+    where += ` AND ss.created_at::date >= $${params.length}`;
+  }
+  if (hasta) {
+    params.push(hasta);
+    where += ` AND ss.created_at::date <= $${params.length}`;
+  }
+
+  const { rows } = await q(`
+    SELECT 
+      ss.*,
+      a.patient,
+      a.date as appointment_date,
+      s.name AS service_name,
+      d.name AS doctor_name
+    FROM satisfaccion_servicio ss
+    LEFT JOIN appointments a ON a.id = ss.appointment_id
+    LEFT JOIN services s      ON s.id = ss.service_id
+    LEFT JOIN doctors d       ON d.id = ss.doctor_id
+    ${where}
+    ORDER BY ss.created_at DESC
+  `, params);
+
+  res.json(rows);
+}));
+
+
+// ==============================
+// LABORATORIOS + TRABAJOS + ABONOS
+// ==============================
+app.get('/api/laboratorios', ah(async (req, res) => {
+  const s = getSucursal(req);
+  const { rows } = await q(
+    `SELECT id, nombre, contacto, sucursal_id
+     FROM laboratorios
+     WHERE ${sucWhereN(1)}
+     ORDER BY id ASC`, [s]
+  );
+  res.json(rows);
+}));
+
+app.post('/api/laboratorios', ah(async (req, res) => {
+  const s = getSucursal(req);
+  const { nombre, contacto } = req.body || {};
+  const { rows } = await q(
+    `INSERT INTO laboratorios (nombre, contacto, sucursal_id)
+     VALUES ($1,$2,$3) RETURNING *`,
+    [nombre, contacto || null, s]
+  );
+  res.json(rows[0]);
+}));
+
+app.get('/api/trabajos-laboratorio', ah(async (req, res) => {
+  const s = getSucursal(req);
+  const { rows } = await q(
+    `SELECT lt.id,
+            lt.paciente,
+            lt.laboratorio_id,
+            lt.servicio_id,
+            lt.presupuesto,
+            lt.fecha_inicio,
+            lt.fecha_entrega_estimada,
+            lt.etapa,
+            lt.notas,
+            lt.sucursal_id,
+            COALESCE(
+  json_agg(json_build_object(
+    'id', la.id,
+    'monto', la.monto,
+    'fecha', la.fecha,
+    'nota', la.nota,
+    'metodo_pago', la.metodo_pago
+  ) ORDER BY la.fecha ASC)
+  FILTER (WHERE la.id IS NOT NULL), '[]'
+) AS abonos
+     FROM lab_trabajos lt
+     LEFT JOIN lab_abonos la ON la.trabajo_id = lt.id
+     WHERE ${sucWhereN(1,'lt')}
+     GROUP BY lt.id
+     ORDER BY lt.id DESC`, [s]
+  );
+  res.json(rows);
+}));
+
+app.post('/api/trabajos-laboratorio', ah(async (req, res) => {
+  const s = getSucursal(req);
+  const paciente  = req.body?.paciente;
+  const laboratorio_id = req.body?.laboratorio_id ?? req.body?.laboratorioId;
+  const servicio_id    = req.body?.servicio_id    ?? req.body?.servicioId;
+  const presupuesto    = req.body?.presupuesto;
+  const fecha_inicio   = req.body?.fecha_inicio   ?? req.body?.fechaInicio;
+  const fecha_entrega  = req.body?.fecha_entrega_estimada ?? req.body?.fechaEntregaEstimada;
+  const etapa          = req.body?.etapa || 'Toma de impresión';
+  const notas          = req.body?.notas ?? null;
+
+  const labCheck = await q(`SELECT 1 FROM laboratorios WHERE id=$1 AND ${sucWhereN(2)}`, [laboratorio_id, s]);
+  if (labCheck.rowCount === 0) return res.status(400).json({ error: 'Laboratorio inexistente en esta sucursal' });
+
+  const servCheck = await q(`SELECT 1 FROM services WHERE id=$1 AND ${sucWhereN(2)}`, [servicio_id, s]);
+  if (servCheck.rowCount === 0) return res.status(400).json({ error: 'Servicio inexistente en esta sucursal' });
+
+  const { rows } = await q(
+    `INSERT INTO lab_trabajos
+      (paciente, laboratorio_id, servicio_id, presupuesto, fecha_inicio, fecha_entrega_estimada, etapa, notas, sucursal_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+     RETURNING *`,
+    [paciente, laboratorio_id, servicio_id, presupuesto, fecha_inicio, fecha_entrega, etapa, notas, s]
+  );
+  res.json(rows[0]);
+}));
+
+app.patch('/api/trabajos-laboratorio/:id', ah(async (req, res) => {
+  const s = getSucursal(req);
+  const id = req.params.id;
+  const { etapa, notas } = req.body || {};
+  const { rows } = await q(
+    `UPDATE lab_trabajos
+     SET etapa = COALESCE($1, etapa),
+         notas = COALESCE($2, notas)
+     WHERE id=$3 AND ${sucWhereN(4)}
+     RETURNING *`,
+    [etapa || null, notas || null, id, s]
+  );
+  res.json(rows[0] || null);
+}));
+
+app.post('/api/trabajos-laboratorio/:id/abonos', ah(async (req, res) => {
+  const s = getSucursal(req);
+  const trabajo_id = req.params.id;
+  const { monto, fecha, nota, metodo_pago } = req.body || {};
+
+  const chk = await q(`SELECT 1 FROM lab_trabajos WHERE id=$1 AND ${sucWhereN(2)}`, [trabajo_id, s]);
+  if (chk.rowCount === 0) return res.status(404).json({ error: 'Trabajo no encontrado en esta sucursal' });
+
+  const { rows } = await q(
+    `INSERT INTO lab_abonos (trabajo_id, monto, fecha, nota, metodo_pago, sucursal_id)
+     VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+    [trabajo_id, monto, fecha, nota || null, metodo_pago || null, s]
+  );
+  res.json(rows[0]);
+}));
+
+// ==============================
+// PAGOS DE LABORATORIO
+// ==============================
+app.get('/api/pagos-laboratorio', ah(async (req, res) => {
+  const s = getSucursal(req);
+  const trabajoId = req.query.trabajo_id || req.query.trabajoId;
+  if (trabajoId) {
+    const { rows } = await q(
+      `SELECT id, trabajo_id, monto, fecha, sucursal_id
+       FROM pagos_laboratorio
+       WHERE ${sucWhereN(1)} AND trabajo_id = $2
+       ORDER BY fecha DESC, created_at DESC`,
+      [s, String(trabajoId)]
+    );
+    return res.json(rows);
+  }
+  const { rows } = await q(
+    `SELECT id, trabajo_id, monto, fecha, sucursal_id
+     FROM pagos_laboratorio
+     WHERE ${sucWhereN(1)}
+     ORDER BY fecha DESC, created_at DESC`,
+    [s]
+  );
+  res.json(rows);
+}));
+
+app.post('/api/pagos-laboratorio', ah(async (req, res) => {
+  const s = getSucursal(req);
+  const { trabajo_id, monto, fecha } = req.body || {};
+
+  const chk = await q(`SELECT 1 FROM lab_trabajos WHERE id=$1 AND ${sucWhereN(2)}`, [String(trabajo_id), s]);
+  if (chk.rowCount === 0) return res.status(404).json({ error: 'Trabajo de laboratorio no encontrado en esta sucursal' });
+
+  const { rows } = await q(
+    `INSERT INTO pagos_laboratorio (trabajo_id, monto, fecha, sucursal_id)
+     VALUES ($1,$2,$3,$4)
+     RETURNING *`,
+    [String(trabajo_id), Number(monto), fecha || null, s]
+  );
+  res.json(rows[0]);
+}));
+
+// ==============================
+// OBJETIVOS
+// ==============================
+app.get('/api/objetivos', ah(async (req, res) => {
+  const s = getSucursal(req);
+  const { from, to, doctor_id } = req.query;
+  const params = [s];
+  const conds = [`${sucWhereN(1)}`];
+  if (from) { params.push(from); conds.push(`(periodo_fin IS NULL OR periodo_fin >= $${params.length})`); }
+  if (to)   { params.push(to);   conds.push(`(periodo_inicio IS NULL OR periodo_inicio <= $${params.length})`); }
+  if (doctor_id) { params.push(Number(doctor_id)); conds.push(`doctor_id = $${params.length}`); }
+  const { rows } = await q(
+    `SELECT id, doctor_id, meta, sueldo_base, periodo_inicio, periodo_fin, sucursal_id, created_at
+     FROM objetivos
+     WHERE ${conds.join(' AND ')}
+     ORDER BY COALESCE(periodo_inicio, created_at) DESC, id DESC`,
+    params
+  );
+  res.json(rows);
+}));
+
+app.post('/api/objetivos', ah(async (req, res) => {
+  const s = getSucursal(req);
+  const { doctor_id, meta, sueldo_base, periodo_inicio, periodo_fin } = req.body || {};
+  const { rows } = await q(
+    `INSERT INTO objetivos (doctor_id, meta, sueldo_base, periodo_inicio, periodo_fin, sucursal_id)
+     VALUES ($1,$2,$3,$4,$5,$6)
+     RETURNING id, doctor_id, meta, sueldo_base, periodo_inicio, periodo_fin, sucursal_id, created_at`,
+    [
+      doctor_id ? Number(doctor_id) : null,
+      meta != null ? Number(meta) : 0,
+      sueldo_base != null ? Number(sueldo_base) : 0,
+      periodo_inicio || null,
+      periodo_fin || null,
+      s
+    ]
+  );
+  res.json(rows[0]);
+}));
+
+app.put('/api/objetivos/:id', ah(async (req, res) => {
+  const s = getSucursal(req);
+  const id = Number(req.params.id);
+  const { doctor_id, meta, sueldo_base, periodo_inicio, periodo_fin } = req.body || {};
+  const { rows } = await q(
+    `UPDATE objetivos
+     SET doctor_id = COALESCE($1, doctor_id),
+         meta = COALESCE($2, meta),
+         sueldo_base = COALESCE($3, sueldo_base),
+         periodo_inicio = COALESCE($4, periodo_inicio),
+         periodo_fin = COALESCE($5, periodo_fin)
+     WHERE id=$6 AND ${sucWhereN(7)}
+     RETURNING id, doctor_id, meta, sueldo_base, periodo_inicio, periodo_fin, sucursal_id, created_at`,
+    [
+      doctor_id != null ? Number(doctor_id) : null,
+      meta != null ? Number(meta) : null,
+      sueldo_base != null ? Number(sueldo_base) : null,
+      periodo_inicio || null,
+      periodo_fin || null,
+      id, s
+    ]
+  );
+  res.json(rows[0] || null);
+}));
+
+app.delete('/api/objetivos/:id', ah(async (req, res) => {
+  const s = getSucursal(req);
+  await q(`DELETE FROM objetivos WHERE id=$1 AND ${sucWhereN(2)}`, [Number(req.params.id), s]);
+  res.status(204).end();
+}));
+
+// ==============================
+// FACTURACIÓN
+// ==============================
+
+// Configuración SAT - responde con llaves que la UI espera
+app.get('/api/facturacion/configuracion', ah(async (req, res) => {
+  res.json({
+    rfc: process.env.RFC || 'XAXX010101000',
+    razon_social: process.env.RAZON_SOCIAL || 'Dentalux S.A. de C.V.',
+    regimen_fiscal: process.env.REGIMEN_FISCAL || '601',
+    codigo_postal: process.env.CODIGO_POSTAL || '64000',
+    pac_proveedor: process.env.PAC_PROVEEDOR || 'finkok',
+    ultimo_folio: Number(process.env.ULTIMO_FOLIO || 1),
+    ambiente: process.env.NODE_ENV === 'production' ? 'produccion' : 'pruebas',
+    activo: true   // ⬅️ esto es lo que activa el indicador en la UI
+  });
+}));
+
+app.put('/api/facturacion/configuracion', ah(async (req, res) => {
+  res.json({ ok: true, ...req.body });
+}));
+
+// === Subida de LOGO en memoria → responde Data URL (para previsualización en el front) ===
+// (Si ya tienes estas 2 líneas arriba, NO las repitas)
+const multer = require('multer');
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 } // 10MB
+});
+
+
+// Handler reutilizable (memoria -> Data URL)
+const handleLogoUpload = ah(async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ ok: false, error: 'Falta archivo "logo"' });
+  }
+  const mime = req.file.mimetype || 'image/png';
+  if (!/^image\//.test(mime)) {
+    return res.status(400).json({ ok: false, error: 'Tipo de archivo no permitido' });
+  }
+
+  // Convierte el buffer en base64 y arma la Data URL
+  const base64 = req.file.buffer.toString('base64');
+  const dataUrl = `data:${mime};base64,${base64}`;
+
+  // Devuelve ok + url para que el front la pueda mostrar de inmediato
+  res.json({ ok: true, url: dataUrl });
+});
+
+// Endpoint legacy que tu UI puede estar llamando
+app.post('/api/facturacion/configuracion/logo', upload.single('logo'), handleLogoUpload);
+
+// Alias v2 por si tu front usa /facturacion-v2/ (según tu módulo de facturación)
+app.post('/api/facturacion-v2/configuracion/logo', upload.single('logo'), handleLogoUpload);
+
+
+// ---- CLIENTES (usados por la UI de facturación) ----
+app.get('/api/facturacion/clientes', ah(async (req, res) => {
+  const s = getSucursal(req);
+  const { rows } = await q(
+    `SELECT id, rfc, razon_social, email, telefono, direccion, uso_cfdi, codigo_postal, regimen_fiscal, sucursal_id, created_at
+     FROM facturacion_clientes
+     WHERE ${sucWhereN(1)}
+     ORDER BY created_at DESC`, [s]
+  );
+  res.json(rows);
+}));
+
+app.post('/api/facturacion/clientes', ah(async (req, res) => {
+  const s = getSucursal(req);
+  const { rfc, razon_social, email, telefono, direccion, uso_cfdi, codigo_postal, regimen_fiscal } = req.body || {};
+  if (!rfc || !String(rfc).trim()) return res.status(400).json({ error: 'RFC es requerido' });
+  if (!razon_social || !String(razon_social).trim()) return res.status(400).json({ error: 'Razón social es requerida' });
+  const { rows } = await q(
+    `INSERT INTO facturacion_clientes (rfc, razon_social, email, telefono, direccion, uso_cfdi, codigo_postal, regimen_fiscal, sucursal_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+    [
+      String(rfc).trim(),
+      String(razon_social).trim(),
+      email || null,
+      telefono || null,
+      direccion || null,
+      uso_cfdi || null,
+      codigo_postal || null,
+      regimen_fiscal || null,
+      s
+    ]
+  );
+  res.json(rows[0]);
+}));
+
+// 🔹 Nuevo: actualizar cliente (parcial)
+app.put('/api/facturacion/clientes/:id', ah(async (req, res) => {
+  const s  = getSucursal(req);
+  const id = String(req.params.id);
+  const { rfc, razon_social, email, telefono, direccion, uso_cfdi, codigo_postal, regimen_fiscal } = req.body || {};
+
+  const { rows } = await q(
+    `UPDATE facturacion_clientes
+       SET rfc            = COALESCE($1, rfc),
+           razon_social   = COALESCE($2, razon_social),
+           email          = COALESCE($3, email),
+           telefono       = COALESCE($4, telefono),
+           direccion      = COALESCE($5, direccion),
+           uso_cfdi       = COALESCE($6, uso_cfdi),
+           codigo_postal  = COALESCE($7, codigo_postal),
+           regimen_fiscal = COALESCE($8, regimen_fiscal)
+     WHERE id = $9 AND ${sucWhereN(10)}
+     RETURNING *`,
+    [
+      rfc || null, razon_social || null, email || null, telefono || null, direccion || null,
+      uso_cfdi || null, codigo_postal || null, regimen_fiscal || null, id, s
+    ]
+  );
+
+  if (!rows[0]) return res.status(404).json({ error: 'Cliente no encontrado' });
+  res.json(rows[0]);
+}));
+
+// ---- PRODUCTOS (catálogo) ----
+app.get('/api/facturacion/productos', ah(async (req, res) => {
+  const s = getSucursal(req);
+  const { q:term } = req.query; // opcional ?q=consulta
+  const params = [s];
+  let where = `${sucWhereN(1)}`;
+  if (term && String(term).trim()) {
+    params.push(`%${String(term).trim()}%`);
+    where += ` AND (descripcion ILIKE $${params.length} OR clave_prod_serv ILIKE $${params.length})`;
+  }
+  const { rows } = await q(
+    `SELECT id, descripcion, clave_prod_serv, unidad, objeto_imp, precio, sucursal_id, created_at
+     FROM facturacion_productos
+     WHERE ${where}
+     ORDER BY created_at DESC`,
+    params
+  );
+  res.json(rows);
+}));
+
+app.post('/api/facturacion/productos', ah(async (req, res) => {
+  const s = getSucursal(req);
+  const { descripcion, clave_prod_serv, unidad, objeto_imp, precio } = req.body || {};
+  if (!descripcion || !String(descripcion).trim()) {
+    return res.status(400).json({ error: 'La descripción es requerida' });
+  }
+  const { rows } = await q(
+    `INSERT INTO facturacion_productos (descripcion, clave_prod_serv, unidad, objeto_imp, precio, sucursal_id)
+     VALUES ($1,$2,$3,$4,$5,$6)
+     RETURNING id, descripcion, clave_prod_serv, unidad, objeto_imp, precio, sucursal_id, created_at`,
+    [
+      String(descripcion).trim(),
+      clave_prod_serv || null,
+      unidad || null,
+      objeto_imp || null,
+      precio != null ? Number(precio) : 0,
+      s
+    ]
+  );
+  res.status(201).json(rows[0]);
+}));
+
+app.put('/api/facturacion/productos/:id', ah(async (req, res) => {
+  const s = getSucursal(req);
+  const id = String(req.params.id);
+  const { descripcion, clave_prod_serv, unidad, objeto_imp, precio } = req.body || {};
+  const { rows } = await q(
+    `UPDATE facturacion_productos
+     SET descripcion = COALESCE($1, descripcion),
+         clave_prod_serv = COALESCE($2, clave_prod_serv),
+         unidad = COALESCE($3, unidad),
+         objeto_imp = COALESCE($4, objeto_imp),
+         precio = COALESCE($5, precio)
+     WHERE id=$6 AND ${sucWhereN(7)}
+     RETURNING id, descripcion, clave_prod_serv, unidad, objeto_imp, precio, sucursal_id, created_at`,
+    [
+      descripcion != null ? String(descripcion).trim() : null,
+      clave_prod_serv || null,
+      unidad || null,
+      objeto_imp || null,
+      precio != null ? Number(precio) : null,
+      id, s
+    ]
+  );
+  const row = rows[0];
+  if (!row) return res.status(404).json({ error: 'Producto no encontrado' });
+  res.json(row);
+}));
+
+app.delete('/api/facturacion/productos/:id', ah(async (req, res) => {
+  const s = getSucursal(req);
+  await q(
+    `DELETE FROM facturacion_productos
+     WHERE id=$1 AND ${sucWhereN(2)}`,
+    [String(req.params.id), s]
+  );
+  res.status(204).end();
+}));
+
+// ---- FACTURAS ----
+app.get('/api/facturacion/facturas', ah(async (req, res) => {
+  const s = getSucursal(req);
+
+  const { desde, hasta } = req.query;
+  let { estado } = req.query;
+
+  // Normaliza el estado que llega del UI
+  estado = (estado || '').toString().trim().toLowerCase();
+  if (estado === 'timbradas') estado = 'timbrada';
+  if (estado === 'borradores') estado = 'borrador';
+  if (estado === 'canceladas') estado = 'cancelada';
+  if (estado === 'todas') estado = '';
+
+  // WHERE dinámico + parámetros
+  const whereParts = [`${sucWhereN(1)}`]; // $1 = sucursal
+  const params = [s];
+  let i = 2;
+
+  if (desde) { whereParts.push(`created_at::date >= $${i}`); params.push(String(desde)); i++; }
+  if (hasta) { whereParts.push(`created_at::date <= $${i}`); params.push(String(hasta)); i++; }
+  if (estado && ['timbrada','borrador','cancelada'].includes(estado)) {
+    whereParts.push(`estado = $${i}`); params.push(estado); i++;
+  }
+
+  const sql = `
+    SELECT
+      id, cliente, tipo, forma_pago, metodo_pago, cita_id, notas, total, sucursal_id,
+      created_at, estado, uuid, serie, folio, fecha_timbrado
+    FROM facturas
+    WHERE ${whereParts.join(' AND ')}
+    ORDER BY created_at DESC
+  `;
+
+  const { rows } = await q(sql, params);
+  res.json(rows);
+}));
+
+app.get('/api/facturacion/facturas/:id', ah(async (req, res) => {
+  const s = getSucursal(req);
+  const id = String(req.params.id);
+  const { rows } = await q(
+    `SELECT id, cliente, tipo, forma_pago, metodo_pago, cita_id, notas, total, sucursal_id, created_at
+     FROM facturas
+     WHERE id=$1 AND ${sucWhereN(2)}`, [id, s]
+  );
+  if (rows.length === 0) return res.status(404).json({ error: 'Factura no encontrada' });
+  const factura = rows[0];
+  const conceptos = await q(
+    `SELECT id, descripcion, cantidad, valor_unitario, importe, clave_prod_serv, unidad, objeto_imp
+     FROM factura_conceptos WHERE factura_id=$1 ORDER BY id ASC`, [id]
+  );
+  res.json({ ...factura, conceptos: conceptos.rows });
+}));
+
+app.post('/api/facturacion/facturas/:id/timbrar', ah(async (req, res) => {
+  const s = getSucursal(req);
+  const id = String(req.params.id);
+  const now = new Date().toISOString();
+  return res.json({ ok: true, id, uuid: 'UUID-DE-EJEMPLO', fecha_timbrado: now });
+}));
+
+app.post('/api/facturacion/facturas/:id/cancelar', ah(async (req, res) => {
+  const s = getSucursal(req);
+  const id = String(req.params.id);
+  const { motivo } = req.body || {};
+
+  // Marca como cancelada en tu DB
+  const { rows } = await q(
+    `UPDATE facturas
+        SET estado = 'cancelada',
+            status = COALESCE(status, 'Cancelada'),
+            cancelada_at = NOW(),
+            motivo_cancelacion = COALESCE($1, motivo_cancelacion)
+      WHERE id = $2 AND ${sucWhereN(3)}
+      RETURNING id, estado, cancelada_at, motivo_cancelacion`,
+    [motivo || null, id, s]
+  );
+
+  if (rows.length === 0) {
+    return res.status(404).json({ ok: false, error: 'Factura no encontrada' });
+  }
+
+  // (Opcional) aquí podrías llamar al PAC para cancelar el CFDI
+  return res.json({ ok: true, ...rows[0] });
+}));
+
+
+
+app.post('/api/facturacion/facturas', ah(async (req, res) => {
+  const s = getSucursal(req);
+  const body = req.body || {};
+  const { cliente, tipo, forma_pago, metodo_pago, cita_id, notas, total, conceptos } = body;
+
+  if (!cliente || !String(cliente).trim()) return res.status(400).json({ error: 'El cliente es requerido' });
+  if (!tipo || !String(tipo).trim())       return res.status(400).json({ error: 'El tipo de factura es requerido' });
+
+  const tot = Number(total ?? 0);
+  const { rows } = await q(
+    `INSERT INTO facturas (cliente, tipo, forma_pago, metodo_pago, cita_id, notas, total, sucursal_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+    [String(cliente).trim(), String(tipo).trim(), forma_pago || null, metodo_pago || null, cita_id || null, notas || null, isFinite(tot) ? tot : 0, s]
+  );
+  const factura = rows[0];
+
+  if (Array.isArray(conceptos)) {
+    for (const c of conceptos) {
+      const cantidad = Number(c.cantidad || 1);
+      const valor    = Number(c.valor_unitario || c.valorUnitario || 0);
+      const importe  = Number(c.importe != null ? c.importe : cantidad * valor);
+      await q(
+        `INSERT INTO factura_conceptos
+           (factura_id, descripcion, cantidad, valor_unitario, importe, clave_prod_serv, unidad, objeto_imp, sucursal_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+        [
+          factura.id,
+          String(c.descripcion || c.descripcionCorta || 'Concepto').trim(),
+          isFinite(cantidad) ? cantidad : 1,
+          isFinite(valor) ? valor : 0,
+          isFinite(importe) ? importe : 0,
+          c.clave_prod_serv || c.claveProdServ || null,
+          c.unidad || null,
+          c.objeto_imp || c.objetoImp || null,
+          s
+        ]
+      );
+    }
+  }
+
+  res.json(factura);
+}));
+
+app.put('/api/facturacion/facturas/:id', ah(async (req, res) => {
+  const s = getSucursal(req);
+  const id = String(req.params.id);
+  const { cliente, tipo, forma_pago, metodo_pago, cita_id, notas, total, conceptos } = req.body || {};
+
+  const { rows } = await q(
+    `UPDATE facturas
+     SET cliente = COALESCE($1, cliente),
+         tipo = COALESCE($2, tipo),
+         forma_pago = COALESCE($3, forma_pago),
+         metodo_pago = COALESCE($4, metodo_pago),
+         cita_id = COALESCE($5, cita_id),
+         notas = COALESCE($6, notas),
+         total = COALESCE($7, total)
+     WHERE id=$8 AND ${sucWhereN(9)}
+     RETURNING *`,
+    [cliente || null, tipo || null, forma_pago || null, metodo_pago || null, cita_id || null, notas || null, total != null ? Number(total) : null, id, s]
+  );
+  const factura = rows[0];
+  if (!factura) return res.status(404).json({ error: 'Factura no encontrada' });
+
+  if (Array.isArray(conceptos)) {
+    await q(`DELETE FROM factura_conceptos WHERE factura_id=$1`, [id]);
+    for (const c of conceptos) {
+      const cantidad = Number(c.cantidad || 1);
+      const valor    = Number(c.valor_unitario || c.valorUnitario || 0);
+      const importe  = Number(c.importe != null ? c.importe : cantidad * valor);
+      await q(
+        `INSERT INTO factura_conceptos
+          (factura_id, descripcion, cantidad, valor_unitario, importe, clave_prod_serv, unidad, objeto_imp, sucursal_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+        [
+          id,
+          String(c.descripcion || 'Concepto').trim(),
+          isFinite(cantidad) ? cantidad : 1,
+          isFinite(valor) ? valor : 0,
+          isFinite(importe) ? importe : 0,
+          c.clave_prod_serv || null,
+          c.unidad || null,
+          c.objeto_imp || null,
+          s
+        ]
+      );
+    }
+  }
+
+  res.json(factura);
+}));
+
+app.delete('/api/facturacion/facturas/:id', ah(async (req, res) => {
+  const s = getSucursal(req);
+  await q(`DELETE FROM facturas WHERE id=$1 AND ${sucWhereN(2)}`, [String(req.params.id), s]);
+  res.status(204).end();
+}));
+
+// ==============================
+// 🆕 INVENTARIO
+// ==============================
+app.get('/api/inventory', ah(async (req, res) => {
+  const s = getSucursal(req);
+  const { rows } = await q(
+    `SELECT * FROM inventory WHERE ${sucWhereN(1)} ORDER BY id ASC`,
+    [s]
+  );
+  res.json(rows);
+}));
+
+app.post('/api/inventory', ah(async (req, res) => {
+  const s = getSucursal(req);
+  const { sku, name, category, type, quantity, minStock, maxStock, price, supplier, usagePerPatient, expirationDate } = req.body;
+  
+  const { rows } = await q(
+    `INSERT INTO inventory (sku, name, category, type, quantity, min_stock, max_stock, price, supplier, usage_per_patient, expiration_date, last_purchase, sucursal_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, CURRENT_DATE, $12)
+     RETURNING *`,
+    [sku, name, category, type, quantity || 0, minStock || 10, maxStock || 100, price || 0, supplier || null, usagePerPatient || 1, expirationDate || null, s]
+  );
+  res.json(rows[0]);
+}));
+
+app.put('/api/inventory/:id', ah(async (req, res) => {
+  const s = getSucursal(req);
+  const { sku, name, category, type, quantity, minStock, maxStock, price, supplier, usagePerPatient, expirationDate } = req.body;
+  
+  const { rows } = await q(
+    `UPDATE inventory 
+     SET sku = COALESCE($1, sku),
+         name = COALESCE($2, name),
+         category = COALESCE($3, category),
+         type = COALESCE($4, type),
+         quantity = COALESCE($5, quantity),
+         min_stock = COALESCE($6, min_stock),
+         max_stock = COALESCE($7, max_stock),
+         price = COALESCE($8, price),
+         supplier = COALESCE($9, supplier),
+         usage_per_patient = COALESCE($10, usage_per_patient),
+         expiration_date = COALESCE($11, expiration_date)
+     WHERE id = $12 AND ${sucWhereN(13)}
+     RETURNING *`,
+    [sku, name, category, type, quantity, minStock, maxStock, price, supplier, usagePerPatient, expirationDate, Number(req.params.id), s]
+  );
+  res.json(rows[0] || null);
+}));
+
+app.delete('/api/inventory/:id', ah(async (req, res) => {
+  const s = getSucursal(req);
+  await q(
+    `DELETE FROM inventory WHERE id = $1 AND ${sucWhereN(2)}`,
+    [Number(req.params.id), s]
+  );
+  res.status(204).end();
+}));
+
+// 🆕 Aplicar fórmula de tratamiento al inventario
+app.post('/api/inventory/apply-formula', ah(async (req, res) => {
+  const s = getSucursal(req);
+  const body = req.body || {};
+
+  // Acepta body.items o body.formula (por si el front lo manda con otro nombre)
+  const items = body.items || body.formula || [];
+
+  if (!Array.isArray(items) || items.length === 0) {
+    return res.status(400).json({ error: 'Faltan items de la fórmula' });
+  }
+
+  try {
+    for (const f of items) {
+      const nombre = (f.item || '').toString().toLowerCase();
+      const cantidad = Number(f.quantity) || 0;
+
+      if (!nombre || cantidad <= 0) continue;
+
+      // Buscar el producto en el inventario de la sucursal
+      const { rows } = await q(
+        `
+        SELECT id, quantity
+        FROM inventory
+        WHERE LOWER(name) LIKE '%' || $1 || '%'
+          AND ${sucWhereN(2)}
+        ORDER BY LENGTH(name) ASC
+        LIMIT 1
+        `,
+        [nombre, s]
+      );
+
+      if (!rows[0]) {
+        console.log('⚠️ Item de fórmula no encontrado en inventario:', nombre);
+        continue;
+      }
+
+      const producto = rows[0];
+      const nuevoStock = Math.max(0, Number(producto.quantity) - cantidad);
+
+      await q(
+        `
+        UPDATE inventory
+        SET quantity = $1
+        WHERE id = $2
+          AND ${sucWhereN(3)}
+        `,
+        [nuevoStock, producto.id, s]
+      );
+    }
+
+    res.json({ ok: true });
+  } catch (error) {
+    console.error('❌ Error aplicando fórmula de inventario:', error);
+    res.status(500).json({
+      error: 'Error aplicando fórmula de inventario',
+      details: error.message
+    });
+  }
+}));
+
+// ==============================
+// 🆕 HISTORIAL DE PACIENTES
+// ==============================
+app.get('/api/patients-full-history', ah(async (req, res) => {
+  const s = getSucursal(req);
+
+  const { rows } = await q(
+    `SELECT DISTINCT ON (a.patient)
+      a.patient AS name,
+      a.phone,
+      COALESCE(a.email, 'sin-email@example.com') AS email,
+      30 AS age,
+      (
+        SELECT COALESCE(
+          json_agg(
+            json_build_object(
+              'date', a2.date,
+              'service', COALESCE(s2.name, 'Servicio desconocido'),
+              'doctor', COALESCE(d2.name, 'Doctor desconocido'),
+              'status', LOWER(COALESCE(a2.status, 'pendiente')),
+              'notes', '',
+              'cost', 0
+            ) ORDER BY a2.date DESC
+          ),
+          '[]'::json
+        )
+        FROM appointments a2
+        LEFT JOIN services s2 ON s2.id = a2.service_id
+        LEFT JOIN doctors d2 ON d2.id = a2.doctor_id
+        WHERE a2.patient = a.patient
+          AND ${sucWhereN(2,'a2')}
+      ) AS appointments
+    FROM appointments a
+    WHERE ${sucWhereN(1,'a')}
+    ORDER BY a.patient, a.date DESC
+    `,
+    [s, s]
+  );
+
+  const patients = rows.map((row, idx) => ({
+    id: idx + 1,
+    name: row.name,
+    phone: row.phone || 'Sin teléfono',
+    email: row.email || 'sin-email@example.com',
+    age: row.age || 0,
+    appointments: Array.isArray(row.appointments) ? row.appointments : []
+  }));
+
+  res.json(patients);
+}));
+
+// ==============================
+app.get('/', (_req, res) => res.status(404).json({ ok: false, message: 'Dentalux API' }));
+app.get('/favicon.ico', (_req, res) => res.status(404).end());
+
+app.use((err, _req, res, _next) => {
+  console.error('Uncaught error:', err);
+  const status = err?.status || 500;
+  res.status(status).json({ error: err?.message || 'Internal Server Error' });
+});
+
+// ========================================
+// NUEVOS ENDPOINTS PARA DASHBOARD GLOBAL
+// ========================================
+
+// Función auxiliar para obtener sucursal del request
+function getSucursalFromReq(req) {
+  return req.query.sucursal || req.headers['x-sucursal'] || req.body?.sucursal_id || 'sucursal_1';
+}
+
+function buildDateFilter(fechaInicio, fechaFin, dateColumn = 'date') {
+  let dateFilter = '';
+  let params = [];
+  
+  if (fechaInicio) {
+    dateFilter += ` AND ${dateColumn} >= $${params.length + 2}::date`; // +2 porque sucursalId es $1
+    params.push(fechaInicio);
+  }
+  
+  if (fechaFin) {
+    dateFilter += ` AND ${dateColumn} <= $${params.length + 2}::date`; // +2 por la misma razón
+    params.push(fechaFin);
+  }
+  
+  return { dateFilter, params };
+}
+
+// ==============================================
+// ENDPOINT PRINCIPAL: Dashboard Global por Sucursal
+// ==============================================
+app.get('/api/dashboard/:sucursalId', ah(async (req, res) => {
+  const { sucursalId } = req.params;
+  const { fecha_inicio, fecha_fin } = req.query;
+  
+  try {
+    // Si es MELISSA, usar la base de datos MELISSA
+    if (sucursalId === 'melissa' && qMelissa) {
+      const result = await getDashboardDataMelissa(fecha_inicio, fecha_fin);
+      return res.json(result);
+    }
+    
+    // Para sucursales principales, usar la base de datos principal
+    const result = await getDashboardData(sucursalId, fecha_inicio, fecha_fin);
+    res.json(result);
+    
+  } catch (error) {
+    console.error('Error en dashboard:', error);
+    res.status(500).json({ error: error.message });
+  }
+}));
+
+// ==============================================
+// ==============================================
+// FUNCIÓN: Datos del Dashboard (Base Principal)
+// ==============================================
+async function getDashboardData(sucursalId, fechaInicio, fechaFin) {
+  const { dateFilter, params } = buildDateFilter(fechaInicio, fechaFin, 'date');
+  
+  // 1. Citas
+  const appointments = await q(`
+    SELECT 
+      id, 
+      COALESCE(patient, 'Paciente Sin Nombre') as patient,
+      COALESCE(doctor_id, 1) as doctor_id,
+      COALESCE(service_id, 1) as service_id,
+      COALESCE(date, CURRENT_DATE) as date,
+      COALESCE(status, 'Pendiente') as status,
+      phone,
+      sucursal_id
+    FROM appointments 
+    WHERE sucursal_id = $1 ${dateFilter}
+    ORDER BY date DESC
+  `, [sucursalId, ...params]);
+  
+  // 2. Pagos
+  const payments = await q(`
+    SELECT 
+      id,
+      COALESCE(amount, 0) as amount,
+      COALESCE(payment_method, 'efectivo') as payment_method,
+      COALESCE(date, CURRENT_DATE) as date,
+      appointment_id,
+      patient,
+      sucursal_id
+    FROM payments 
+    WHERE sucursal_id = $1 ${dateFilter}
+    ORDER BY date DESC
+  `, [sucursalId, ...params]);
+  
+  // 3. Gastos
+  const expenses = await q(`
+    SELECT * FROM expenses 
+    WHERE sucursal_id = $1 ${dateFilter}
+    ORDER BY date DESC
+  `, [sucursalId, ...params]);
+  
+  // 4. Trabajos de Laboratorio (usar buildDateFilter separado para fecha_inicio)
+  const { dateFilter: labDateFilter, params: labParams } = buildDateFilter(fechaInicio, fechaFin, 'fecha_inicio');
+  const trabajosLab = await q(`
+    SELECT t.*, 
+           COALESCE(
+             (SELECT JSON_AGG(
+               JSON_BUILD_OBJECT(
+                 'id', a.id,
+                 'monto', a.monto,
+                 'fecha', a.fecha,
+                 'metodo_pago', a.metodo_pago,
+                 'nota', a.nota
+               )
+             ) FROM lab_abonos a WHERE a.trabajo_id = t.id), 
+             '[]'::json
+           ) as abonos
+    FROM lab_trabajos t 
+    WHERE t.sucursal_id = $1 
+    ${labDateFilter}
+    ORDER BY t.fecha_inicio DESC
+  `, [sucursalId, ...labParams]);
+    
+  // 5. Doctores
+  const doctors = await q(`
+    SELECT * FROM doctors 
+    WHERE sucursal_id = $1 
+    ORDER BY name
+  `, [sucursalId]);
+  
+  // 6. Servicios
+  const services = await q(`
+    SELECT 
+      id,
+      COALESCE(name, 'Servicio Sin Nombre') as name,
+      COALESCE(price, 0) as price,
+      sucursal_id
+    FROM services 
+    WHERE sucursal_id = $1 
+    ORDER BY name
+  `, [sucursalId]);
+
+   // 7. Satisfacción del servicio (registros crudos por cita / servicio)
+  const satisfaccion = await q(`
+    SELECT 
+      id,
+      appointment_id,
+      service_id,
+      patient_id,
+      doctor_id,
+      rating,
+      comentario,
+      sucursal_id,
+      created_at
+    FROM satisfaccion_servicio
+    WHERE (sucursal_id = $1 OR sucursal_id IS NULL)
+      AND created_at::date BETWEEN $2 AND $3
+    ORDER BY created_at DESC
+  `, [sucursalId, fechaInicio, fechaFin]);
+
+  // 8. Satisfacción agregada por servicio (para el dashboard)
+  const satisfaccionServicios = await q(`
+    SELECT 
+      service_id,
+      ROUND(AVG(rating), 2) AS promedio_rating,
+      COUNT(*)             AS total_respuestas
+    FROM satisfaccion_servicio
+    WHERE (sucursal_id = $1 OR sucursal_id IS NULL)
+      AND created_at::date BETWEEN $2 AND $3
+    GROUP BY service_id
+    ORDER BY service_id
+  `, [sucursalId, fechaInicio, fechaFin]);
+
+  // 9. Inventario con métricas completas
+  let inventory = [];
+  let inventarioStats = {
+    total_productos: 0,
+    total_stock: 0,
+    valor_total: 0,
+    productos_agotados: 0,
+    productos_stock_bajo: 0,
+    eficiencia_stock: 0
+  };
+  
+  try {
+    // Obtener productos con estados calculados
+    inventory = await q(`
+      SELECT 
+        id, sku, name, category, type, quantity, min_stock, max_stock, 
+        price, supplier, last_purchase, usage_per_patient, expiration_date,
+        (quantity * price) as valor_total,
+        CASE 
+          WHEN quantity <= 0 THEN 'agotado'
+          WHEN quantity <= min_stock * 0.5 THEN 'critico'
+          WHEN quantity <= min_stock THEN 'bajo'
+          ELSE 'normal'
+        END as estado_stock,
+        (quantity::float / NULLIF(min_stock, 0) * 100) as porcentaje_stock
+      FROM inventory 
+      WHERE sucursal_id = $1
+      ORDER BY name
+    `, [sucursalId]);
+
+    // Calcular métricas de inventario
+    const inventoryMetrics = await q(`
+      SELECT 
+        COUNT(*) as total_productos,
+        SUM(quantity) as total_stock,
+        SUM(quantity * price) as valor_total,
+        SUM(CASE WHEN quantity <= 0 THEN 1 ELSE 0 END) as productos_agotados,
+        SUM(CASE WHEN quantity <= min_stock THEN 1 ELSE 0 END) as productos_stock_bajo,
+        AVG(quantity::float / NULLIF(min_stock, 0) * 100) as eficiencia_stock
+      FROM inventory 
+      WHERE sucursal_id = $1
+    `, [sucursalId]);
+
+    inventarioStats = inventoryMetrics.rows[0] || inventarioStats;
+    
+  } catch (error) {
+    console.log('Error obteniendo inventario:', error);
+  }
+  
+  // Calcular métricas base
+   const metricas = calculateMetrics({
+    appointments: appointments.rows,
+    payments: payments.rows,
+    expenses: expenses.rows,
+    trabajosLab: trabajosLab.rows,
+    doctors: doctors.rows,
+    services: services.rows,
+    inventory: Array.isArray(inventory.rows) ? inventory.rows : (inventory || []),
+    satisfaccion: satisfaccion.rows   // 🆕
+  });
+
+  
+    return {
+    sucursalId,
+    nombre: sucursalId === 'sucursal_1' ? 'Sucursal Centro' : 'Sucursal Norte',
+    periodo: { fecha_inicio: fechaInicio, fecha_fin: fechaFin },
+
+    // Datos crudos
+    appointments: appointments.rows,
+    payments: payments.rows,
+    expenses: expenses.rows,
+    trabajosLaboratorio: trabajosLab.rows,
+    doctors: doctors.rows,
+    services: services.rows,
+    inventory: inventory.rows || [],
+
+    // 🆕 Satisfacción (cruda y agregada por servicio)
+    satisfaccion: satisfaccion.rows,
+    satisfaccionServicios: satisfaccionServicios.rows,
+
+    // Métricas calculadas
+    metricas: {
+      ...metricas,
+      inventario: {
+        totalProductos: parseInt(inventarioStats.total_productos),
+        productosStockBajo: parseInt(inventarioStats.productos_stock_bajo),
+        productosAgotados: parseInt(inventarioStats.productos_agotados),
+        valorInventario: parseFloat(inventarioStats.valor_total || 0),
+        eficienciaStock: parseFloat(inventarioStats.eficiencia_stock || 0),
+        alertasCriticas: inventory.rows
+          ? inventory.rows.filter(item =>
+              item.estado_stock === 'critico' || item.estado_stock === 'agotado'
+            ).length
+          : 0
+      }
+    }
+  };
+}
+
+// ==============================================
+// FUNCIÓN: Calcular Métricas
+// ==============================================
+function calculateMetrics(data) {
+  const {
+    appointments = [],
+    payments = [],
+    expenses = [],
+    trabajosLab = [],
+    doctors = [],
+    services = [],
+    inventory = [],
+    satisfaccion = []   // 🆕
+  } = data;
+  
+  console.log(`  🧮 Calculando métricas: ${appointments.length} citas, ${payments.length} pagos`);
+  
+  // Métricas Financieras (CORREGIDO - usar safeNumber)
+  const ingresos = payments.reduce((sum, p) => sum + safeNumber(p.amount), 0);
+  const gastos = expenses.reduce((sum, e) => sum + safeNumber(e.amount), 0);
+  const utilidad = ingresos - gastos;
+  const margenUtilidad = ingresos > 0 ? (utilidad / ingresos) * 100 : 0;
+  
+  // Laboratorio
+  const ingresosLaboratorio = trabajosLab.reduce((sum, t) => sum + safeNumber(t.presupuesto), 0);
+  const abonosLaboratorio = trabajosLab.reduce((sum, t) => {
+    const abonos = Array.isArray(t.abonos) ? t.abonos : 
+                   (typeof t.abonos === 'string' ? JSON.parse(t.abonos || '[]') : []);
+    return sum + abonos.reduce((abonoSum, a) => abonoSum + safeNumber(a.monto), 0);
+  }, 0);
+  const saldosPendientes = ingresosLaboratorio - abonosLaboratorio;
+  
+  // Métodos de pago (NUEVO)
+  const metodosPago = payments.reduce((acc, p) => {
+    const metodo = p.payment_method || 'efectivo';
+    acc[metodo] = (acc[metodo] || 0) + safeNumber(p.amount);
+    return acc;
+  }, {});
+  
+  // Métricas Operacionales (CORREGIDO)
+  const totalCitas = appointments.length;
+  const citasAtendidas = appointments.filter(a => 
+    ['Atendida', 'Completada', 'Finalizada', 'atendida', 'completada', 'finalizada'].includes(a.status)
+  ).length;
+  const citasCanceladas = appointments.filter(a => 
+    ['Cancelada', 'cancelada'].includes(a.status)
+  ).length;
+  const citasPendientes = totalCitas - citasAtendidas - citasCanceladas;
+  const tasaConversion = totalCitas > 0 ? (citasAtendidas / totalCitas) * 100 : 0;
+  
+  const trabajosLaboratorio = trabajosLab.length;
+  const trabajosCompletados = trabajosLab.filter(t => 
+    ['Completado', 'Entregado', 'completado', 'entregado'].includes(t.etapa)
+  ).length;
+  const trabajosPendientes = trabajosLaboratorio - trabajosCompletados;
+  
+  const pacientesUnicos = new Set(appointments.map(a => a.patient)).size;
+  
+  // Citas por día (para gráfico)
+  const citasPorDia = appointments.reduce((acc, a) => {
+    const fecha = a.date;
+    if (!acc[fecha]) {
+      acc[fecha] = { fecha, total: 0, atendidas: 0 };
+    }
+    acc[fecha].total++;
+    if (['Atendida', 'Completada', 'Finalizada', 'atendida', 'completada', 'finalizada'].includes(a.status)) {
+      acc[fecha].atendidas++;
+    }
+    return acc;
+  }, {});
+  
+  // Métricas de Inventario (CORREGIDO)
+  const totalProductos = inventory.length;
+  const productosStockBajo = inventory.filter(p => 
+    safeNumber(p.stock || p.quantity) <= safeNumber(p.min_stock)
+  ).length;
+  const productosAgotados = inventory.filter(p => 
+    safeNumber(p.stock || p.quantity) === 0
+  ).length;
+  const valorInventario = inventory.reduce((sum, p) => 
+    sum + (safeNumber(p.stock || p.quantity) * safeNumber(p.price)), 0
+  );
+  const eficienciaStock = totalProductos > 0 ? 
+    ((totalProductos - productosStockBajo - productosAgotados) / totalProductos * 100) : 100;
+  
+  // Métricas por Doctor (CORREGIDO)
+  const metricasDoctores = doctors.map(doctor => {
+    const citasDoctor = appointments.filter(a => a.doctor_id === doctor.id);
+    const pagosDoctor = payments.filter(p => {
+      const citaAsociada = appointments.find(a => a.id === p.appointment_id);
+      return citaAsociada && citaAsociada.doctor_id === doctor.id;
+    });
+    const trabajosLabDoctor = trabajosLab.filter(t => t.doctor_id === doctor.id);
+    
+    const citasAtendidasDoc = citasDoctor.filter(c => 
+      ['Atendida', 'Completada', 'Finalizada', 'atendida', 'completada', 'finalizada'].includes(c.status)
+    ).length;
+    
+    const ingresosDoctor = pagosDoctor.reduce((sum, p) => sum + safeNumber(p.amount), 0);
+    const tasaConversionDoc = citasDoctor.length > 0 ? (citasAtendidasDoc / citasDoctor.length) * 100 : 0;
+    
+    return {
+      doctorId: doctor.id.toString(),
+      nombre: doctor.name,
+      color: doctor.color || '#8884d8',
+      citas: citasDoctor.length,
+      citasAtendidas: citasAtendidasDoc,
+      ingresos: ingresosDoctor,
+      tasaConversion: tasaConversionDoc,
+      comision: 0.2,
+      trabajosLaboratorio: trabajosLabDoctor.length,
+    };
+  });
+  
+  // Métricas de Servicios (MEJORADO + satisfacción real)
+  const servicioStats = services.reduce((acc, service) => {
+    const citasServicio = appointments.filter(a => a.service_id === service.id);
+    const pagosServicio = payments.filter(p => {
+      const citaAsociada = appointments.find(a => a.id === p.appointment_id);
+      return citaAsociada && citaAsociada.service_id === service.id;
+    });
+
+    const ingresoTotal = pagosServicio.reduce((sum, p) => sum + safeNumber(p.amount), 0);
+    const cantidadVendida = citasServicio.length;
+
+    acc.ingresosPorServicio[service.name] = ingresoTotal;
+    acc.cantidadPorServicio[service.name] = cantidadVendida;
+
+    // proteger división entre 0
+    acc.margenPorServicio[service.name] = service.price && ingresoTotal > 0
+      ? ((ingresoTotal - (cantidadVendida * service.price * 0.3)) / ingresoTotal) * 100
+      : 0;
+
+    // Por ahora tiempo promedio fijo (luego lo ligamos a duración real)
+    acc.tiempoPromedioPorServicio[service.name] = 60;
+
+    // 🆕 Satisfacción REAL por servicio (promedio 0–5)
+    const ratingsServicio = satisfaccion.filter(r => r.service_id === service.id);
+    if (ratingsServicio.length > 0) {
+      const totalRating = ratingsServicio.reduce((sum, r) => sum + safeNumber(r.rating), 0);
+      acc.satisfaccionPorServicio[service.name] = totalRating / ratingsServicio.length;
+    } else {
+      acc.satisfaccionPorServicio[service.name] = null; // sin datos aún
+    }
+
+    return acc;
+  }, {
+    ingresosPorServicio: {},
+    cantidadPorServicio: {},
+    margenPorServicio: {},
+    tiempoPromedioPorServicio: {},
+    satisfaccionPorServicio: {}
+  });
+
+const servicioMasVendido = Object.keys(servicioStats.cantidadPorServicio).reduce((max, current) => 
+  servicioStats.cantidadPorServicio[current] > (servicioStats.cantidadPorServicio[max] || 0) ? current : max, 
+  Object.keys(servicioStats.cantidadPorServicio)[0]
+) || 'N/A';
+
+// Generar tendencia de servicios por mes (últimos 6 meses)
+const tendenciaServicios = [];
+const fechaActual = new Date();
+for (let i = 5; i >= 0; i--) {
+  const fecha = new Date(fechaActual);
+  fecha.setMonth(fecha.getMonth() - i);
+  const mes = fecha.toLocaleDateString('es-MX', { month: 'short', year: 'numeric' });
+  
+  services.forEach(service => {
+    const citasMes = appointments.filter(a => {
+      const fechaCita = new Date(a.date);
+      return a.service_id === service.id && 
+             fechaCita.getMonth() === fecha.getMonth() && 
+             fechaCita.getFullYear() === fecha.getFullYear();
+    });
+    
+    const ingresosMes = payments.filter(p => {
+      const citaAsociada = appointments.find(a => a.id === p.appointment_id);
+      const fechaPago = new Date(p.date);
+      return citaAsociada && citaAsociada.service_id === service.id &&
+             fechaPago.getMonth() === fecha.getMonth() && 
+             fechaPago.getFullYear() === fecha.getFullYear();
+    }).reduce((sum, p) => sum + safeNumber(p.amount), 0);
+    
+    if (citasMes.length > 0) {
+      tendenciaServicios.push({
+        mes,
+        servicio: service.name,
+        cantidad: citasMes.length,
+        ingresos: ingresosMes
+      });
+    }
+  });
+}
+  
+  // Trabajos por etapa
+  const trabajosPorEtapa = trabajosLab.reduce((acc, t) => {
+    acc[t.etapa || 'Sin etapa'] = (acc[t.etapa || 'Sin etapa'] || 0) + 1;
+    return acc;
+  }, {});
+  
+  console.log(`  ✅ Métricas calculadas: $${ingresos} ingresos, ${citasAtendidas}/${totalCitas} citas`);
+  
+  return {
+    financieras: {
+      ingresos,
+      gastos,
+      utilidad,
+      margenUtilidad,
+      ingresosLaboratorio,
+      abonosLaboratorio,
+      saldosPendientes,
+      metodosPago
+    },
+    operacionales: {
+      totalCitas,
+      citasAtendidas,
+      citasCanceladas,
+      citasPendientes,
+      tasaConversion,
+      pacientesUnicos,
+      citasPorDia: Object.values(citasPorDia).sort((a, b) => new Date(a.fecha) - new Date(b.fecha))
+    },
+    inventario: {
+      totalProductos,
+      productosStockBajo,
+      productosAgotados,
+      valorInventario,
+      eficienciaStock,
+      alertasCriticas: productosAgotados + productosStockBajo
+    },
+    laboratorio: {
+      trabajosTotal: trabajosLaboratorio,
+      trabajosCompletados,
+      trabajosPendientes,
+      presupuestoTotal: ingresosLaboratorio,
+      abonosRecibidos: abonosLaboratorio,
+      saldosPendientes,
+      eficiencia: trabajosLaboratorio > 0 ? (trabajosCompletados / trabajosLaboratorio) * 100 : 0,
+      trabajosPorEtapa
+    },
+    doctores: metricasDoctores,
+    servicios: {
+  serviciosActivos: services.length,
+  servicioMasVendido,
+  ingresosPorServicio: servicioStats.ingresosPorServicio,
+  cantidadPorServicio: servicioStats.cantidadPorServicio,
+  margenPorServicio: servicioStats.margenPorServicio,
+  tiempoPromedioPorServicio: servicioStats.tiempoPromedioPorServicio,
+  satisfaccionPorServicio: servicioStats.satisfaccionPorServicio,
+  tendenciaServicios
+}
+  };
+}
+
+// ==============================================
+// FUNCIÓN AUXILIAR: Servicio más vendido
+// ==============================================
+function findMostUsedService(appointments, services) {
+  const serviceCounts = {};
+  
+  appointments.forEach(apt => {
+    if (apt.service_id) {
+      serviceCounts[apt.service_id] = (serviceCounts[apt.service_id] || 0) + 1;
+    }
+  });
+  
+  const mostUsedServiceId = Object.keys(serviceCounts).reduce((max, current) => 
+    serviceCounts[current] > (serviceCounts[max] || 0) ? current : max, 
+    Object.keys(serviceCounts)[0]
+  );
+  
+  const mostUsedService = services.find(s => s.id == mostUsedServiceId);
+  return mostUsedService?.name || 'N/A';
+}
+
+// ==============================================
+// ENDPOINTS ESPECÍFICOS PARA INVENTARIO Y SERVICIOS
+// ==============================================
+
+// Inventario por sucursal
+app.get('/api/inventario/:sucursalId', ah(async (req, res) => {
+  const { sucursalId } = req.params;
+  
+  try {
+    const productos = await q(`
+      SELECT 
+        *,
+        (COALESCE(stock, quantity, 0) * COALESCE(price, 0)) as valor_total,
+        CASE 
+          WHEN COALESCE(stock, quantity, 0) = 0 THEN 'agotado'
+          WHEN COALESCE(stock, quantity, 0) <= COALESCE(min_stock, 5) THEN 'bajo'
+          ELSE 'normal'
+        END as stock_status
+      FROM inventory 
+      WHERE sucursal_id = $1 
+      ORDER BY name
+    `, [sucursalId]);
+    
+    // Alertas dinámicas basadas en stock
+    const productosProblematicos = productos.rows.filter(p => p.stock_status !== 'normal');
+    const alertas = productosProblematicos.map(p => ({
+      id: `alert_${p.id}`,
+      producto_id: p.id,
+      tipo: p.stock_status,
+      mensaje: p.stock_status === 'agotado' ? 
+        `${p.name} está agotado` : 
+        `${p.name} tiene stock bajo (${p.stock || p.quantity})`,
+      prioridad: p.stock_status === 'agotado' ? 3 : 2,
+      resuelta: false
+    }));
+    
+    res.json({
+      ok: true,
+      data: {
+        productos: productos.rows,
+        alertas: alertas
+      }
+    });
+    
+  } catch (error) {
+    console.error('Error en inventario:', error);
+    res.json({ 
+      ok: false, 
+      data: { productos: [], alertas: [] },
+      error: error.message 
+    });
+  }
+}));
+
+// Servicios detallados por sucursal
+app.get('/api/servicios/:sucursalId', ah(async (req, res) => {
+  const { sucursalId } = req.params;
+  const { fecha_inicio, fecha_fin } = req.query;
+  
+  try {
+    // Servicios básicos
+    const servicios = await q(`
+      SELECT * FROM services 
+      WHERE sucursal_id = $1 
+      ORDER BY name
+    `, [sucursalId]);
+    
+    // Estadísticas de uso (citas por servicio)
+    const { dateFilter, params } = buildDateFilter(fecha_inicio, fecha_fin, 'date');
+    const estadisticas = await q(`
+      SELECT 
+        s.id,
+        s.name,
+        s.price,
+        COUNT(a.id) as cantidad_vendida,
+        SUM(p.amount) as ingresos_total
+      FROM services s
+      LEFT JOIN appointments a ON s.id = a.service_id 
+        AND a.sucursal_id = $1 ${dateFilter}
+      LEFT JOIN payments p ON a.id = p.appointment_id
+      WHERE s.sucursal_id = $1
+      GROUP BY s.id, s.name, s.price
+      ORDER BY cantidad_vendida DESC
+    `, [sucursalId, ...params]);
+    
+    res.json({
+      servicios: servicios.rows,
+      estadisticas: estadisticas.rows
+    });
+    
+  } catch (error) {
+    console.error('Error en servicios:', error);
+    res.json({ servicios: [], estadisticas: [] });
+  }
+}));
+
+// ==============================================
+// ENDPOINT: Comparación Global
+// ==============================================
+app.get('/api/dashboard/comparacion', ah(async (req, res) => {
+  const { fecha_inicio, fecha_fin } = req.query;
+  
+  try {
+    // Obtener datos de ambas sucursales
+    const sucursal1 = await getDashboardData('sucursal_1', fecha_inicio, fecha_fin);
+    const sucursal2 = await getDashboardData('sucursal_2', fecha_inicio, fecha_fin);
+    
+    // También incluir MELISSA si está configurada
+    let melissa = null;
+    if (qMelissa) {
+      try {
+        melissa = await getDashboardDataMelissa(fecha_inicio, fecha_fin);
+      } catch (error) {
+        console.log('Error obteniendo datos de Melissa:', error.message);
+      }
+    }
+    
+    const sucursales = [sucursal1, sucursal2];
+    if (melissa) sucursales.push(melissa);
+    
+    res.json({
+      periodo: { fecha_inicio, fecha_fin },
+      sucursales,
+      resumen: {
+        totalIngresos: sucursales.reduce((sum, s) => sum + s.metricas.financieras.ingresos, 0),
+        totalUtilidad: sucursales.reduce((sum, s) => sum + s.metricas.financieras.utilidad, 0),
+        totalCitas: sucursales.reduce((sum, s) => sum + s.metricas.operacionales.totalCitas, 0),
+        totalPacientes: sucursales.reduce((sum, s) => sum + s.metricas.operacionales.pacientesUnicos, 0)
+      }
+    });
+    
+  } catch (error) {
+    console.error('Error en comparación:', error);
+    res.status(500).json({ error: error.message });
+  }
+}));
+
+console.log('✅ Endpoints del Dashboard Global agregados');
+
+// AGREGA ESTE ENDPOINT TEMPORAL AL FINAL DE TU server.js (antes de app.listen)
+
+app.get('/api/debug/dashboard/:sucursalId', ah(async (req, res) => {
+  const { sucursalId } = req.params;
+  const { fecha_inicio, fecha_fin } = req.query;
+  
+  try {
+    console.log(`🔍 DEBUG Dashboard: ${sucursalId}, fechas: ${fecha_inicio} a ${fecha_fin}`);
+    
+    // Consulta directa sin filtro de fechas
+    const allAppointments = await q(`
+      SELECT COUNT(*) as total, MIN(date) as min_date, MAX(date) as max_date
+      FROM appointments 
+      WHERE sucursal_id = $1
+    `, [sucursalId]);
+    
+    // Consulta CON filtro de fechas
+    const filteredAppointments = await q(`
+      SELECT COUNT(*) as total, MIN(date) as min_date, MAX(date) as max_date
+      FROM appointments 
+      WHERE sucursal_id = $1 
+      AND date >= CAST($2 AS date) 
+      AND date <= CAST($3 AS date)
+    `, [sucursalId, fecha_inicio, fecha_fin]);
+    
+    // Lo mismo para pagos
+    const allPayments = await q(`
+      SELECT COUNT(*) as total, MIN(date) as min_date, MAX(date) as max_date
+      FROM payments 
+      WHERE sucursal_id = $1
+    `, [sucursalId]);
+    
+    const filteredPayments = await q(`
+      SELECT COUNT(*) as total, MIN(date) as min_date, MAX(date) as max_date
+      FROM payments 
+      WHERE sucursal_id = $1 
+      AND date >= CAST($2 AS date) 
+      AND date <= CAST($3 AS date)
+    `, [sucursalId, fecha_inicio, fecha_fin]);
+    
+    // Algunos registros de ejemplo
+    const sampleAppointments = await q(`
+      SELECT id, patient, date, status, service_id, doctor_id
+      FROM appointments 
+      WHERE sucursal_id = $1 
+      ORDER BY date DESC 
+      LIMIT 3
+    `, [sucursalId]);
+    
+    const samplePayments = await q(`
+      SELECT id, amount, payment_method, date, appointment_id
+      FROM payments 
+      WHERE sucursal_id = $1 
+      ORDER BY date DESC 
+      LIMIT 3
+    `, [sucursalId]);
+    
+    res.json({
+      sucursalId,
+      fechas_solicitadas: { fecha_inicio, fecha_fin },
+      appointments: {
+        sin_filtro: allAppointments.rows[0],
+        con_filtro: filteredAppointments.rows[0],
+        ejemplos: sampleAppointments.rows
+      },
+      payments: {
+        sin_filtro: allPayments.rows[0],
+        con_filtro: filteredPayments.rows[0],
+        ejemplos: samplePayments.rows
+      }
+    });
+    
+  } catch (error) {
+    console.error('🚨 Error en debug dashboard:', error);
+    res.status(500).json({ 
+      error: error.message,
+      stack: error.stack,
+      sucursalId,
+      fechas: { fecha_inicio, fecha_fin }
+    });
+  }
+}));
+
+console.log('🔍 Endpoint debug agregado: /api/debug/dashboard/:sucursalId');
+
+// 🔹 AGREGAR AQUÍ (antes de la línea 2645):
+// Endpoint de debug para verificar tablas
+app.get('/api/debug/tablas', ah(async (req, res) => {
+  const s = getSucursal(req);
+  
+  try {
+    const resultados = {};
+    const tablas = ['appointments', 'payments', 'expenses', 'doctors', 'services', 'inventory'];
+    
+    for (const tabla of tablas) {
+      try {
+        const count = await q(`SELECT COUNT(*) as total FROM ${tabla} WHERE sucursal_id = $1`, [s]);
+        const sample = await q(`SELECT * FROM ${tabla} WHERE sucursal_id = $1 LIMIT 1`, [s]);
+        
+        resultados[tabla] = {
+          existe: true,
+          count: count.rows[0].total,
+          sample: sample.rows[0] || null
+        };
+      } catch (error) {
+        resultados[tabla] = {
+          existe: false,
+          error: error.message
+        };
+      }
+    }
+    
+    res.json({
+      sucursal: s,
+      tablas: resultados
+    });
+    
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+}));
+
+console.log('   🏥 Historia clínica (/api/historia-clinica/*)');
+console.log('✅ Correcciones aplicadas - Dashboard listo');
+
+
+(async () => {
+  try {
+    // =========================================================
+    // 🧬 MIGRACIONES POR CADA BASE (DB1/DB2/DB3)
+    // =========================================================
+    const runStartupFor = async (pool, dbKey) => {
+      if (!pool) return;
+      await als.run({ pool, dbKey }, async () => {
+        try {
+          await ensureMultiSucursalSchema();
+          await ensureRequiredFields();
+
+          
+          // 🤖 Crear tablas IA (ai_conversations/ai_messages) en cada DB
+          if (aiModule && typeof aiModule.createAiTables === 'function') {
+            try {
+              console.log(`🤖 Iniciando migración IA (${dbKey}).`);
+              await aiModule.createAiTables(q);
+              console.log(`✅ Tablas IA listas (${dbKey})`);
+            } catch (err) {
+              console.error(`❌ Error en migración IA (${dbKey}):`, err);
+            }
+          } else {
+            console.warn(`⚠️ No se pueden crear tablas IA (${dbKey}): módulo no disponible`);
+          }
+
+// Crear tablas médicas si el módulo está disponible
+          if (medicalRecordModule && typeof medicalRecordModule.createMedicalRecordTables === 'function') {
+            console.log(`🏥 Iniciando migración de tablas médicas (${dbKey})...`);
+            try {
+              await medicalRecordModule.createMedicalRecordTables(q);
+              console.log(`✅ Tablas médicas creadas exitosamente (${dbKey})`);
+            } catch (err) {
+              console.error(`❌ Error en migración médica (${dbKey}):`, err);
+            }
+          } else {
+            console.warn(`⚠️ No se pueden crear tablas médicas (${dbKey}): módulo no disponible`);
+          }
+        } catch (err) {
+          console.error(`❌ Error en migraciones startup (${dbKey}):`, err);
+          throw err;
+        }
+      });
+    };
+
+    // Ejecutar en orden
+    await runStartupFor(poolDB1, 'db1');
+    await runStartupFor(poolDB2, 'db2');
+    await runStartupFor(poolDB3, 'db3');
+
+// ==============================
+// 📩 FACEBOOK MESSENGER WEBHOOK
+// (Para mensajes de Facebook Page / Click-to-Messenger)
+// Nota: Click-to-WhatsApp NO pasa por aquí; eso llega por el webhook de WhatsApp.
+// Requiere env:
+//   FB_VERIFY_TOKEN=algo_secreto
+//   FB_PAGE_ACCESS_TOKEN=EAAB...
+// Opcional:
+//   PUBLIC_BASE_URL=https://api.clinicadentalux.app (si no existe, usa req.get('host'))
+// ==============================
+
+const FB_VERIFY_TOKEN = process.env.FB_VERIFY_TOKEN || '';
+// ✅ Tokens por Page ID (recomendado): {"<PAGE_ID>":"<PAGE_TOKEN>", ...}
+const FB_PAGE_TOKENS_JSON = process.env.FB_PAGE_TOKENS_JSON || '';
+// (Compatibilidad) Token único - evita usarlo si manejas varias páginas
+const FB_PAGE_ACCESS_TOKEN = process.env.FB_PAGE_ACCESS_TOKEN || '';
+
+function getFbPageToken(pageId) {
+  const pid = String(pageId || '').trim();
+  if (FB_PAGE_TOKENS_JSON) {
+    try {
+      const map = JSON.parse(FB_PAGE_TOKENS_JSON);
+      const tok = map && map[pid];
+      if (tok) return String(tok);
+    } catch (e) {
+      console.warn('⚠️ FB_PAGE_TOKENS_JSON inválido; debe ser JSON.');
+    }
+  }
+  return FB_PAGE_ACCESS_TOKEN || '';
+}
+
+const MESSENGER_CONSULTORIO_PAGE_IDS = String(process.env.MESSENGER_CONSULTORIO_PAGE_IDS || '')
+  .split(',').map(s => s.trim()).filter(Boolean);
+
+const MESSENGER_DETALLES_PAGE_IDS = String(process.env.MESSENGER_DETALLES_PAGE_IDS || '')
+  .split(',').map(s => s.trim()).filter(Boolean);
+
+
+function getPublicBaseUrl(req) {
+  const envUrl = process.env.PUBLIC_BASE_URL;
+  if (envUrl) return envUrl.replace(/\/$/, '');
+  const proto = (req.headers['x-forwarded-proto'] || 'https').toString();
+  const host = req.get('host');
+  return `${proto}://${host}`;
+}
+
+async function fbSendText(psid, text, pageId) {
+  const token = getFbPageToken(pageId);
+  if (!token) {
+    console.warn('⚠️ No hay token para responder Messenger (FB_PAGE_TOKENS_JSON/FB_PAGE_ACCESS_TOKEN). pageId=', String(pageId||''));
+    return;
+  }
+
+  // Preferimos /{pageId}/messages (más consistente). Si no hay pageId, caemos a /me/messages.
+  const targetId = String(pageId || 'me').trim() || 'me';
+  const url = `https://graph.facebook.com/v20.0/${encodeURIComponent(targetId)}/messages`;
+
+  const body = {
+    recipient: { id: psid },
+    messaging_type: 'RESPONSE',
+    message: { text: String(text || '').slice(0, 1800) }
+  };
+
+  const r = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`
+    },
+    body: JSON.stringify(body)
+  });
+
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    console.error('❌ Error enviando a Messenger:', r.status, j);
+  }
+}
+
+async function callAiChatFromServer({ phone, message, channel, extra = {} }, req) {
+  // Llama al endpoint local /api/ai/chat para reutilizar el mismo flujo IA
+  const baseUrl = getPublicBaseUrl(req);
+  const url = `${baseUrl}/api/ai/chat`;
+
+  const store = als.getStore?.() ? als.getStore() : null;
+  const dbKey = store?.dbKey || pickDbKey(req);
+  const sucursal = store?.sucursal || getSucursal(req);
+
+  const headers = { 'Content-Type': 'application/json' };
+  if (dbKey) headers['x-db'] = String(dbKey);
+  // Para Messenger evitamos forzar x-sucursal, para que el usuario pueda elegir sucursal en el flujo IA.
+  if (sucursal && channel !== 'messenger') headers['x-sucursal'] = String(sucursal);
+
+  // Propaga aislamiento IA si viene en la request actual
+  const pn =
+    req.headers['x-wa-phone-number-id'] ||
+    req.headers['x-phone-number-id'] ||
+    req.query?.phone_number_id;
+  if (pn) headers['x-wa-phone-number-id'] = String(pn);
+
+  const payload = {
+    phone,
+    message,
+    channel: channel || 'facebook',
+    ...extra
+  };
+
+  const r = await fetch(url, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(payload)
+  });
+  const j = await r.json().catch(() => ({}));
+  return j;
+}
+
+// Verificación del webhook (Meta/FB)
+
+// =============================
+// Messenger Webhook (Facebook)
+// =============================
+
+// Cache en memoria: PSID -> conversationId
+const FB_CONV_CACHE = new Map();
+
+async function getOrCreateFbConversationId(psid, pageId, req) {
+  if (FB_CONV_CACHE.has(psid)) return FB_CONV_CACHE.get(psid);
+
+  const baseUrl = getPublicBaseUrl(req);
+  const createUrl = `${baseUrl}/api/ai/conversations`;
+
+  const store = als.getStore?.() ? als.getStore() : null;
+  const dbKey = store?.dbKey || pickDbKey(req);
+
+  const headers = { 'Content-Type': 'application/json' };
+  if (dbKey) headers['x-db'] = String(dbKey);
+  if (pageId) headers['x-wa-phone-number-id'] = String(pageId);
+  headers['x-sucursal'] = 'sucursal_1';
+
+  const r = await fetch(createUrl, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ title: `fb_${psid}` })
+  });
+
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || !j?.id) {
+    console.error('❌ No pude crear conversación IA para Messenger:', r.status, j);
+    return null;
+  }
+
+  FB_CONV_CACHE.set(psid, j.id);
+  return j.id;
+}
+
+async function callSalesAiForMessenger(senderId, pageId, msgText, req) {
+  // Reutiliza el flujo del router de ventas (leads + IA) para Messenger.
+  // 1) /api/sales/leads/ensure  -> crea/obtiene lead por (messenger, senderId)
+  // 2) /api/sales/leads/:id/messages -> genera respuesta y guarda historial
+  const safeText = String(msgText || '').trim();
+  if (!safeText) return { reply: '' };
+
+  // Determinar baseUrl confiable
+  // OJO: para llamadas "a sí mismo" desde un webhook, SIEMPRE es más seguro usar el host del request entrante,
+  // porque PUBLIC_BASE_URL suele apuntar al FRONTEND (static) y eso provoca 404 "Cannot POST ...".
+  const envBase = process.env.PUBLIC_BASE_URL || process.env.RENDER_EXTERNAL_URL || '';
+  const reqBase = req ? `${(req.get('x-forwarded-proto') || req.protocol)}://${req.get('host')}` : '';
+  const baseUrl = reqBase || envBase || '';
+
+  const headers = { 'Content-Type': 'application/json' };
+
+  // 1) Ensure lead
+  const ensureResp = await fetch(`${baseUrl}/api/sales/leads/ensure`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      contact_pref: 'messenger',
+      contact_value: String(senderId),
+      notes: pageId ? `[Messenger] page_id=${pageId}` : '[Messenger]'
+    })
+  });
+
+  if (!ensureResp.ok) {
+    const t = await ensureResp.text().catch(() => '');
+    throw new Error(`ensure lead failed: ${ensureResp.status} ${t}`);
+  }
+
+  const ensureJson = await ensureResp.json();
+  const leadId = ensureJson?.lead?.id;
+  if (!leadId) throw new Error('ensure lead: missing lead.id');
+
+  // 2) Send message to lead pipeline
+  const msgResp = await fetch(`${baseUrl}/api/sales/leads/${leadId}/messages`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      message: safeText,
+      meta: { channel: 'messenger', senderId: String(senderId), pageId: String(pageId || '') }
+    })
+  });
+
+  if (!msgResp.ok) {
+    const t = await msgResp.text().catch(() => '');
+    throw new Error(`lead message failed: ${msgResp.status} ${t}`);
+  }
+
+  return await msgResp.json();
+}
+
+
+async function callDetallesAiForMessenger(senderId, pageId, msgText, req) {
+  // Reutiliza el flujo del router de DETALLES (leads + IA) para Messenger.
+  // 1) /api/detalles/leads/ensure  -> crea/obtiene lead por (messenger, senderId)
+  // 2) /api/detalles/leads/:id/messages -> genera respuesta y guarda historial
+  const safeText = String(msgText || '').trim();
+  if (!safeText) return { reply: '' };
+
+  const envBase = process.env.PUBLIC_BASE_URL || process.env.RENDER_EXTERNAL_URL || '';
+  const reqBase = req ? `${(req.get('x-forwarded-proto') || req.protocol)}://${req.get('host')}` : '';
+  const baseUrl = reqBase || envBase || '';
+
+  const headers = { 'Content-Type': 'application/json' };
+
+  // 1) Ensure lead
+  const ensureResp = await fetch(`${baseUrl}/api/detalles/leads/ensure`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      contact_pref: 'messenger',
+      contact_value: String(senderId),
+      notes: pageId ? `[Messenger] page_id=${pageId}` : '[Messenger]'
+    })
+  });
+
+  if (!ensureResp.ok) {
+    const t = await ensureResp.text().catch(() => '');
+    throw new Error(`[detalles] ensure lead failed: ${ensureResp.status} ${t}`);
+  }
+
+  const ensureJson = await ensureResp.json();
+  const leadId = ensureJson?.lead?.id;
+  if (!leadId) throw new Error('[detalles] ensure lead: missing lead.id');
+
+  // 2) Send message to lead pipeline
+  const msgResp = await fetch(`${baseUrl}/api/detalles/leads/${leadId}/messages`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      message: safeText,
+      meta: { channel: 'messenger', senderId: String(senderId), pageId: String(pageId || '') }
+    })
+  });
+
+  if (!msgResp.ok) {
+    const t = await msgResp.text().catch(() => '');
+    throw new Error(`[detalles] lead message failed: ${msgResp.status} ${t}`);
+  }
+
+  return await msgResp.json();
+}
+
+
+function _dbKeyForMessengerPageId(pageId) {
+  const pid = String(pageId || '').trim();
+  if (!pid) return null;
+  const fb1 = String(process.env.DB1_FB_PAGE_IDS || '').split(',').map(s => s.trim()).filter(Boolean);
+  const fb2 = String(process.env.DB2_FB_PAGE_IDS || '').split(',').map(s => s.trim()).filter(Boolean);
+  const fb3 = String(process.env.DB3_FB_PAGE_IDS || '').split(',').map(s => s.trim()).filter(Boolean);
+  if (fb2.includes(pid)) return 'db2';
+  if (fb3.includes(pid)) return 'db3';
+  if (fb1.includes(pid)) return 'db1';
+  return null;
+}
+
+function _poolForDbKey(dbKey) {
+  if (dbKey === 'db2' && poolDB2) return poolDB2;
+  if (dbKey === 'db3' && poolDB3) return poolDB3;
+  return poolDB1;
+}
+
+async function getOrCreateAiConversationIdForMessenger(pageId, psid, dbKey) {
+  const pool = _poolForDbKey(dbKey);
+  const pid = String(pageId || '').trim();
+  const sid = String(psid || '').trim();
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS messenger_threads (
+      id SERIAL PRIMARY KEY,
+      page_id TEXT NOT NULL,
+      psid TEXT NOT NULL,
+      conversation_id INTEGER,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(page_id, psid)
+    )
+  `);
+
+  const found = await pool.query(
+    `SELECT conversation_id FROM messenger_threads WHERE page_id=$1 AND psid=$2 LIMIT 1`,
+    [pid, sid]
+  );
+
+  if (found.rows?.[0]?.conversation_id) return Number(found.rows[0].conversation_id);
+
+  const title = `Messenger:${pid}:${sid}`.slice(0, 200);
+
+  const created = await pool.query(
+    `INSERT INTO ai_conversations(title, sucursal_id, phone_number_id)
+     VALUES ($1, NULL, $2)
+     RETURNING id`,
+    [title, pid] // phone_number_id = pageId (aislar por página)
+  );
+
+  const convId = Number(created.rows[0].id);
+
+  await pool.query(
+    `INSERT INTO messenger_threads(page_id, psid, conversation_id)
+     VALUES ($1,$2,$3)
+     ON CONFLICT (page_id, psid) DO UPDATE SET conversation_id=EXCLUDED.conversation_id`,
+    [pid, sid, convId]
+  );
+
+  return convId;
+}
+
+async function callClinicAiForMessenger(senderId, pageId, msgText, req) {
+  const safeText = String(msgText || '').trim();
+  if (!safeText) return { reply: '' };
+
+  const dbKey = _dbKeyForMessengerPageId(pageId) || pickDbKey(req) || 'db1';
+  const conversationId = await getOrCreateAiConversationIdForMessenger(pageId, senderId, dbKey);
+
+  // Llama al mismo endpoint /api/ai/chat de este server (usa x-db para que caiga en la DB correcta)
+  const headers = { 'Content-Type': 'application/json', 'x-db': String(dbKey), 'x-wa-phone-number-id': String(pageId||''), 'x-from': String(senderId||'') };
+
+  const resp = await fetch(`${getPublicBaseUrl(req)}/api/ai/chat`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ conversationId, message: safeText, channel: 'messenger', pageId: String(pageId||'') })
+  });
+
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) {
+    console.error('❌ [messenger][clinic] /api/ai/chat error', resp.status, data);
+    return { reply: data?.reply || 'Estoy teniendo un problema técnico. Intenta de nuevo.' };
+  }
+  return data;
+}
+
+async function callAiChatForMessenger(senderId, pageId, msgText, req) {
+  const pid = String(pageId || '').trim();
+  const isClinic = MESSENGER_CONSULTORIO_PAGE_IDS.includes(pid);
+  if (isClinic) return await callClinicAiForMessenger(senderId, pid, msgText, req);
+
+  const isDetalles = MESSENGER_DETALLES_PAGE_IDS.includes(pid);
+  if (isDetalles) return await callDetallesAiForMessenger(senderId, pid, msgText, req);
+
+  return await callSalesAiForMessenger(senderId, pid, msgText, req);
+}
+
+// Verificación del webhook (Meta/FB)
+app.get('/api/messenger/webhook', (req, res) => {
+  const mode = req.query['hub.mode'];
+  const token = req.query['hub.verify_token'];
+  const challenge = req.query['hub.challenge'];
+  if (mode === 'subscribe' && token && token === FB_VERIFY_TOKEN) {
+    console.log('✅ Messenger webhook verificado');
+    return res.status(200).send(challenge);
+  }
+  return res.sendStatus(403);
+});
+
+// Recepción de eventos
+app.post('/api/messenger/webhook', async (req, res) => {
+  try {
+    const body = req.body;
+
+    // Responde rápido a Meta
+    res.sendStatus(200);
+
+    if (!body || body.object !== 'page' || !Array.isArray(body.entry)) return;
+
+    for (const entry of body.entry) {
+      const messaging = entry.messaging || [];
+      for (const event of messaging) {
+        const senderId = event?.sender?.id;
+
+        // Texto normal
+        let msgText = event?.message?.text;
+
+        // También soporta botones / postbacks
+        if (!msgText && event?.postback?.payload) msgText = String(event.postback.payload);
+        if (!msgText && event?.message?.quick_reply?.payload) msgText = String(event.message.quick_reply.payload);
+
+        // Ignora eco (mensajes que enviamos nosotros)
+        if (event?.message?.is_echo) continue;
+        if (!senderId || !msgText) continue;
+
+        const ai = await callAiChatForMessenger(senderId, entry?.id, String(msgText).trim(), req);
+
+        const reply =
+          ai?.reply ||
+          ai?.message ||
+          ai?.text ||
+          (ai?.error ? 'Estoy teniendo un problema técnico. Intenta de nuevo.' : 'Gracias. ¿Te ayudo a agendar o necesitas información?');
+
+        await fbSendText(senderId, reply, entry?.id);
+      }
+    }
+  } catch (e) {
+    console.error('❌ Error Messenger webhook:', e);
+    // ya respondimos 200 arriba
+  }
+});
+
+
+
+// ===================== CliniqOne Sales AI (Facebook / Web) =====================
+// Monta un módulo de "ventas" independiente (no sucursal), que usa el mismo /api/ai/chat del server central.
+// Requiere: ./cliniqone_sales_router.js (incluido en tu repo) y (opcional) SALES_DATABASE_URL para elegir DB.
+//
+// Variables recomendadas en Render:
+// - SALES_DATABASE_URL: (la DB donde guardar leads/ventas; por tu caso debe ser DB2)
+// - PUBLIC_BASE_URL o RENDER_EXTERNAL_URL: URL pública del server central (para que el router se llame a sí mismo)
+//
+// Nota: NO toca WhatsApp, ni el flujo de citas; esto solo agrega /api/sales/*.
+let _cliniqOneSalesRouterMounted = false;
+try {
+  const { createCliniqOneSalesRouter } = require('./cliniqone_sales_router');
+
+  const publicBaseUrl =
+    process.env.PUBLIC_BASE_URL ||
+    process.env.RENDER_EXTERNAL_URL ||
+    (process.env.PORT ? `http://localhost:${process.env.PORT}` : 'http://localhost:4001');
+
+  // Por defecto, el router guarda leads en SALES_DATABASE_URL.
+  // Si NO la pones, usará DATABASE_URL_DB3 o DATABASE_URL como fallback (según el router).
+  const salesRouter = createCliniqOneSalesRouter({
+    centralAiBaseUrl: publicBaseUrl,
+    centralAiSecret: process.env.CENTRAL_AI_SECRET || process.env.AI_SECRET || '',
+    databaseUrl: process.env.SALES_DATABASE_URL || '',
+    // Si quieres forzar que siempre use DB2 desde el router sin tocar env:
+    // forceDbKey: 'db2'
+  });
+
+  app.use('/api/sales', salesRouter);
+  _cliniqOneSalesRouterMounted = true;
+  console.log('✅ /api/sales montado (CliniqOne Sales AI)');
+} catch (e) {
+  console.log('⚠️ No se montó /api/sales (cliniqone_sales_router no encontrado o error):', e?.message || e);
+}
+
+
+// ===================== Detalles Sales AI (Facebook / Messenger) =====================
+// Monta un módulo de "ventas" para páginas de DETALLES / arreglos especiales.
+// Requiere: ./detalles_sales_router.js
+//
+// Variables recomendadas en Render:
+// - DETALLES_DATABASE_URL: DB donde guardar leads/mensajes (si no se define, usa SALES_DATABASE_URL o DATABASE_URL_DB2)
+// - MESSENGER_DETALLES_PAGE_IDS: IDs de página (separados por comas) que deben usar este router
+// - FB_PAGE_TOKENS_JSON: {"<PAGE_ID>":"<TOKEN>", ...} para poder responder con el token correcto por página
+let _detallesSalesRouterMounted = false;
+try {
+  const { createDetallesSalesRouter } = require('./detalles_sales_router');
+
+  const publicBaseUrlDet =
+    process.env.PUBLIC_BASE_URL ||
+    process.env.RENDER_EXTERNAL_URL ||
+    (process.env.PORT ? `http://localhost:${process.env.PORT}` : 'http://localhost:4001');
+
+  const detallesRouter = createDetallesSalesRouter({
+    centralAiBaseUrl: publicBaseUrlDet,
+    centralAiSecret: process.env.CENTRAL_AI_SECRET || process.env.AI_SECRET || '',
+    databaseUrl: process.env.DETALLES_DATABASE_URL || process.env.SALES_DATABASE_URL || '',
+  });
+
+  app.use('/api/detalles', detallesRouter);
+  _detallesSalesRouterMounted = true;
+  console.log('✅ /api/detalles montado (Detalles Sales AI)');
+} catch (e) {
+  console.log('⚠️ No se montó /api/detalles (detalles_sales_router no encontrado o error):', e?.message || e);
+}
+// ===============================================================================
+// ===============================================================================
+
+
+app.listen(PORT, '0.0.0.0', () => {
+      console.log(`🚀 Dentalux API corriendo en http://0.0.0.0:${PORT}`);
+      console.log('📊 Base(s) de datos conectada(s):');
+      console.log('   ✅ DB1 (DATABASE_URL_DB1/DATABASE_URL)');
+      if (poolDB2) console.log('   ✅ DB2 (DATABASE_URL_DB2)');
+      if (poolDB3) console.log('   ✅ DB3 (DATABASE_URL_DB3)');
+
+      if (medicalRecordModule) {
+        console.log('   🏥 Historia clínica (/api/expediente-medico/*)');
+      } else {
+        console.log('   ❌ Historia clínica (NO DISPONIBLE)');
+      }
+
+      console.log('\n🔗 URLs de prueba:');
+      console.log(`   • Health check: http://localhost:${PORT}/api/health`);
+      console.log(`   • Test médico: http://localhost:${PORT}/api/expediente-medico/test`);
+    });
+  } catch (e) {
+    console.error('Error al iniciar:', e);
+    process.exit(1);
+  }
+})();

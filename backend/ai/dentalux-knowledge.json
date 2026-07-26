@@ -1,0 +1,364 @@
+{
+  "clinica": {
+    "nombre": "Clínica Dentalux",
+    "anos_experiencia": 5,
+    "fundacion": 2020,
+    "fundador": "Dra. Yaneth Caballero Ruelas",
+    "mision": "Brindar servicios odontológicos de alta calidad, accesibles y personalizados, utilizando tecnología de vanguardia y un equipo humano altamente capacitado. Nuestra misión es prevenir, tratar y embellecer la salud bucal, ofreciendo atención integral con empatía, ética y compromiso para garantizar sonrisas saludables y pacientes satisfechos.",
+    "vision": "Ser reconocidos como la clínica dental líder en salud bucal integral, destacando por nuestra innovación tecnológica, trato humano y excelencia profesional. Queremos transformar la experiencia odontológica en confianza, seguridad y bienestar, creando sonrisas sanas y felices que mejoren la calidad de vida de nuestros pacientes.",
+    "valores": [
+      "Ética y honestidad: Transparencia en cada diagnóstico y tratamiento",
+      "Excelencia profesional: Capacitación continua y actualización científica",
+      "Calidez humana: Trato cercano, amable y empático",
+      "Innovación: Incorporación de tecnología avanzada",
+      "Prevención: Educación en salud bucal desde la primera visita",
+      "Compromiso social: Contribuir al bienestar de la comunidad",
+      "Seguridad y confianza: Ambiente seguro, higiénico y confortable"
+    ],
+    "historia": "La Clínica Dental nació en el año 2020, en medio de la pandemia por COVID-19. En un escenario lleno de incertidumbre, entendimos que la salud no podía detenerse. Con esfuerzo, pasión y compromiso, abrimos nuestras puertas implementando estrictos protocolos de bioseguridad. Los primeros meses fueron difíciles, pero nos llenaron de aprendizaje. Hoy, seguimos creciendo con la misma visión: crear sonrisas sanas y felices.",
+    "evolucion": "Iniciamos con una sucursal en Condesa en 2020. 5 años después, en 2025, abrimos segunda unidad en Victoria.",
+    "logros": "Más de 1000 pacientes atendidos en 5 años de experiencia"
+  },
+  
+  "sucursales": {
+    "victoria": {
+      "nombre": "Sucursal Victoria",
+      "direccion": "Anillo Periférico 424A, Victoria Residencial",
+      "ciudad": "Mexicali",
+      "estado": "Baja California",
+      "codigo_postal": "21395",
+      "referencias": "Entre calle Paseo Afrodita y Paseo de las Bárcenas, frente a Boulevard principal anillo periférico que conecta con Lázaro Cárdenas",
+      "google_maps": "https://www.google.com/maps/search/dentalux/@32.5973249,-115.3496908,17z?entry=ttu&g_ep=EgoyMDI1MDkyMy4wIKXMDSoASAFQAw%3D%3D",
+      "como_llegar": {
+        "auto_desde_lazaro_cardenas": "Por periférico hacia Victoria residencial, girar en Modelorama, conecta directo al edificio en la esquina con nuestro anuncio",
+        "auto_desde_rio_verde": "Gira por Periférico directo a Lázaro Cárdenas, conecta directo a nuestro anuncio"
+      },
+      "estacionamiento": true,
+      "estacionamiento_gratuito": true,
+      "accesibilidad": "Planta baja",
+      "horarios": {
+        "lunes_viernes": "8:30 AM - 8:00 PM",
+        "sabado": "9:00 AM - 2:00 PM",
+        "domingo": "Cerrado",
+        "festivos": "Cerrado"
+      },
+      "contacto": {
+        "telefono": "+52 686 311 2623",
+        "whatsapp": "+52 686 311 2623",
+        "email": "info@dental-ux.clinic"
+      }
+    },
+    "condesa": {
+      "nombre": "Sucursal Condesa",
+      "direccion": "Babel 1300 Local 6, Condesa",
+      "ciudad": "Mexicali",
+      "estado": "Baja California",
+      "codigo_postal": "21395",
+      "referencias": "Entre calle Paseo de las Bárcenas y Genecias, Plaza Victoria, entre ferretería y pizzería",
+      "google_maps": "https://www.google.com/maps/place/Consultorio+Dentalux/@32.594545,-115.3478534,18z/data=!4m10!1m2!2m1!1sdentalux!3m6!1s0x80d775dc4333c2d3:0x1c16966c1d9c2d34!8m2!3d32.5946896!4d-115.3456433",
+      "como_llegar": {
+        "auto": "Entrada principal de Condesa por anillo periférico, gira a la derecha hacia Paseo de las Bárcenas, gira a la derecha en calle Babel, ahí está la plaza y conecta directo con nuestro anuncio"
+      },
+      "estacionamiento": true,
+      "estacionamiento_gratuito": true,
+      "accesibilidad": "Planta baja",
+      "horarios": {
+        "lunes_viernes": "8:30 AM - 8:00 PM",
+        "sabado": "9:00 AM - 2:00 PM",
+        "domingo": "Cerrado",
+        "festivos": "Cerrado"
+      },
+      "contacto": {
+        "telefono": "+52 667 343 4222",
+        "whatsapp": "+52 667 343 4222",
+        "email": "info@dental-ux.clinic"
+      }
+    }
+  },
+  
+  "equipo_medico": [
+    {
+      "nombre": "Dra. Yaneth Caballero Ruelas",
+      "especialidad": "Odontología General",
+      "universidad": "Ciudad Universitaria",
+      "anos_experiencia": 10,
+      "areas_especializacion": ["Estética", "Rehabilitación"],
+      "idiomas": ["Español", "Inglés"],
+      "atiende_en": ["victoria", "condesa"],
+      "horarios": "Lunes a Sábado - Agenda libre"
+    },
+    {
+      "nombre": "Dra. Yara Ruth Caballero",
+      "especialidad": "Odontología General",
+      "universidad": "Ciudad Universitaria",
+      "anos_experiencia": 10,
+      "areas_especializacion": ["Estética", "Rehabilitación"],
+      "idiomas": ["Español", "Inglés"],
+      "atiende_en": ["victoria", "condesa"],
+      "horarios": "Lunes a Sábado - Agenda libre"
+    },
+    {
+      "nombre": "Dra. Paoly Mariney Ruelas Aguilasocho",
+      "especialidad": "Odontología General",
+      "universidad": "Universidad Autónoma de Baja California",
+      "anos_experiencia": 7,
+      "areas_especializacion": ["Estética", "Rehabilitación"],
+      "idiomas": ["Español", "Inglés"],
+      "atiende_en": ["condesa"],
+      "horarios": "Lunes a Viernes 2:00 PM - 8:00 PM, Sábado 9:00 AM - 2:00 PM"
+    },
+    {
+      "nombre": "Dra. Angela Velarde Díaz",
+      "especialidad": "Odontología General",
+      "universidad": "Universidad Autónoma de Baja California",
+      "anos_experiencia": 6,
+      "areas_especializacion": ["Estética", "Rehabilitación"],
+      "idiomas": ["Español", "Inglés"],
+      "atiende_en": ["condesa"],
+      "horarios": "Lunes a Viernes 2:00 PM - 8:00 PM, Sábado 9:00 AM - 2:00 PM"
+    }
+  ],
+  
+  "especialidades_disponibles": [
+    "Endodoncia",
+    "Periodoncia",
+    "Ortodoncia",
+    "Cirugía Oral y Maxilofacial",
+    "Odontopediatría",
+    "Prostodoncia (Prótesis / Rehabilitación Oral)"
+  ],
+  
+  "formas_pago": {
+    "efectivo": true,
+    "tarjeta_debito": true,
+    "tarjeta_credito": {
+      "aceptadas": ["Visa", "Mastercard", "Otras"]
+    },
+    "transferencia": true,
+    "informacion_bancaria": "Consultar en clínica",
+    "seguros": false,
+    "descuentos": "Descuentos y promociones disponibles - consultar en clínica",
+    "planes_pago": "Planes de pagos parciales en ciertos tratamientos - consultar en clínica",
+    "facturacion": true
+  },
+  
+  "contacto_general": {
+    "telefono_principal": "+52 686 311 2623",
+    "whatsapp_victoria": "+52 686 311 2623",
+    "whatsapp_condesa": "+52 667 343 4222",
+    "administrativo": "+52 686 786 5454",
+    "email_general": "info@dental-ux.clinic",
+    "email_quejas": "atencion@dentalux.com.mx",
+    "facebook": "https://www.facebook.com/profile.php?id=100048712634299",
+    "sitio_web": "https://dental-ux.clinic/"
+  },
+  
+  "faqs": {
+    "citas": [
+      {
+        "pregunta": "¿Cómo agendar cita?",
+        "respuesta": "Por WhatsApp 686-818-1201 siguiendo la logística del bot, o en línea directa: Victoria 686-311-2623, Condesa 667-343-4222"
+      },
+      {
+        "pregunta": "¿Política de cancelación?",
+        "respuesta": "Cancelar con 2 horas de anticipación"
+      },
+      {
+        "pregunta": "¿Cargo por no asistir?",
+        "respuesta": "No"
+      },
+      {
+        "pregunta": "¿Qué incluye primera cita?",
+        "respuesta": "Consulta + Rx + Plan de tratamiento"
+      },
+      {
+        "pregunta": "¿Duración cita típica?",
+        "respuesta": "Consulta 30 min, Limpieza 45 min, Tratamientos depende del caso específico"
+      }
+    ],
+    "tratamientos": [
+      {
+        "pregunta": "¿Duele el tratamiento de conducto?",
+        "respuesta": "No, se realiza bajo anestesia local, por lo que es prácticamente indoloro. Después puede haber leve sensibilidad que desaparece en pocos días con analgésicos. Cuidamos tu comodidad y preservamos la salud de tu diente."
+      },
+      {
+        "pregunta": "¿Recuperación después de extracción?",
+        "respuesta": "La recuperación suele tardar de 3 a 5 días. Es importante: reposo relativo, dieta blanda y fría primeras 24h, no fumar, tomar medicación recetada. Aplicar frío local reduce inflamación. Con estos cuidados, cicatrización rápida y sin complicaciones."
+      },
+      {
+        "pregunta": "¿Puedo comer después de una resina?",
+        "respuesta": "Sí, inmediatamente después ya que la resina queda endurecida al instante. Sin embargo, evitar alimentos muy duros o pegajosos durante 24 horas. Buena higiene prolongará la durabilidad del tratamiento."
+      },
+      {
+        "pregunta": "¿Anestesia para limpieza?",
+        "respuesta": "Generalmente no es necesario. Es un procedimiento sencillo e indoloro. En pacientes con encías muy sensibles o inflamación severa, se puede aplicar anestesia local ligera. Adaptamos el procedimiento a tus necesidades."
+      },
+      {
+        "pregunta": "¿Efectos del blanqueamiento?",
+        "respuesta": "Es seguro y efectivo. El efecto más común es ligera sensibilidad dental entre 24-48 horas, temporal y desaparece sola. Recomendamos pastas especiales para sensibilidad y evitar alimentos muy fríos/calientes. Después, sonrisa más blanca sin complicaciones."
+      },
+      {
+        "pregunta": "¿Duración de implante?",
+        "respuesta": "Puede durar muchos años, incluso toda la vida, con buena higiene oral, visitas periódicas y estilo de vida saludable. Al ser de titanio, se integra al hueso de manera segura. Con cuidados adecuados, es la opción más duradera para reemplazar dientes perdidos."
+      }
+    ],
+    "pagos": [
+      {
+        "pregunta": "¿Aceptan seguros?",
+        "respuesta": "Por el momento no contamos con afiliaciones en aseguradoras"
+      },
+      {
+        "pregunta": "¿Hay descuentos?",
+        "respuesta": "Manejamos descuentos y promociones, información directa en clínica"
+      },
+      {
+        "pregunta": "¿Costo tratamiento completo?",
+        "respuesta": "Variable según caso"
+      },
+      {
+        "pregunta": "¿Pago en parcialidades?",
+        "respuesta": "Plan de pagos parciales en ciertos tratamientos, consultar directo en clínica"
+      },
+      {
+        "pregunta": "¿Dan factura?",
+        "respuesta": "Sí"
+      }
+    ],
+    "emergencias": [
+      {
+        "pregunta": "¿Dolor de noche qué hago?",
+        "respuesta": "Atención 24/7: No disponible"
+      },
+      {
+        "pregunta": "¿Urgencias sin cita?",
+        "respuesta": "Sí, horario lunes a viernes 8:30 AM - 8:00 PM, sábado 9:00 AM - 2:00 PM. Sin costo adicional"
+      },
+      {
+        "pregunta": "¿Servicio 24/7?",
+        "respuesta": "No"
+      },
+      {
+        "pregunta": "¿Qué es emergencia?",
+        "respuesta": "Dolor intenso, trauma, hemorragia, infección aguda, diente roto"
+      }
+    ]
+  },
+  
+  "promociones": [
+    {
+      "nombre": "Sonrisa Perfecta",
+      "descripcion": "3 resinas",
+      "precio": 1000,
+      "ahorro_porcentaje": 39,
+      "vigencia": "Hasta agotar existencia",
+      "condiciones": "La promoción se activa al adquirir la tercera resina durante la misma consulta"
+    },
+    {
+      "nombre": "Paquete Familiar",
+      "descripcion": "4 limpiezas a mitad de precio",
+      "precio": 1000,
+      "ahorro_porcentaje": 50
+    },
+    {
+      "nombre": "Paquete Estético",
+      "descripcion": "Blanqueamiento + limpieza",
+      "precio": 1300
+    },
+    {
+      "nombre": "Descuento por Referido",
+      "descripcion": "10% primera consulta para referido"
+    }
+  ],
+  
+  "tips_salud_dental": {
+    "cepillado": {
+      "tecnica": "Técnica de Bass modificada",
+      "descripcion": "Coloca el cepillo en ángulo de 45° hacia la encía, movimientos suaves, cortos y circulares sobre cada diente (externa, interna y superficies de masticación)",
+      "duracion": "Al menos 2 minutos",
+      "frecuencia": "3 veces al día (después de cada comida principal)",
+      "extra": "No olvides cepillar la lengua para reducir bacterias y mantener aliento fresco"
+    },
+    "hilo_dental": {
+      "frecuencia": "Una vez al día, preferiblemente por la noche",
+      "tecnica": "Introduce suavemente entre los dientes, rodeando cada pieza en forma de 'C' y deslizándolo hacia arriba y abajo",
+      "objetivo": "Eliminar placa y restos de alimentos sin dañar encías"
+    },
+    "enjuague": {
+      "tipo": "Con flúor para reforzar esmalte y prevenir caries",
+      "cuando": "Después del cepillado y uso de hilo dental",
+      "duracion": "30 segundos sin tragar",
+      "espera": "No comer o beber durante 30 minutos después"
+    },
+    "alimentos_buenos": [
+      "Lácteos (leche, queso, yogur): aportan calcio y fósforo",
+      "Frutas y verduras crujientes (manzana, zanahoria, apio): estimulan saliva y ayudan a limpiar dientes",
+      "Agua natural: mantiene boca hidratada y reduce bacterias"
+    ],
+    "alimentos_limitar": [
+      "Azúcares refinados (dulces, galletas, pasteles)",
+      "Refrescos y bebidas azucaradas: favorecen erosión dental",
+      "Alimentos pegajosos (gomitas, caramelos, frutos secos azucarados): se adhieren a dientes"
+    ]
+  },
+  
+  "prevencion": {
+    "limpiezas_profesionales": {
+      "frecuencia_normal": "Cada 6 meses",
+      "frecuencia_enfermedad_periodontal": "Cada 3-4 meses según indicación del odontólogo"
+    },
+    "prevencion_caries": [
+      "Cepillado 3 veces al día con pasta fluorada",
+      "Uso diario de hilo dental",
+      "Enjuague con flúor",
+      "Reducción de azúcares en la dieta"
+    ],
+    "cuidado_implantes": [
+      "Cepillo de cerdas suaves",
+      "Uso de cepillos interdentales o irrigador bucal",
+      "Higiene después de cada comida",
+      "Revisiones periódicas con especialista"
+    ],
+    "cuidado_brackets": [
+      "Utilizar cepillo ortodóntico y cepillos interdentales",
+      "Reforzar higiene después de cada comida",
+      "Evitar alimentos muy duros o pegajosos"
+    ]
+  },
+  
+  "bioseguridad": {
+    "esterilizacion": {
+      "metodo": "Autoclave a vapor 134°C",
+      "controles": "Indicadores biológicos y químicos semanales",
+      "empaque": "Paquetes individuales sellados, se abren frente al paciente"
+    },
+    "material_desechable": [
+      "Guantes",
+      "Cubrebocas",
+      "Baberos",
+      "Vasos",
+      "Eyectores"
+    ],
+    "uso": "100% un solo uso, descartado inmediatamente después de cada cita"
+  },
+  
+  "politicas": {
+    "privacidad": {
+      "ley": "LFPDPPP (Ley Federal de Protección de Datos Personales en Posesión de Particulares)",
+      "confidencialidad": "Todos los datos son confidenciales y protegidos",
+      "terceros": "No compartimos información sin autorización expresa",
+      "derechos_arco": "privacidad@dentalux.com.mx"
+    },
+    "cancelacion": {
+      "anticipacion": "24 horas",
+      "penalizacion": "3 faltas consecutivas sin aviso = suspensión temporal 30 días"
+    },
+    "garantias": {
+      "condicion": "Con revisiones periódicas y correcta higiene bucal",
+      "informacion": "Condiciones específicas varían según procedimiento, se explican en cada caso"
+    },
+    "quejas": {
+      "contacto": "info@dental-ux.clinic",
+      "tiempo_respuesta": "48 horas hábiles máximo"
+    }
+  }
+}
