@@ -3795,8 +3795,7 @@ console.log('✅ Correcciones aplicadas - Dashboard listo');
       await als.run({ pool, dbKey }, async () => {
         try {
           // await ensureRequiredFields();
-          await ensureRequiredFields();
-
+         
           
           // 🤖 Crear tablas IA (ai_conversations/ai_messages) en cada DB
           if (aiModule && typeof aiModule.createAiTables === 'function') {
