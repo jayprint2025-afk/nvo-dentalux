@@ -24,6 +24,113 @@ const { Pool } = require('pg');
 const { AsyncLocalStorage } = require('async_hooks');
 
 
+// =========================================================
+// CONFIGURACIÓN CENTRAL — RENDER + UNA SOLA BASE DE DATOS
+// =========================================================
+const app = express();
+const PORT = Number(process.env.PORT || 4001);
+
+app.set('trust proxy', 1);
+app.use(express.json({ limit: '20mb' }));
+app.use(express.urlencoded({ extended: true, limit: '20mb' }));
+app.use(morgan('combined'));
+
+const allowedOrigins = String(process.env.FRONTEND_ORIGIN || '')
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
+app.use(cors({
+  origin(origin, callback) {
+    if (!origin || allowedOrigins.length === 0 || allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+    console.warn(`⚠️ Origen CORS no autorizado: ${origin}`);
+    return callback(null, false);
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: [
+    'Content-Type',
+    'Authorization',
+    'Cache-Control',
+    'Pragma',
+    'x-sucursal',
+    'x-app',
+    'x-db',
+    'x-db-key',
+    'x-wa-phone-number-id',
+    'x-phone-number-id',
+    'x-wa-phone',
+    'x-channel',
+    'x-page-id'
+  ]
+}));
+
+const DATABASE_URL = process.env.DATABASE_URL || process.env.DATABASE_URL_DB1;
+if (!DATABASE_URL) {
+  throw new Error('Falta DATABASE_URL en las variables de entorno');
+}
+
+const poolDB1 = new Pool({
+  connectionString: DATABASE_URL,
+  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+  max: Number(process.env.DB_POOL_MAX || 10),
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 15000
+});
+
+// DB2 y DB3 quedan neutralizadas. Todas las rutas usan poolDB1.
+const poolDB2 = null;
+const poolDB3 = null;
+const als = new AsyncLocalStorage();
+
+function normalizeSucursal(value) {
+  const sucursal = String(value || '').trim().toLowerCase();
+  if (sucursal === 'condesa' || sucursal === 'sucursal_2' || sucursal === '2') {
+    return 'sucursal_2';
+  }
+  return 'sucursal_1';
+}
+
+function getSucursal(req) {
+  return normalizeSucursal(
+    req?.query?.sucursal ||
+    req?.headers?.['x-sucursal'] ||
+    req?.body?.sucursal_id ||
+    process.env.SUCURSAL_ID_DEFAULT ||
+    'sucursal_1'
+  );
+}
+
+function pickDbKey() {
+  return 'db1';
+}
+
+function getCurrentPool() {
+  return als.getStore()?.pool || poolDB1;
+}
+
+async function q(text, params = []) {
+  return getCurrentPool().query(text, params);
+}
+
+// Las rutas antiguas /api/melissa también usan la misma base física.
+async function qMelissa(text, params = []) {
+  return poolDB1.query(text, params);
+}
+
+app.use((req, _res, next) => {
+  als.run({ pool: poolDB1, dbKey: 'db1', sucursal: getSucursal(req) }, next);
+});
+
+poolDB1.on('error', (error) => {
+  console.error('❌ Error inesperado en PostgreSQL:', error);
+});
+
+console.log('✅ Servidor configurado para una sola base de datos (DB1)');
+
+
 // Helper para async/await con manejo de errores
 const ah = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
