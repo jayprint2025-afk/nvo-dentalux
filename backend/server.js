@@ -4430,6 +4430,15 @@ try {
 // ===============================================================================
 
 
+// ===============================================================================
+// WHATSAPP CLOUD API
+// Monta GET/POST /api/whatsapp/webhook y las demás rutas del módulo.
+const whatsappRoutes = require('./routes/whatsapp');
+app.use('/api/whatsapp', whatsappRoutes);
+console.log('✅ Rutas de WhatsApp montadas en /api/whatsapp');
+// ===============================================================================
+
+
 app.listen(PORT, '0.0.0.0', () => {
       console.log(`🚀 Dentalux API corriendo en http://0.0.0.0:${PORT}`);
       console.log('📊 Base(s) de datos conectada(s):');
