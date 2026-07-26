@@ -3794,7 +3794,7 @@ console.log('✅ Correcciones aplicadas - Dashboard listo');
       if (!pool) return;
       await als.run({ pool, dbKey }, async () => {
         try {
-          await ensureMultiSucursalSchema();
+          // await ensureRequiredFields();
           await ensureRequiredFields();
 
           
