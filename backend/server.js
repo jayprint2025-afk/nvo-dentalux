@@ -21,6 +21,8 @@ const express = require('express');
 const cors = require('cors');
 const morgan = require('morgan');
 const { Pool } = require('pg');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
 const { AsyncLocalStorage } = require('async_hooks');
 
 
@@ -3899,6 +3901,7 @@ async function ensureMultiTenantSchema() {
       try {
         console.log(`🏢 Iniciando migración multi-tenant (${dbKey})...`);
         await ensureMultiTenantSchema();
+        await ensureBootstrapDentaluxAdmin();
         console.log(`✅ Migración multi-tenant lista (${dbKey})`);
       } catch (err) {
         console.error(`❌ Error en migración multi-tenant (${dbKey}):`, err);
@@ -4534,6 +4537,281 @@ try {
   console.log('⚠️ No se montó /api/detalles (detalles_sales_router no encontrado o error):', e?.message || e);
 }
 // ===============================================================================
+// ===============================================================================
+
+
+
+// ===============================================================================
+// AUTENTICACIÓN DENTALUX (JWT)
+// ===============================================================================
+const JWT_SECRET = String(process.env.JWT_SECRET || '').trim();
+const JWT_EXPIRES_IN = String(process.env.JWT_EXPIRES_IN || '12h').trim();
+
+function requireJwtSecret() {
+  if (!JWT_SECRET) {
+    const error = new Error('Falta JWT_SECRET en las variables de entorno');
+    error.statusCode = 503;
+    throw error;
+  }
+  return JWT_SECRET;
+}
+
+function normalizeEmail(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function publicUserPayload(row) {
+  return {
+    id: row.user_id,
+    name: row.user_name,
+    email: row.email,
+    tenant: {
+      id: row.tenant_id,
+      name: row.tenant_name,
+      slug: row.tenant_slug,
+      plan: row.tenant_plan
+    },
+    role: row.role,
+    branches: Array.isArray(row.branches) ? row.branches : []
+  };
+}
+
+async function loadLoginUserByEmail(email) {
+  const { rows } = await poolDB1.query(`
+    SELECT
+      u.id AS user_id,
+      u.name AS user_name,
+      u.email,
+      u.password_hash,
+      u.active AS user_active,
+      t.id AS tenant_id,
+      t.name AS tenant_name,
+      t.slug AS tenant_slug,
+      t.plan AS tenant_plan,
+      t.status AS tenant_status,
+      tu.role,
+      tu.active AS membership_active,
+      COALESCE(
+        jsonb_agg(
+          DISTINCT jsonb_build_object(
+            'id', b.id,
+            'name', b.name,
+            'branchKey', b.branch_key,
+            'phone', b.phone,
+            'address', b.address,
+            'active', b.active
+          )
+        ) FILTER (WHERE b.id IS NOT NULL),
+        '[]'::jsonb
+      ) AS branches
+    FROM users u
+    JOIN tenant_users tu ON tu.user_id = u.id
+    JOIN tenants t ON t.id = tu.tenant_id
+    LEFT JOIN branches b
+      ON b.tenant_id = t.id
+      AND b.active = TRUE
+    WHERE LOWER(u.email) = LOWER($1)
+    GROUP BY
+      u.id, u.name, u.email, u.password_hash, u.active,
+      t.id, t.name, t.slug, t.plan, t.status,
+      tu.role, tu.active
+    ORDER BY
+      CASE WHEN tu.role = 'owner' THEN 0 ELSE 1 END,
+      t.created_at ASC
+    LIMIT 1
+  `, [email]);
+
+  return rows[0] || null;
+}
+
+function authRequired(req, res, next) {
+  try {
+    const header = String(req.headers.authorization || '');
+    const match = header.match(/^Bearer\s+(.+)$/i);
+    if (!match) {
+      return res.status(401).json({ error: 'Sesión requerida' });
+    }
+
+    const payload = jwt.verify(match[1], requireJwtSecret());
+    req.auth = payload;
+    next();
+  } catch (error) {
+    return res.status(401).json({
+      error: error?.name === 'TokenExpiredError'
+        ? 'La sesión expiró. Inicia sesión nuevamente.'
+        : 'Sesión inválida'
+    });
+  }
+}
+
+app.post('/api/auth/login', ah(async (req, res) => {
+  const email = normalizeEmail(req.body?.email);
+  const password = String(req.body?.password || '');
+
+  if (!email || !password) {
+    return res.status(400).json({ error: 'Escribe tu correo y contraseña' });
+  }
+
+  const row = await loadLoginUserByEmail(email);
+  const validAccount =
+    row &&
+    row.user_active === true &&
+    row.membership_active === true &&
+    row.tenant_status === 'active';
+
+  if (!validAccount || !(await bcrypt.compare(password, row.password_hash))) {
+    return res.status(401).json({ error: 'Correo o contraseña incorrectos' });
+  }
+
+  const user = publicUserPayload(row);
+  const token = jwt.sign(
+    {
+      sub: user.id,
+      email: user.email,
+      tenantId: user.tenant.id,
+      role: user.role
+    },
+    requireJwtSecret(),
+    { expiresIn: JWT_EXPIRES_IN }
+  );
+
+  res.json({ ok: true, token, user });
+}));
+
+app.get('/api/auth/me', authRequired, ah(async (req, res) => {
+  const { rows } = await poolDB1.query(`
+    SELECT
+      u.id AS user_id,
+      u.name AS user_name,
+      u.email,
+      TRUE AS user_active,
+      t.id AS tenant_id,
+      t.name AS tenant_name,
+      t.slug AS tenant_slug,
+      t.plan AS tenant_plan,
+      t.status AS tenant_status,
+      tu.role,
+      tu.active AS membership_active,
+      COALESCE(
+        jsonb_agg(
+          DISTINCT jsonb_build_object(
+            'id', b.id,
+            'name', b.name,
+            'branchKey', b.branch_key,
+            'phone', b.phone,
+            'address', b.address,
+            'active', b.active
+          )
+        ) FILTER (WHERE b.id IS NOT NULL),
+        '[]'::jsonb
+      ) AS branches
+    FROM users u
+    JOIN tenant_users tu
+      ON tu.user_id = u.id
+      AND tu.tenant_id = $2
+    JOIN tenants t ON t.id = tu.tenant_id
+    LEFT JOIN branches b
+      ON b.tenant_id = t.id
+      AND b.active = TRUE
+    WHERE u.id = $1
+      AND u.active = TRUE
+      AND tu.active = TRUE
+      AND t.status = 'active'
+    GROUP BY
+      u.id, u.name, u.email,
+      t.id, t.name, t.slug, t.plan, t.status,
+      tu.role, tu.active
+    LIMIT 1
+  `, [req.auth.sub, req.auth.tenantId]);
+
+  if (!rows[0]) {
+    return res.status(401).json({ error: 'La cuenta ya no está disponible' });
+  }
+
+  res.json({ ok: true, user: publicUserPayload(rows[0]) });
+}));
+
+// Crea Dentalux y el primer propietario solo cuando se configuran las variables
+// BOOTSTRAP_ADMIN_EMAIL y BOOTSTRAP_ADMIN_PASSWORD en Render.
+// Después del primer acceso se recomienda eliminar BOOTSTRAP_ADMIN_PASSWORD.
+async function ensureBootstrapDentaluxAdmin() {
+  const email = normalizeEmail(process.env.BOOTSTRAP_ADMIN_EMAIL);
+  const password = String(process.env.BOOTSTRAP_ADMIN_PASSWORD || '');
+  const name = String(process.env.BOOTSTRAP_ADMIN_NAME || 'Administrador Dentalux').trim();
+
+  if (!email && !password) {
+    console.log('ℹ️ Bootstrap de administrador omitido (sin variables BOOTSTRAP_ADMIN_*)');
+    return;
+  }
+
+  if (!email || password.length < 8) {
+    throw new Error(
+      'BOOTSTRAP_ADMIN_EMAIL y BOOTSTRAP_ADMIN_PASSWORD (mínimo 8 caracteres) son obligatorios'
+    );
+  }
+
+  const client = await poolDB1.connect();
+  try {
+    await client.query('BEGIN');
+
+    const tenantResult = await client.query(`
+      INSERT INTO tenants (name, slug, status, plan)
+      VALUES ('Dentalux', 'dentalux', 'active', 'enterprise')
+      ON CONFLICT (slug)
+      DO UPDATE SET
+        name = EXCLUDED.name,
+        status = 'active',
+        updated_at = NOW()
+      RETURNING id
+    `);
+    const tenantId = tenantResult.rows[0].id;
+
+    const passwordHash = await bcrypt.hash(password, 12);
+    const userResult = await client.query(`
+      INSERT INTO users (name, email, password_hash, active)
+      VALUES ($1, $2, $3, TRUE)
+      ON CONFLICT (email)
+      DO UPDATE SET
+        name = EXCLUDED.name,
+        password_hash = EXCLUDED.password_hash,
+        active = TRUE,
+        updated_at = NOW()
+      RETURNING id
+    `, [name, email, passwordHash]);
+    const userId = userResult.rows[0].id;
+
+    await client.query(`
+      INSERT INTO tenant_users (tenant_id, user_id, role, active)
+      VALUES ($1, $2, 'owner', TRUE)
+      ON CONFLICT (tenant_id, user_id)
+      DO UPDATE SET role = 'owner', active = TRUE
+    `, [tenantId, userId]);
+
+    await client.query(`
+      INSERT INTO branches (tenant_id, name, branch_key, phone, address, active)
+      VALUES
+        ($1, 'Victoria', 'sucursal_1', '6863112623',
+         'Anillo Periférico 424 A, Victoria Residencial', TRUE),
+        ($1, 'Condesa', 'sucursal_2', '6673434222',
+         'Calle Babel #1300, Residencial Condesa', TRUE)
+      ON CONFLICT (tenant_id, branch_key)
+      DO UPDATE SET
+        name = EXCLUDED.name,
+        phone = EXCLUDED.phone,
+        address = EXCLUDED.address,
+        active = TRUE,
+        updated_at = NOW()
+    `, [tenantId]);
+
+    await client.query('COMMIT');
+    console.log(`✅ Usuario propietario Dentalux listo: ${email}`);
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
 // ===============================================================================
 
 
