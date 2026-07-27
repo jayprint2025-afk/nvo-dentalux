@@ -25,6 +25,8 @@ interface ExpedienteMedico {
   contacto_emergencia?: string;
   telefono_emergencia?: string;
   sucursal_id: string;
+  tenant_id?: string;
+  appointment_id?: number;
   created_at?: string;
   updated_at?: string;
 }
@@ -32,6 +34,8 @@ interface ExpedienteMedico {
 interface HistoriaClinicaDental {
   id?: string;
   expediente_id: string;
+  appointment_id?: number;
+  tenant_id?: string;
   motivo_consulta: string;
   enfermedad_actual: string;
   antecedentes_personales: string;
@@ -53,6 +57,8 @@ interface HistoriaClinicaDental {
 interface Odontograma {
   id?: string;
   expediente_id: string;
+  appointment_id?: number;
+  tenant_id?: string;
   diente_numero: number;
   estado: 'sano' | 'cariado' | 'obturado' | 'extraido' | 'endodoncia' | 'corona' | 'implante' | 'protesis';
   superficie?: string; // oclusal, mesial, distal, vestibular, lingual
@@ -65,6 +71,8 @@ interface Odontograma {
 interface ConsentimientoInformado {
   id?: string;
   expediente_id: string;
+  appointment_id?: number;
+  tenant_id?: string;
   tipo_tratamiento: string;
   descripcion_tratamiento: string;
   riesgos_beneficios: string;
@@ -82,6 +90,8 @@ interface ConsentimientoInformado {
 interface TratamientoDental {
   id?: string;
   expediente_id: string;
+  appointment_id?: number;
+  tenant_id?: string;
   fecha: string;
   diente_numero?: number;
   procedimiento: string;
@@ -98,6 +108,8 @@ interface TratamientoDental {
 interface DocumentoRadiografia {
   id?: string;
   expediente_id: string;
+  appointment_id?: number;
+  tenant_id?: string;
   tipo: 'radiografia' | 'fotografia' | 'documento' | 'laboratorio';
   nombre: string;
   descripcion?: string;
@@ -172,7 +184,7 @@ const [selectedConsentimientoForPrint, setSelectedConsentimientoForPrint] = useS
     const { method = 'GET', body, sucursalId: sucursalCustom } = options;
 
     // el backend bueno en Render
-    const API_BASE = "http://localhost:4001";
+    const API_BASE = (import.meta as any).env?.VITE_API_BASE || '';
 
     const url =
       `${API_BASE}/api` +
@@ -257,6 +269,7 @@ const [selectedConsentimientoForPrint, setSelectedConsentimientoForPrint] = useS
     const payload = {
       expediente_id: expediente.id,
       sucursal_id: sucursalId,
+      appointment_id: appointmentId,
       fecha_registro:
         historiaClinica.fecha_registro ||
         new Date().toISOString().split('T')[0],
@@ -301,14 +314,17 @@ const [selectedConsentimientoForPrint, setSelectedConsentimientoForPrint] = useS
     if (isOpen && patientName) {
       cargarExpedienteMedico();
     }
-  }, [isOpen, patientName]);
+  }, [isOpen, patientName, appointmentId, sucursalId]);
 
   // ==================== FUNCIONES DE API ====================
   
   const cargarExpedienteMedico = async () => {
     setLoading(true);
     try {
-      const response = await useApi(`/expediente-medico/paciente/${encodeURIComponent(patientName)}`, {
+      const endpoint = appointmentId
+        ? `/expediente-medico/cita/${appointmentId}`
+        : `/expediente-medico/paciente/${encodeURIComponent(patientName)}`;
+      const response = await useApi(endpoint, {
         method: 'GET',
         sucursalId
       });
@@ -335,7 +351,8 @@ const [selectedConsentimientoForPrint, setSelectedConsentimientoForPrint] = useS
         paciente_id: `paciente_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
         nombre_paciente: patientName,
         telefono: patientPhone || '',
-        sucursal_id: sucursalId
+        sucursal_id: sucursalId,
+        appointment_id: appointmentId
       };
 
       const response = await useApi('/expediente-medico', {
@@ -368,7 +385,8 @@ const [selectedConsentimientoForPrint, setSelectedConsentimientoForPrint] = useS
         superficie,
         fecha_registro: new Date().toISOString().split('T')[0],
         doctor_id: doctors[0]?.id || '',
-        sucursal_id: sucursalId
+        sucursal_id: sucursalId,
+        appointment_id: appointmentId
       };
 
       if (dienteExistente) {
@@ -405,7 +423,8 @@ const [selectedConsentimientoForPrint, setSelectedConsentimientoForPrint] = useS
         fecha: nuevoTratamiento.fecha || new Date().toISOString().split('T')[0],
         estado: nuevoTratamiento.estado || 'planificado',
         doctor_id: nuevoTratamiento.doctor_id || doctors[0]?.id || '',
-        sucursal_id: sucursalId
+        sucursal_id: sucursalId,
+        appointment_id: appointmentId
       };
 
       const response = await useApi('/tratamiento-dental', {
@@ -437,7 +456,8 @@ const [selectedConsentimientoForPrint, setSelectedConsentimientoForPrint] = useS
         firma_paciente: false,
         firma_doctor: false,
         doctor_id: nuevoConsentimiento.doctor_id || doctors[0]?.id || '',
-        sucursal_id: sucursalId
+        sucursal_id: sucursalId,
+        appointment_id: appointmentId
       };
 
       const response = await useApi('/consentimiento-informado', {
@@ -481,7 +501,8 @@ const [selectedConsentimientoForPrint, setSelectedConsentimientoForPrint] = useS
           fecha_toma: new Date().toISOString().split('T')[0],
           datos_base64,
           doctor_id: doctors[0]?.id || '',
-          sucursal_id: sucursalId
+          sucursal_id: sucursalId,
+          appointment_id: appointmentId
         };
 
         try {

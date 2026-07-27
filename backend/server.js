@@ -396,6 +396,13 @@ app.get('/api/expediente-medico/test', ah(async (req, res) => {
   }
 }));
 
+// Montar rutas médicas con autenticación y contexto multi-tenant.
+if (medicalRecordModule && typeof medicalRecordModule.setupMedicalRecordRoutes === 'function') {
+  medicalRecordModule.setupMedicalRecordRoutes(app, q, { authRequired, getTenantId });
+  console.log('✅ Rutas médicas multi-tenant configuradas');
+}
+
+
 
 
 // Logging detallado para escrituras
