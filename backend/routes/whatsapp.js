@@ -416,6 +416,25 @@ function runWithDbKey(dbKey, fn) {
   return als.run({ pool: p, dbKey: String(dbKey || dbName(p)) }, fn);
 }
 
+// Ejecuta una consulta interna del webhook con bypass RLS solamente durante
+// esta transacción. Es necesario porque WhatsApp no trae la sesión del usuario
+// ni app.tenant_id, pero la tabla appointments ahora tiene FORCE ROW LEVEL SECURITY.
+async function queryWithTenantBypass(pool, sql, params = []) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(`SELECT set_config('app.tenant_bypass', 'on', true)`);
+    const result = await client.query(sql, params);
+    await client.query('COMMIT');
+    return result;
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 
 // q() usa el pool del contexto de la request (ALS)
 async function q(text, params = []) {
@@ -2519,6 +2538,7 @@ if (action === 'CONFIRMAR') {
       const sqlUpdate = `UPDATE appointments SET status = $1 WHERE id = $2 AND (${whereSuc}) RETURNING id,date,start_time,sucursal_id`;
       const params = IGNORE_SUC ? [newStatus, idHint] : [newStatus, idHint, sucursalId];
 
+      console.log('🔓 RLS BYPASS INTERNO PARA CONFIRMACIÓN');
       console.log('🎯 UPDATE CON ID (multi-db):', {
         appointment_id: idHint,
         whereSuc_clause: whereSuc,
@@ -2529,7 +2549,7 @@ if (action === 'CONFIRMAR') {
       let r = { rows: [] };
       let usedPool = null;
       for (const p of uniq) {
-        const rr = await p.query(sqlUpdate, params);
+        const rr = await queryWithTenantBypass(p, sqlUpdate, params);
         if (rr.rows && rr.rows.length) {
           r = rr;
           usedPool = p;
@@ -2553,7 +2573,8 @@ if (action === 'CONFIRMAR') {
 
         for (const p of uniq) {
           try {
-            const rr = await p.query(
+            const rr = await queryWithTenantBypass(
+              p,
               `UPDATE appointments
                   SET status = $1
                 WHERE id = $2
