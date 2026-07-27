@@ -2537,6 +2537,53 @@ if (action === 'CONFIRMAR') {
         }
       }
 
+      // Respaldo multi-tenant:
+      // La cita puede existir pero tener otro identificador interno de sucursal
+      // (por ejemplo "victoria" en lugar de "sucursal_1").
+      // Para no actualizar una cita equivocada con el mismo ID en otra DB,
+      // validamos también que el teléfono de la cita coincida con quien respondió.
+      if (!r.rows.length) {
+        const incomingPhoneDigits = onlyDigits(from);
+        console.log('🔁 FALLBACK ID + TELÉFONO SIN FILTRO DE SUCURSAL:', {
+          appointment_id: idHint,
+          phone_digits: incomingPhoneDigits,
+          phone_column: PHONE_COL,
+          dbs: uniq.map(dbName)
+        });
+
+        for (const p of uniq) {
+          try {
+            const rr = await p.query(
+              `UPDATE appointments
+                  SET status = $1
+                WHERE id = $2
+                  AND RIGHT(
+                        regexp_replace(COALESCE(${PHONE_COL}::text, ''), '\\D', '', 'g'),
+                        10
+                      ) = RIGHT($3::text, 10)
+                RETURNING id,date,start_time,sucursal_id`,
+              [newStatus, idHint, incomingPhoneDigits]
+            );
+
+            if (rr.rows && rr.rows.length) {
+              r = rr;
+              usedPool = p;
+              console.log('✅ CITA ENCONTRADA POR ID + TELÉFONO:', {
+                appointment_id: idHint,
+                db_used: dbName(p),
+                sucursal_real: rr.rows[0]?.sucursal_id || null
+              });
+              break;
+            }
+          } catch (fallbackErr) {
+            console.log('⚠️ FALLBACK ID + TELÉFONO FALLÓ EN DB:', {
+              db: dbName(p),
+              error: String(fallbackErr?.message || fallbackErr)
+            });
+          }
+        }
+      }
+
       if (!usedPool) usedPool = primaryPool;
 
       // Si encontramos en otra DB, ajustamos el pool del contexto para coherencia
