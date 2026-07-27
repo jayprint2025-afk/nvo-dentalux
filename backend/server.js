@@ -2770,36 +2770,67 @@ app.delete('/api/facturacion/facturas/:id', ah(async (req, res) => {
 }));
 
 // ==============================
-// 🆕 INVENTARIO
+// 🆕 INVENTARIO — aislado por empresa + sucursal
 // ==============================
-app.get('/api/inventory', ah(async (req, res) => {
+app.get('/api/inventory', authRequired, ah(async (req, res) => {
   const s = getSucursal(req);
+  const tenantId = getTenantId(req);
   const { rows } = await q(
-    `SELECT * FROM inventory WHERE ${sucWhereN(1)} ORDER BY id ASC`,
-    [s]
+    `SELECT * FROM inventory
+     WHERE tenant_id = $1 AND ${sucWhereN(2)}
+     ORDER BY id ASC`,
+    [tenantId, s]
   );
   res.json(rows);
 }));
 
-app.post('/api/inventory', ah(async (req, res) => {
+app.post('/api/inventory', authRequired, ah(async (req, res) => {
   const s = getSucursal(req);
-  const { sku, name, category, type, quantity, minStock, maxStock, price, supplier, usagePerPatient, expirationDate } = req.body;
-  
+  const tenantId = getTenantId(req);
+  const { sku, name, category, type, quantity, minStock, maxStock, price, supplier, usagePerPatient, expirationDate } = req.body || {};
+
+  if (!sku || !String(sku).trim()) return res.status(400).json({ error: 'El SKU es requerido' });
+  if (!name || !String(name).trim()) return res.status(400).json({ error: 'El nombre es requerido' });
+
+  const duplicate = await q(
+    `SELECT id FROM inventory
+     WHERE tenant_id=$1 AND ${sucWhereN(2)} AND LOWER(sku)=LOWER($3)
+     LIMIT 1`,
+    [tenantId, s, String(sku).trim()]
+  );
+  if (duplicate.rows[0]) return res.status(409).json({ error: 'Ya existe un producto con ese SKU en esta sucursal' });
+
   const { rows } = await q(
-    `INSERT INTO inventory (sku, name, category, type, quantity, min_stock, max_stock, price, supplier, usage_per_patient, expiration_date, last_purchase, sucursal_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, CURRENT_DATE, $12)
+    `INSERT INTO inventory
+      (sku, name, category, type, quantity, min_stock, max_stock, price, supplier,
+       usage_per_patient, expiration_date, last_purchase, sucursal_id, tenant_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,CURRENT_DATE,$12,$13)
      RETURNING *`,
-    [sku, name, category, type, quantity || 0, minStock || 10, maxStock || 100, price || 0, supplier || null, usagePerPatient || 1, expirationDate || null, s]
+    [String(sku).trim(), String(name).trim(), category, type, Number(quantity || 0),
+     Number(minStock ?? 10), Number(maxStock ?? 100), Number(price || 0), supplier || null,
+     Number(usagePerPatient || 1), expirationDate || null, s, tenantId]
   );
   res.json(rows[0]);
 }));
 
-app.put('/api/inventory/:id', ah(async (req, res) => {
+app.put('/api/inventory/:id', authRequired, ah(async (req, res) => {
   const s = getSucursal(req);
-  const { sku, name, category, type, quantity, minStock, maxStock, price, supplier, usagePerPatient, expirationDate } = req.body;
-  
+  const tenantId = getTenantId(req);
+  const id = Number(req.params.id);
+  const { sku, name, category, type, quantity, minStock, maxStock, price, supplier, usagePerPatient, expirationDate } = req.body || {};
+
+  if (sku) {
+    const duplicate = await q(
+      `SELECT id FROM inventory
+       WHERE tenant_id=$1 AND ${sucWhereN(2)} AND LOWER(sku)=LOWER($3) AND id<>$4
+       LIMIT 1`,
+      [tenantId, s, String(sku).trim(), id]
+    );
+    if (duplicate.rows[0]) return res.status(409).json({ error: 'Ya existe otro producto con ese SKU en esta sucursal' });
+  }
+
   const { rows } = await q(
-    `UPDATE inventory 
+    `UPDATE inventory
      SET sku = COALESCE($1, sku),
          name = COALESCE($2, name),
          category = COALESCE($3, category),
@@ -2811,80 +2842,74 @@ app.put('/api/inventory/:id', ah(async (req, res) => {
          supplier = COALESCE($9, supplier),
          usage_per_patient = COALESCE($10, usage_per_patient),
          expiration_date = COALESCE($11, expiration_date)
-     WHERE id = $12 AND ${sucWhereN(13)}
+     WHERE id=$12 AND tenant_id=$13 AND ${sucWhereN(14)}
      RETURNING *`,
-    [sku, name, category, type, quantity, minStock, maxStock, price, supplier, usagePerPatient, expirationDate, Number(req.params.id), s]
+    [sku ? String(sku).trim() : null, name ? String(name).trim() : null, category || null, type || null,
+     quantity ?? null, minStock ?? null, maxStock ?? null, price ?? null, supplier ?? null,
+     usagePerPatient ?? null, expirationDate ?? null, id, tenantId, s]
   );
-  res.json(rows[0] || null);
+  if (!rows[0]) return res.status(404).json({ error: 'Producto no encontrado' });
+  res.json(rows[0]);
 }));
 
-app.delete('/api/inventory/:id', ah(async (req, res) => {
+app.delete('/api/inventory/:id', authRequired, ah(async (req, res) => {
   const s = getSucursal(req);
-  await q(
-    `DELETE FROM inventory WHERE id = $1 AND ${sucWhereN(2)}`,
-    [Number(req.params.id), s]
+  const tenantId = getTenantId(req);
+  const result = await q(
+    `DELETE FROM inventory WHERE id=$1 AND tenant_id=$2 AND ${sucWhereN(3)}`,
+    [Number(req.params.id), tenantId, s]
   );
+  if (!result.rowCount) return res.status(404).json({ error: 'Producto no encontrado' });
   res.status(204).end();
 }));
 
-// 🆕 Aplicar fórmula de tratamiento al inventario
-app.post('/api/inventory/apply-formula', ah(async (req, res) => {
+// Aplicar fórmula de tratamiento únicamente al inventario de la empresa/sucursal activa
+app.post('/api/inventory/apply-formula', authRequired, ah(async (req, res) => {
   const s = getSucursal(req);
-  const body = req.body || {};
-
-  // Acepta body.items o body.formula (por si el front lo manda con otro nombre)
-  const items = body.items || body.formula || [];
-
+  const tenantId = getTenantId(req);
+  const items = req.body?.items || req.body?.formula || [];
   if (!Array.isArray(items) || items.length === 0) {
     return res.status(400).json({ error: 'Faltan items de la fórmula' });
   }
 
+  const client = await getCurrentPool().connect();
   try {
-    for (const f of items) {
-      const nombre = (f.item || '').toString().toLowerCase();
-      const cantidad = Number(f.quantity) || 0;
+    await client.query('BEGIN');
+    const updated = [];
+    const missing = [];
 
+    for (const f of items) {
+      const nombre = String(f.item || '').trim().toLowerCase();
+      const cantidad = Number(f.quantity) || 0;
       if (!nombre || cantidad <= 0) continue;
 
-      // Buscar el producto en el inventario de la sucursal
-      const { rows } = await q(
-        `
-        SELECT id, quantity
-        FROM inventory
-        WHERE LOWER(name) LIKE '%' || $1 || '%'
-          AND ${sucWhereN(2)}
-        ORDER BY LENGTH(name) ASC
-        LIMIT 1
-        `,
-        [nombre, s]
+      const found = await client.query(
+        `SELECT id, name, quantity FROM inventory
+         WHERE tenant_id=$1 AND (sucursal_id=$2 OR sucursal_id IS NULL)
+           AND LOWER(name) LIKE '%' || $3 || '%'
+         ORDER BY LENGTH(name) ASC LIMIT 1
+         FOR UPDATE`,
+        [tenantId, s, nombre]
       );
+      if (!found.rows[0]) { missing.push(nombre); continue; }
 
-      if (!rows[0]) {
-        console.log('⚠️ Item de fórmula no encontrado en inventario:', nombre);
-        continue;
-      }
-
-      const producto = rows[0];
+      const producto = found.rows[0];
       const nuevoStock = Math.max(0, Number(producto.quantity) - cantidad);
-
-      await q(
-        `
-        UPDATE inventory
-        SET quantity = $1
-        WHERE id = $2
-          AND ${sucWhereN(3)}
-        `,
-        [nuevoStock, producto.id, s]
+      await client.query(
+        `UPDATE inventory SET quantity=$1
+         WHERE id=$2 AND tenant_id=$3 AND (sucursal_id=$4 OR sucursal_id IS NULL)`,
+        [nuevoStock, producto.id, tenantId, s]
       );
+      updated.push({ id: producto.id, name: producto.name, quantity: nuevoStock });
     }
 
-    res.json({ ok: true });
+    await client.query('COMMIT');
+    res.json({ ok: true, updated, missing });
   } catch (error) {
-    console.error('❌ Error aplicando fórmula de inventario:', error);
-    res.status(500).json({
-      error: 'Error aplicando fórmula de inventario',
-      details: error.message
-    });
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
   }
 }));
 
@@ -3495,8 +3520,9 @@ function findMostUsedService(appointments, services) {
 // ==============================================
 
 // Inventario por sucursal
-app.get('/api/inventario/:sucursalId', ah(async (req, res) => {
+app.get('/api/inventario/:sucursalId', authRequired, ah(async (req, res) => {
   const { sucursalId } = req.params;
+  const tenantId = getTenantId(req);
   
   try {
     const productos = await q(`
@@ -3509,9 +3535,9 @@ app.get('/api/inventario/:sucursalId', ah(async (req, res) => {
           ELSE 'normal'
         END as stock_status
       FROM inventory 
-      WHERE sucursal_id = $1 
+      WHERE tenant_id = $1 AND sucursal_id = $2 
       ORDER BY name
-    `, [sucursalId]);
+    `, [tenantId, sucursalId]);
     
     // Alertas dinámicas basadas en stock
     const productosProblematicos = productos.rows.filter(p => p.stock_status !== 'normal');
@@ -3860,7 +3886,7 @@ async function ensureMultiTenantSchema() {
 // =========================================================
 // 🏢 MULTIEMPRESA - FASE 2.1 (tablas operativas principales)
 // =========================================================
-const CORE_TENANT_TABLES = ['doctors', 'services', 'appointments', 'payments', 'expenses', 'laboratorios', 'lab_trabajos', 'lab_abonos', 'pagos_laboratorio'];
+const CORE_TENANT_TABLES = ['doctors', 'services', 'appointments', 'payments', 'expenses', 'laboratorios', 'lab_trabajos', 'lab_abonos', 'pagos_laboratorio', 'inventory'];
 
 async function ensureCoreTenantSchema() {
   console.log('🏢 Verificando tenant_id en tablas operativas principales...');
@@ -3891,7 +3917,34 @@ async function ensureCoreTenantSchema() {
     await q(`CREATE INDEX IF NOT EXISTS idx_${table}_tenant_sucursal ON ${table}(tenant_id, sucursal_id)`);
   }
 
-  console.log('✅ tenant_id listo en doctors, services, appointments, payments, expenses, laboratorios, lab_trabajos, lab_abonos y pagos_laboratorio');
+  // El SKU ya no debe ser único globalmente: cada empresa/sucursal puede usar el mismo SKU.
+  const inventoryExists = await q(`SELECT to_regclass('public.inventory') AS name`);
+  if (inventoryExists.rows[0]?.name) {
+    await q(`
+      DO $$
+      DECLARE constraint_name TEXT;
+      BEGIN
+        SELECT tc.constraint_name INTO constraint_name
+        FROM information_schema.table_constraints tc
+        JOIN information_schema.constraint_column_usage ccu
+          ON tc.constraint_name = ccu.constraint_name
+         AND tc.table_schema = ccu.table_schema
+        WHERE tc.table_schema = 'public'
+          AND tc.table_name = 'inventory'
+          AND tc.constraint_type = 'UNIQUE'
+          AND ccu.column_name = 'sku'
+        LIMIT 1;
+
+        IF constraint_name IS NOT NULL THEN
+          EXECUTE format('ALTER TABLE inventory DROP CONSTRAINT %I', constraint_name);
+        END IF;
+      END $$;
+    `);
+    await q(`CREATE UNIQUE INDEX IF NOT EXISTS uq_inventory_tenant_sucursal_sku
+             ON inventory(tenant_id, sucursal_id, LOWER(sku))`);
+  }
+
+  console.log('✅ tenant_id listo en doctors, services, appointments, payments, expenses, laboratorios, lab_trabajos, lab_abonos, pagos_laboratorio e inventory');
 }
 
 function getTenantId(req) {
