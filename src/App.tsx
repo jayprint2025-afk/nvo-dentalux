@@ -1806,73 +1806,76 @@ const waFromTo = useMemo(() => {
   // ===================== WHATSAPP MODULE FUNCTIONS =====================
 const loadWhatsappData = async () => {
   setLoadingWhatsapp(true);
+
   try {
-    const API_BASE = (
-      (import.meta.env.VITE_API_BASE as string | undefined) ||
-      'https://dentalux-sucs.onrender.com'
-    ).replace(/\/$/, '');
+    const suc = sucursalActual || 'sucursal_1';
 
-    const suc = (sucursalActual || 'sucursal_1');
-
-    // --- Query para /stats (fechas + sucursal)
+    // Construye los filtros de estadísticas.
     const statsQS = new URLSearchParams();
     if (waFromTo.from) statsQS.set('from', waFromTo.from);
-    if (waFromTo.to)   statsQS.set('to',   waFromTo.to);
-    if (suc)           statsQS.set('sucursal_id', suc);
+    if (waFromTo.to) statsQS.set('to', waFromTo.to);
+    statsQS.set('sucursal_id', suc);
 
-    // --- Query para /messages (límite + sucursal)
-    const msgsQS = new URLSearchParams({ limit: '200' });
-    if (suc) msgsQS.set('sucursal_id', suc);
+    // Construye los filtros del historial.
+    const msgsQS = new URLSearchParams({
+      limit: '200',
+      sucursal_id: suc,
+    });
 
-    const statsURL = `${API_BASE}/api/whatsapp/stats${statsQS.toString() ? `?${statsQS}` : ''}`;
-    const msgsURL  = `${API_BASE}/api/whatsapp/messages?${msgsQS}`;
-
-    // Pide todo en paralelo (SIN headers -> evita CORS)
-    const [cfgRes, msgsRes, statsRes] = await Promise.all([
-      fetch(`${API_BASE}/api/whatsapp/test`),
-      fetch(msgsURL),
-      fetch(statsURL),
+    // api() agrega automáticamente:
+    // Authorization: Bearer <token>
+    // x-sucursal: <sucursal actual>
+    const [cfg, rawMsgs, stats] = await Promise.all([
+      api('/whatsapp/test'),
+      api(`/whatsapp/messages?${msgsQS.toString()}`),
+      api(`/whatsapp/stats?${statsQS.toString()}`),
     ]);
 
-    // --- Config
-    const cfg = await cfgRes.json();
     setWhatsappConfig({
       isEnabled:
         !!cfg?.ok &&
         cfg?.env?.PHONE_NUMBER_ID === 'Set' &&
         cfg?.env?.ACCESS_TOKEN === 'Set',
       phoneNumberId: String(cfg?.env?.PHONE_NUMBER_ID || ''),
-      accessToken:   String(cfg?.env?.ACCESS_TOKEN || ''),
-      verifyToken:   '',
-      webhookUrl:    ''
+      accessToken: String(cfg?.env?.ACCESS_TOKEN || ''),
+      verifyToken: '',
+      webhookUrl: '',
     });
+
     setIsOnline(!!cfg?.ok);
 
-    // --- Historial (normalizado)
-    const rawMsgs = await msgsRes.json();
     const msgs = Array.isArray(rawMsgs)
       ? rawMsgs.map((m: any) => ({
           id: Number(m.id),
-          type: m.type || m.direction,   // 'incoming' | 'outgoing'
+          type: m.type || m.direction,
           phone: m.phone,
+          patient:
+            m.patient ||
+            m.contact_name ||
+            m.contactName ||
+            m.phone ||
+            '',
           message: m.message || '',
           status: m.status || 'sent',
           appointmentId: m.appointment_id,
           sucursal_id: m.sucursal_id,
           manual: !!m.manual,
           timestamp: m.timestamp || m.created_at,
-          contactName: m.contact_name || m.patient || m.contactName || null,
+          contactName:
+            m.contact_name ||
+            m.patient ||
+            m.contactName ||
+            null,
         }))
       : [];
+
     setWhatsappMessages(msgs);
 
-    // --- Stats del backend (ya filtradas por from/to + sucursal)
-    const s = await statsRes.json();
     setWhatsappStats({
-      totalSent:     Number(s?.total_sent || 0),
-      totalReceived: Number(s?.total_received || 0),
-      confirmations: Number(s?.confirmations || 0),
-      cancellations: Number(s?.cancellations || 0),
+      totalSent: Number(stats?.total_sent || 0),
+      totalReceived: Number(stats?.total_received || 0),
+      confirmations: Number(stats?.confirmations || 0),
+      cancellations: Number(stats?.cancellations || 0),
     });
   } catch (error) {
     console.error('Error loading WhatsApp data:', error);
