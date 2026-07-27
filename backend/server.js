@@ -390,7 +390,10 @@ app.use((req, _res, next) => {
       'origin': req.headers.origin
     }, null, 2));
     console.log('Query params:', req.query);
-    console.log('Body received:', JSON.stringify(req.body, null, 2));
+    const safeBody = { ...(req.body || {}) };
+    if ('password' in safeBody) safeBody.password = '[OCULTA]';
+    if ('password_hash' in safeBody) safeBody.password_hash = '[OCULTA]';
+    console.log('Body received:', JSON.stringify(safeBody, null, 2));
     console.log('Sucursal detected:', getSucursal(req));
     console.log('========================\n');
   }
@@ -3972,6 +3975,7 @@ function getTenantId(req) {
         console.log(`🏢 Iniciando migración multi-tenant (${dbKey})...`);
         await ensureMultiTenantSchema();
         await ensureBootstrapDentaluxAdmin();
+        await ensurePublicDemoAccount();
         await ensureCoreTenantSchema();
         console.log(`✅ Migración multi-tenant lista (${dbKey})`);
       } catch (err) {
@@ -4631,6 +4635,20 @@ function normalizeEmail(value) {
   return String(value || '').trim().toLowerCase();
 }
 
+const SUPERADMIN_EMAIL = normalizeEmail(
+  process.env.SUPERADMIN_EMAIL ||
+  process.env.BOOTSTRAP_ADMIN_EMAIL ||
+  'nhaelvaldez26@hotmail.com'
+);
+const DEMO_EMAIL = 'cliniqonedemo@gmail.com';
+
+function effectiveUserRole(email, storedRole) {
+  const normalized = normalizeEmail(email);
+  if (normalized === SUPERADMIN_EMAIL) return 'superadmin';
+  if (normalized === DEMO_EMAIL) return 'demo';
+  return storedRole || 'owner';
+}
+
 function publicUserPayload(row) {
   return {
     id: row.user_id,
@@ -4642,7 +4660,7 @@ function publicUserPayload(row) {
       slug: row.tenant_slug,
       plan: row.tenant_plan
     },
-    role: row.role,
+    role: effectiveUserRole(row.email, row.role),
     branches: Array.isArray(row.branches) ? row.branches : []
   };
 }
@@ -4705,6 +4723,9 @@ function authRequired(req, res, next) {
 
     const payload = jwt.verify(match[1], requireJwtSecret());
     req.auth = payload;
+    if (payload?.role === 'demo' && ['POST','PUT','PATCH','DELETE'].includes(req.method)) {
+      return res.status(403).json({ error: 'La cuenta de demostración es solo de lectura' });
+    }
     next();
   } catch (error) {
     return res.status(401).json({
@@ -4806,8 +4827,10 @@ app.get('/api/auth/me', authRequired, ah(async (req, res) => {
 // ===============================================================================
 // EMPRESAS — módulo SaaS básico
 // ===============================================================================
-function companiesOwnerOnly(req, res, next) {
-  if (req.auth?.role !== 'owner') return res.status(403).json({ error: 'Solo un propietario puede administrar empresas' });
+function companiesSuperAdminOnly(req, res, next) {
+  if (req.auth?.role !== 'superadmin') {
+    return res.status(403).json({ error: 'Acceso exclusivo para el superadministrador' });
+  }
   next();
 }
 
@@ -4848,12 +4871,12 @@ function mapCompany(row) {
     phone: row.phone, address: row.address };
 }
 
-app.get('/api/companies', authRequired, companiesOwnerOnly, ah(async (_req, res) => {
+app.get('/api/companies', authRequired, companiesSuperAdminOnly, ah(async (_req, res) => {
   const { rows } = await poolDB1.query(`${companySelectSql} ORDER BY t.created_at DESC`);
   res.json(rows.map(mapCompany));
 }));
 
-app.post('/api/companies', authRequired, companiesOwnerOnly, ah(async (req, res) => {
+app.post('/api/companies', authRequired, companiesSuperAdminOnly, ah(async (req, res) => {
   const name = String(req.body?.name || '').trim();
   const ownerName = String(req.body?.ownerName || '').trim();
   const email = normalizeEmail(req.body?.email);
@@ -4861,7 +4884,7 @@ app.post('/api/companies', authRequired, companiesOwnerOnly, ah(async (req, res)
   const branchName = String(req.body?.branchName || '').trim();
   const phone = String(req.body?.phone || '').trim();
   const address = String(req.body?.address || '').trim();
-  const plan = String(req.body?.plan || 'basic').trim();
+  const plan = 'standard_20_usd';
   if (!name || !ownerName || !email || !branchName || password.length < 8) return res.status(400).json({ error: 'Completa todos los campos. La contraseña debe tener mínimo 8 caracteres.' });
   const client = await poolDB1.connect();
   try {
@@ -4882,7 +4905,7 @@ app.post('/api/companies', authRequired, companiesOwnerOnly, ah(async (req, res)
   } finally { client.release(); }
 }));
 
-app.put('/api/companies/:id', authRequired, companiesOwnerOnly, ah(async (req, res) => {
+app.put('/api/companies/:id', authRequired, companiesSuperAdminOnly, ah(async (req, res) => {
   const id = req.params.id;
   const name = String(req.body?.name || '').trim();
   const ownerName = String(req.body?.ownerName || '').trim();
@@ -4891,7 +4914,7 @@ app.put('/api/companies/:id', authRequired, companiesOwnerOnly, ah(async (req, r
   const branchName = String(req.body?.branchName || '').trim();
   const phone = String(req.body?.phone || '').trim();
   const address = String(req.body?.address || '').trim();
-  const plan = String(req.body?.plan || 'basic').trim();
+  const plan = 'standard_20_usd';
   if (!name || !ownerName || !email || !branchName) return res.status(400).json({ error: 'Completa los campos obligatorios' });
   const client = await poolDB1.connect();
   try {
@@ -4919,19 +4942,59 @@ app.put('/api/companies/:id', authRequired, companiesOwnerOnly, ah(async (req, r
   } finally { client.release(); }
 }));
 
-app.patch('/api/companies/:id/activate', authRequired, companiesOwnerOnly, ah(async (req, res) => {
+app.patch('/api/companies/:id/activate', authRequired, companiesSuperAdminOnly, ah(async (req, res) => {
   const { rows } = await poolDB1.query("UPDATE tenants SET status='active',updated_at=NOW() WHERE id=$1 RETURNING id,status", [req.params.id]);
   if (!rows[0]) return res.status(404).json({ error: 'Empresa no encontrada' });
   res.json({ ok:true, ...rows[0] });
 }));
 
-app.patch('/api/companies/:id/suspend', authRequired, companiesOwnerOnly, ah(async (req, res) => {
+app.patch('/api/companies/:id/suspend', authRequired, companiesSuperAdminOnly, ah(async (req, res) => {
   if (req.auth?.tenantId === req.params.id) return res.status(400).json({ error: 'No puedes suspender la empresa de tu sesión actual' });
   const { rows } = await poolDB1.query("UPDATE tenants SET status='suspended',updated_at=NOW() WHERE id=$1 RETURNING id,status", [req.params.id]);
   if (!rows[0]) return res.status(404).json({ error: 'Empresa no encontrada' });
   res.json({ ok:true, ...rows[0] });
 }));
 // ===============================================================================
+
+// Cuenta pública de demostración. Es de solo lectura y permite conocer la estructura.
+async function ensurePublicDemoAccount() {
+  const email = DEMO_EMAIL;
+  const password = 'cliniqonedemo123';
+  const client = await poolDB1.connect();
+  try {
+    await client.query('BEGIN');
+    const tenantResult = await client.query(`
+      INSERT INTO tenants (name, slug, status, plan)
+      VALUES ('CliniqOne Demo', 'cliniqone-demo', 'active', 'standard_20_usd')
+      ON CONFLICT (slug) DO UPDATE SET status='active', plan='standard_20_usd', updated_at=NOW()
+      RETURNING id
+    `);
+    const tenantId = tenantResult.rows[0].id;
+    const passwordHash = await bcrypt.hash(password, 12);
+    const userResult = await client.query(`
+      INSERT INTO users (name, email, password_hash, active)
+      VALUES ('Usuario Demo', $1, $2, TRUE)
+      ON CONFLICT (email) DO UPDATE SET password_hash=EXCLUDED.password_hash, active=TRUE, updated_at=NOW()
+      RETURNING id
+    `, [email, passwordHash]);
+    const userId = userResult.rows[0].id;
+    await client.query(`
+      INSERT INTO tenant_users (tenant_id, user_id, role, active)
+      VALUES ($1,$2,'demo',TRUE)
+      ON CONFLICT (tenant_id,user_id) DO UPDATE SET role='demo', active=TRUE
+    `,[tenantId,userId]);
+    await client.query(`
+      INSERT INTO branches (tenant_id,name,branch_key,phone,address,active)
+      VALUES ($1,'Sucursal Demo','sucursal_1','','',TRUE)
+      ON CONFLICT (tenant_id,branch_key) DO UPDATE SET active=TRUE, updated_at=NOW()
+    `,[tenantId]);
+    await client.query('COMMIT');
+    console.log(`✅ Cuenta demo pública lista: ${email}`);
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally { client.release(); }
+}
 
 // Crea Dentalux y el primer propietario solo cuando se configuran las variables
 // BOOTSTRAP_ADMIN_EMAIL y BOOTSTRAP_ADMIN_PASSWORD en Render.

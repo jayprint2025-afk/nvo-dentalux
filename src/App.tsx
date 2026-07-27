@@ -43,7 +43,58 @@ import DashboardIntegration from './components/DashboardIntegration';  // ← AG
 import { MedicalRecordModule, useMedicalRecord } from './MedicalRecordModule';
 import AIFloatingWidget from './AIFloatingWidget.tsx';
 
+const SUPERADMIN_EMAIL_FALLBACK = 'nhaelvaldez26@hotmail.com';
 
+function readJwtPayloadFromStorage(): any {
+  if (typeof window === 'undefined') return null;
+  try {
+    for (let i = 0; i < window.localStorage.length; i += 1) {
+      const key = window.localStorage.key(i);
+      const value = key ? window.localStorage.getItem(key) : null;
+      if (!value || value.split('.').length !== 3) continue;
+      try {
+        const part = value.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+        return JSON.parse(decodeURIComponent(escape(window.atob(part))));
+      } catch {}
+    }
+  } catch {}
+  return null;
+}
+
+function isSuperAdminSession(): boolean {
+  const payload = readJwtPayloadFromStorage();
+  return payload?.role === 'superadmin' || String(payload?.email || '').toLowerCase() === SUPERADMIN_EMAIL_FALLBACK;
+}
+
+function injectDentaluxPublicOffer() {
+  if (typeof document === 'undefined') return;
+  const ID = 'dentalux-public-offer';
+  const render = () => {
+    if (document.getElementById(ID)) return;
+    const hasJwt = !!readJwtPayloadFromStorage();
+    if (hasJwt) return;
+    const el = document.createElement('div');
+    el.id = ID;
+    el.innerHTML = `
+      <div style="font-weight:800;font-size:18px;margin-bottom:4px">Dentalux: administra tu clínica, haz crecer tu sonrisa.</div>
+      <div style="font-size:14px;margin-bottom:8px"><b>$20 USD al mes</b> — Agenda, Caja, Productividad, WhatsApp, Laboratorios, Inventario e Historial.</div>
+      <div style="font-size:13px;margin-bottom:4px"><b>Pago:</b> depósito o transferencia</div>
+      <div style="font-size:13px;margin-bottom:2px"><b>Banco:</b> Banamex</div>
+      <div style="font-size:13px;margin-bottom:2px"><b>Cuenta:</b> 3538825</div>
+      <div style="font-size:13px;margin-bottom:8px"><b>CLABE interbancaria:</b> 002020702235388255</div>
+      <div style="font-size:12px;color:#475569;margin-bottom:8px">Envía tu comprobante de pago a <b>Nhaelvaldez26@hotmail.com</b>. Para cualquier duda o aclaración, escribe al mismo correo.</div>
+      <div style="border-top:1px solid #dbeafe;padding-top:8px;font-size:13px"><b>Prueba gratis:</b><br/>Correo: CliniqOnedemo@gmail.com<br/>Contraseña: cliniqonedemo123</div>`;
+    Object.assign(el.style, {
+      position:'fixed', left:'20px', bottom:'20px', zIndex:'99999', maxWidth:'360px',
+      background:'#ffffff', border:'1px solid #bfdbfe', borderRadius:'16px', padding:'16px',
+      boxShadow:'0 18px 45px rgba(15,23,42,.18)', color:'#0f172a', fontFamily:'Arial, sans-serif'
+    });
+    document.body.appendChild(el);
+  };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', render, { once:true });
+  else render();
+}
+injectDentaluxPublicOffer();
 
 
 // === Hoisted helpers to avoid TDZ for lab summaries ===
@@ -1207,7 +1258,7 @@ type Empresa = {
 
 const emptyEmpresaForm = {
   name: '', ownerName: '', email: '', password: '', branchName: '',
-  phone: '', address: '', plan: 'basic'
+  phone: '', address: ''
 };
 
 function EmpresasModule() {
@@ -1242,7 +1293,7 @@ function EmpresasModule() {
     setForm({
       name: empresa.name, ownerName: empresa.ownerName, email: empresa.ownerEmail,
       password: '', branchName: empresa.branchName, phone: empresa.phone || '',
-      address: empresa.address || '', plan: empresa.plan || 'basic'
+      address: empresa.address || ''
     });
     setMessage('');
     setShowForm(true);
@@ -1256,7 +1307,7 @@ function EmpresasModule() {
       const payload = {
         name: form.name, ownerName: form.ownerName, email: form.email,
         password: form.password, branchName: form.branchName,
-        phone: form.phone, address: form.address, plan: form.plan
+        phone: form.phone, address: form.address
       };
       if (editing) {
         await api(`/companies/${editing.id}`, { method: 'PUT', body: JSON.stringify(payload) });
@@ -1289,7 +1340,7 @@ function EmpresasModule() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
           <h2 className="text-2xl font-bold text-gray-800 flex items-center gap-2"><Building2 className="w-6 h-6" /> Empresas</h2>
-          <p className="text-sm text-gray-500">Administración básica de empresas, propietario y primera sucursal.</p>
+          <p className="text-sm text-gray-500">Administración de empresas · servicio único de $20 USD al mes.</p>
         </div>
         <button onClick={openNew} className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg flex items-center gap-2">
           <Plus className="w-4 h-4" /> Nueva Empresa
@@ -1312,7 +1363,6 @@ function EmpresasModule() {
                 <input required={!editing || key !== 'password'} type={type} value={(form as any)[key]} onChange={e => setForm(v => ({...v,[key]:e.target.value}))} className="w-full px-3 py-2 border rounded-lg bg-white" />
               </label>
             ))}
-            <label><span className="block text-sm font-medium text-gray-700 mb-1">Plan</span><select value={form.plan} onChange={e => setForm(v => ({...v,plan:e.target.value}))} className="w-full px-3 py-2 border rounded-lg bg-white"><option value="basic">Básico</option><option value="professional">Profesional</option><option value="enterprise">Enterprise</option></select></label>
           </div>
           <div className="flex gap-2 justify-end"><button type="button" onClick={() => setShowForm(false)} className="px-4 py-2 border rounded-lg">Cancelar</button><button disabled={loading} className="px-4 py-2 bg-blue-600 text-white rounded-lg disabled:opacity-60">{loading ? 'Guardando...' : 'Guardar'}</button></div>
         </form>
@@ -1320,9 +1370,9 @@ function EmpresasModule() {
 
       <div className="overflow-x-auto border rounded-xl">
         <table className="w-full text-sm">
-          <thead className="bg-gray-50"><tr><th className="p-3 text-left">Empresa</th><th className="p-3 text-left">Propietario</th><th className="p-3 text-left">Plan</th><th className="p-3 text-left">Estado</th><th className="p-3 text-left">Acciones</th></tr></thead>
+          <thead className="bg-gray-50"><tr><th className="p-3 text-left">Empresa</th><th className="p-3 text-left">Propietario</th><th className="p-3 text-left">Precio</th><th className="p-3 text-left">Estado</th><th className="p-3 text-left">Acciones</th></tr></thead>
           <tbody>
-            {empresas.map(empresa => <tr key={empresa.id} className="border-t"><td className="p-3"><div className="font-medium">{empresa.name}</div><div className="text-xs text-gray-500">{empresa.branchName}</div></td><td className="p-3"><div>{empresa.ownerName}</div><div className="text-xs text-gray-500">{empresa.ownerEmail}</div></td><td className="p-3 capitalize">{empresa.plan}</td><td className="p-3"><span className={`px-2 py-1 rounded-full text-xs font-medium ${empresa.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>{empresa.status === 'active' ? 'Activa' : 'Suspendida'}</span></td><td className="p-3"><div className="flex flex-wrap gap-2"><button onClick={() => openEdit(empresa)} className="px-3 py-1.5 border rounded flex items-center gap-1"><Edit className="w-3 h-3" /> Editar</button>{empresa.status === 'active' ? <button onClick={() => changeStatus(empresa,'suspend')} className="px-3 py-1.5 border border-red-300 text-red-600 rounded">Suspender</button> : <button onClick={() => changeStatus(empresa,'activate')} className="px-3 py-1.5 border border-green-300 text-green-700 rounded">Activar</button>}</div></td></tr>)}
+            {empresas.map(empresa => <tr key={empresa.id} className="border-t"><td className="p-3"><div className="font-medium">{empresa.name}</div><div className="text-xs text-gray-500">{empresa.branchName}</div></td><td className="p-3"><div>{empresa.ownerName}</div><div className="text-xs text-gray-500">{empresa.ownerEmail}</div></td><td className="p-3 font-medium">$20 USD/mes</td><td className="p-3"><span className={`px-2 py-1 rounded-full text-xs font-medium ${empresa.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>{empresa.status === 'active' ? 'Activa' : 'Suspendida'}</span></td><td className="p-3"><div className="flex flex-wrap gap-2"><button onClick={() => openEdit(empresa)} className="px-3 py-1.5 border rounded flex items-center gap-1"><Edit className="w-3 h-3" /> Editar</button>{empresa.status === 'active' ? <button onClick={() => changeStatus(empresa,'suspend')} className="px-3 py-1.5 border border-red-300 text-red-600 rounded">Suspender</button> : <button onClick={() => changeStatus(empresa,'activate')} className="px-3 py-1.5 border border-green-300 text-green-700 rounded">Activar</button>}</div></td></tr>)}
             {!loading && empresas.length === 0 && <tr><td colSpan={5} className="p-8 text-center text-gray-500">No hay empresas registradas.</td></tr>}
             {loading && <tr><td colSpan={5} className="p-8 text-center text-gray-500">Cargando...</td></tr>}
           </tbody>
@@ -1333,6 +1383,7 @@ function EmpresasModule() {
 }
 
 export default function App(){
+  const isSuperAdmin = React.useMemo(() => isSuperAdminSession(), []);
   // Connection status
   const [isOnline, setIsOnline] = useState(true);
   const [isLoading, setIsLoading] = useState(true);
@@ -3313,6 +3364,7 @@ const [to, setTo] = useState<string>(defaultTo);
               </div>
               <div> 
                 <span className='font-semibold text-lg'>Clinica Dentalux</span>
+                <div className="text-xs text-blue-700 font-medium">Administra tu clínica, haz crecer tu sonrisa · $20 USD/mes</div>
                 <div className="flex items-center gap-2 text-sm">
                   {isOnline ? (
                     <>
@@ -3400,8 +3452,10 @@ const [to, setTo] = useState<string>(defaultTo);
               { id: 'analytics', label: 'Productividad', icon: BarChart3 },
               { id: 'laboratorios', label: 'Laboratorios', icon: BarChart3 },
               { id: 'whatsapp', label: 'WhatsApp', icon: MessageCircle },
-              { id: 'facturacion', label: 'Facturación', icon: CreditCard },
-              { id: 'empresas', label: 'Empresas', icon: Building2 },
+              ...(isSuperAdmin ? [
+                { id: 'facturacion', label: 'Facturación', icon: CreditCard },
+                { id: 'empresas', label: 'Empresas', icon: Building2 },
+              ] : []),
             ].map(tab => (
   <button 
     key={tab.id as string} 
@@ -5603,10 +5657,10 @@ const [to, setTo] = useState<string>(defaultTo);
         </div>
 
 {/* ========== EMPRESAS ========== */}
-{activeTab === 'empresas' && <EmpresasModule />}
+{activeTab === 'empresas' && isSuperAdmin && <EmpresasModule />}
 
 {/* ========== FACTURACIÓN ELECTRÓNICA ========== */}
-{activeTab === 'facturacion' && (
+{activeTab === 'facturacion' && isSuperAdmin && (
   <div className="space-y-8">
     {/* Notificación */}
     {factNotification && (
@@ -5926,10 +5980,12 @@ const [to, setTo] = useState<string>(defaultTo);
   />
 )}
 {/* 🤖 Módulo IA flotante */}
-<AIFloatingWidget
-  sucursalId={getSucursalActual() || 'sucursal_1'}
-  dbKey="db2"
-/>
+{isSuperAdmin && (
+  <AIFloatingWidget
+    sucursalId={getSucursalActual() || 'sucursal_1'}
+    dbKey="db2"
+  />
+)}
 
 
       </div>
@@ -7082,7 +7138,7 @@ function DoctorQuickEdit({ doctor, settings, onChange }:{
     );
   }
 
-  if (typeof document !== 'undefined'){
+  if (typeof document !== 'undefined' && isSuperAdminSession()){
     const old = document.getElementById('objetivos-floating-root') || document.getElementById('objetivos-floating-root-v3');
     if (old && old.parentElement) old.parentElement.removeChild(old);
     const ROOT_ID = 'objetivos-floating-root-v3';
