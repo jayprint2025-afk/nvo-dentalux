@@ -1505,9 +1505,40 @@ router.post('/webhook', async (req, res) => {
     console.log('📥 WEBHOOK RECEIVED');
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     
-    const entry = req.body?.entry?.[0];
-    const a = entry?.changes?.[0]?.value;
+    // Meta puede mandar varios entry/changes en un mismo webhook.
+    // No debemos tomar solamente [0], porque el primer change puede ser un status
+    // y el mensaje entrante real puede venir en otro change.
+    const entries = Array.isArray(req.body?.entry) ? req.body.entry : [];
+    const allChanges = entries.flatMap(entry =>
+      Array.isArray(entry?.changes) ? entry.changes : []
+    );
+
+    const messageChange =
+      allChanges.find(change =>
+        Array.isArray(change?.value?.messages) &&
+        change.value.messages.length > 0
+      ) || null;
+
+    const statusChange =
+      allChanges.find(change =>
+        Array.isArray(change?.value?.statuses) &&
+        change.value.statuses.length > 0
+      ) || null;
+
+    // Priorizar siempre el change que contiene messages.
+    // Si este webhook solo trae statuses, usamos ese value únicamente para registrarlo
+    // y responder 200 sin tratarlo como mensaje entrante.
+    const selectedChange = messageChange || statusChange || allChanges[0] || null;
+    const a = selectedChange?.value || null;
     const phoneNumberId = String(a?.metadata?.phone_number_id || '').trim() || null;
+
+    console.log('🧭 WEBHOOK CHANGE SCAN:', {
+      entries: entries.length,
+      changes: allChanges.length,
+      has_message_change: !!messageChange,
+      has_status_change: !!statusChange,
+      selected_type: messageChange ? 'message' : (statusChange ? 'status' : 'unknown')
+    });
     const aiPhoneNumberId = phoneNumberId || process.env.WHATSAPP_PHONE_NUMBER_ID || process.env.AI_DEFAULT_PHONE_NUMBER_ID || null;
 
     console.log('📱 PHONE_NUMBER_ID:', {
@@ -1560,7 +1591,14 @@ router.post('/webhook', async (req, res) => {
     });
     
     if (!msg) {
-      console.log('❌ NO MESSAGE IN PAYLOAD - RETURNING');
+      const statuses = Array.isArray(a?.statuses) ? a.statuses : [];
+      console.log('ℹ️ WEBHOOK SOLO DE STATUS - SIN MENSAJE ENTRANTE:', {
+        statuses: statuses.map(s => ({
+          id: s?.id || null,
+          status: s?.status || null,
+          recipient_id: s?.recipient_id || null
+        }))
+      });
       return res.sendStatus(200);
     }
 
