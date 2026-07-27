@@ -312,8 +312,66 @@ function setupMedicalRecordRoutes(app, query, options = {}) {
       }
     }
 
-    if (!expedienteResult.rows.length) return res.status(404).json({ error: 'Expediente médico no encontrado', appointment });
-    return res.json(await cargarExpedienteCompleto(expedienteResult.rows[0], appointmentId, tenantId));
+    // Si la cita todavía no tiene expediente, créalo automáticamente con los
+    // datos disponibles en la agenda. Así Datos Personales nunca queda vacío.
+    if (!expedienteResult.rows.length) {
+      const pacienteId = `appointment_${appointmentId}_${Date.now()}`;
+      expedienteResult = await query(`
+        INSERT INTO expedientes_medicos (
+          paciente_id,
+          nombre_paciente,
+          telefono,
+          sucursal_id,
+          tenant_id
+        )
+        VALUES ($1,$2,$3,$4,$5)
+        RETURNING *
+      `, [
+        pacienteId,
+        appointment.patient || 'Paciente',
+        appointment.phone || null,
+        sucursalId,
+        tenantId
+      ]);
+
+      await query(`
+        INSERT INTO expediente_citas (
+          expediente_id,
+          appointment_id,
+          tenant_id,
+          sucursal_id
+        )
+        VALUES ($1,$2,$3,$4)
+        ON CONFLICT (tenant_id, appointment_id)
+        DO UPDATE SET
+          expediente_id = EXCLUDED.expediente_id,
+          sucursal_id = EXCLUDED.sucursal_id
+      `, [
+        expedienteResult.rows[0].id,
+        appointmentId,
+        tenantId,
+        sucursalId
+      ]);
+
+      console.log('✅ Expediente creado automáticamente desde cita:', {
+        appointment_id: appointmentId,
+        expediente_id: expedienteResult.rows[0].id,
+        patient: appointment.patient,
+        tenant_id: tenantId,
+        sucursal_id: sucursalId
+      });
+    }
+
+    const completeRecord = await cargarExpedienteCompleto(
+      expedienteResult.rows[0],
+      appointmentId,
+      tenantId
+    );
+
+    return res.json({
+      ...completeRecord,
+      appointment
+    });
   }));
 
   // Obtener expediente médico completo por nombre de paciente

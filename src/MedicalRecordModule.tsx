@@ -312,9 +312,21 @@ const [selectedConsentimientoForPrint, setSelectedConsentimientoForPrint] = useS
   
   useEffect(() => {
     if (isOpen && patientName) {
+      // Mostrar de inmediato los datos que ya vienen de la cita, aun mientras
+      // el backend busca o crea el expediente médico.
+      setExpediente(prev => prev || {
+        paciente_id: appointmentId
+          ? `appointment_${appointmentId}`
+          : `paciente_temporal_${Date.now()}`,
+        nombre_paciente: patientName,
+        telefono: patientPhone || '',
+        sucursal_id: sucursalId,
+        appointment_id: appointmentId
+      });
+
       cargarExpedienteMedico();
     }
-  }, [isOpen, patientName, appointmentId, sucursalId]);
+  }, [isOpen, patientName, patientPhone, appointmentId, sucursalId]);
 
   // ==================== FUNCIONES DE API ====================
   
@@ -330,7 +342,28 @@ const [selectedConsentimientoForPrint, setSelectedConsentimientoForPrint] = useS
       });
 
       if (response) {
-        setExpediente(response.expediente);
+        setExpediente(prev => ({
+          ...(prev || {}),
+          ...(response.expediente || {}),
+          paciente_id:
+            response.expediente?.paciente_id ||
+            prev?.paciente_id ||
+            (appointmentId ? `appointment_${appointmentId}` : `paciente_${Date.now()}`),
+          nombre_paciente:
+            response.expediente?.nombre_paciente ||
+            prev?.nombre_paciente ||
+            patientName,
+          telefono:
+            response.expediente?.telefono ||
+            prev?.telefono ||
+            patientPhone ||
+            '',
+          sucursal_id:
+            response.expediente?.sucursal_id ||
+            prev?.sucursal_id ||
+            sucursalId,
+          appointment_id: appointmentId
+        } as ExpedienteMedico));
         setHistoriaClinica(response.historia_clinica);
         setOdontograma(response.odontograma || []);
         setTratamientos(response.tratamientos || []);
@@ -925,7 +958,14 @@ const openPrintConsentimiento = (consentimiento: ConsentimientoInformado) => {
           {!loading && activeTab === 'datos' && (
             <div className="space-y-6">
               <div className="flex items-center justify-between">
-                <h3 className="text-lg font-semibold">Información Personal</h3>
+                <div>
+                  <h3 className="text-lg font-semibold">Información Personal</h3>
+                  {appointmentId && (
+                    <p className="text-sm text-gray-500 mt-1">
+                      Datos vinculados a la cita #{appointmentId}
+                    </p>
+                  )}
+                </div>
                 <button
                   onClick={() => setEditingDatos(!editingDatos)}
                   className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center gap-2"
@@ -934,6 +974,12 @@ const openPrintConsentimiento = (consentimiento: ConsentimientoInformado) => {
                   {editingDatos ? 'Cancelar' : 'Editar'}
                 </button>
               </div>
+
+              {!expediente && (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-amber-800">
+                  Preparando los datos de la cita #{appointmentId || ''}…
+                </div>
+              )}
 
               {expediente && (
                 <div className="grid md:grid-cols-2 gap-6">
