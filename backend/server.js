@@ -4802,6 +4802,137 @@ app.get('/api/auth/me', authRequired, ah(async (req, res) => {
   res.json({ ok: true, user: publicUserPayload(rows[0]) });
 }));
 
+
+// ===============================================================================
+// EMPRESAS — módulo SaaS básico
+// ===============================================================================
+function companiesOwnerOnly(req, res, next) {
+  if (req.auth?.role !== 'owner') return res.status(403).json({ error: 'Solo un propietario puede administrar empresas' });
+  next();
+}
+
+function companySlug(name) {
+  return String(name || 'empresa').normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 50) || 'empresa';
+}
+
+async function uniqueCompanySlug(client, name, excludeId = null) {
+  const base = companySlug(name); let slug = base; let i = 2;
+  while (true) {
+    const { rows } = await client.query('SELECT id FROM tenants WHERE slug=$1 AND ($2::uuid IS NULL OR id<>$2::uuid) LIMIT 1', [slug, excludeId]);
+    if (!rows[0]) return slug;
+    slug = `${base}-${i++}`;
+  }
+}
+
+const companySelectSql = `
+  SELECT t.id, t.name, t.slug, t.plan, t.status,
+         COALESCE(owner_u.name, '') AS owner_name,
+         COALESCE(owner_u.email, '') AS owner_email,
+         COALESCE(first_b.name, '') AS branch_name,
+         COALESCE(first_b.phone, '') AS phone,
+         COALESCE(first_b.address, '') AS address
+  FROM tenants t
+  LEFT JOIN LATERAL (
+    SELECT u.name, u.email FROM tenant_users tu JOIN users u ON u.id=tu.user_id
+    WHERE tu.tenant_id=t.id AND tu.role='owner' ORDER BY tu.created_at ASC LIMIT 1
+  ) owner_u ON TRUE
+  LEFT JOIN LATERAL (
+    SELECT b.name, b.phone, b.address FROM branches b
+    WHERE b.tenant_id=t.id ORDER BY b.created_at ASC LIMIT 1
+  ) first_b ON TRUE`;
+
+function mapCompany(row) {
+  return { id: row.id, name: row.name, slug: row.slug, plan: row.plan, status: row.status,
+    ownerName: row.owner_name, ownerEmail: row.owner_email, branchName: row.branch_name,
+    phone: row.phone, address: row.address };
+}
+
+app.get('/api/companies', authRequired, companiesOwnerOnly, ah(async (_req, res) => {
+  const { rows } = await poolDB1.query(`${companySelectSql} ORDER BY t.created_at DESC`);
+  res.json(rows.map(mapCompany));
+}));
+
+app.post('/api/companies', authRequired, companiesOwnerOnly, ah(async (req, res) => {
+  const name = String(req.body?.name || '').trim();
+  const ownerName = String(req.body?.ownerName || '').trim();
+  const email = normalizeEmail(req.body?.email);
+  const password = String(req.body?.password || '');
+  const branchName = String(req.body?.branchName || '').trim();
+  const phone = String(req.body?.phone || '').trim();
+  const address = String(req.body?.address || '').trim();
+  const plan = String(req.body?.plan || 'basic').trim();
+  if (!name || !ownerName || !email || !branchName || password.length < 8) return res.status(400).json({ error: 'Completa todos los campos. La contraseña debe tener mínimo 8 caracteres.' });
+  const client = await poolDB1.connect();
+  try {
+    await client.query('BEGIN');
+    const slug = await uniqueCompanySlug(client, name);
+    const tenant = (await client.query('INSERT INTO tenants(name,slug,status,plan) VALUES($1,$2,\'active\',$3) RETURNING id', [name,slug,plan])).rows[0];
+    const hash = await bcrypt.hash(password, 12);
+    const user = (await client.query('INSERT INTO users(name,email,password_hash,active) VALUES($1,$2,$3,TRUE) RETURNING id', [ownerName,email,hash])).rows[0];
+    await client.query("INSERT INTO tenant_users(tenant_id,user_id,role,active) VALUES($1,$2,'owner',TRUE)", [tenant.id,user.id]);
+    await client.query("INSERT INTO branches(tenant_id,name,branch_key,phone,address,active) VALUES($1,$2,'sucursal_1',$3,$4,TRUE)", [tenant.id,branchName,phone,address]);
+    await client.query('COMMIT');
+    const { rows } = await poolDB1.query(`${companySelectSql} WHERE t.id=$1`, [tenant.id]);
+    res.status(201).json(mapCompany(rows[0]));
+  } catch (error) {
+    await client.query('ROLLBACK');
+    if (error.code === '23505') return res.status(409).json({ error: 'El correo ya está registrado' });
+    throw error;
+  } finally { client.release(); }
+}));
+
+app.put('/api/companies/:id', authRequired, companiesOwnerOnly, ah(async (req, res) => {
+  const id = req.params.id;
+  const name = String(req.body?.name || '').trim();
+  const ownerName = String(req.body?.ownerName || '').trim();
+  const email = normalizeEmail(req.body?.email);
+  const password = String(req.body?.password || '');
+  const branchName = String(req.body?.branchName || '').trim();
+  const phone = String(req.body?.phone || '').trim();
+  const address = String(req.body?.address || '').trim();
+  const plan = String(req.body?.plan || 'basic').trim();
+  if (!name || !ownerName || !email || !branchName) return res.status(400).json({ error: 'Completa los campos obligatorios' });
+  const client = await poolDB1.connect();
+  try {
+    await client.query('BEGIN');
+    const slug = await uniqueCompanySlug(client, name, id);
+    const updated = await client.query('UPDATE tenants SET name=$1,slug=$2,plan=$3,updated_at=NOW() WHERE id=$4 RETURNING id', [name,slug,plan,id]);
+    if (!updated.rows[0]) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Empresa no encontrada' }); }
+    const owner = (await client.query("SELECT u.id FROM tenant_users tu JOIN users u ON u.id=tu.user_id WHERE tu.tenant_id=$1 AND tu.role='owner' ORDER BY tu.created_at ASC LIMIT 1", [id])).rows[0];
+    if (owner) {
+      if (password) {
+        if (password.length < 8) { await client.query('ROLLBACK'); return res.status(400).json({ error: 'La contraseña debe tener mínimo 8 caracteres' }); }
+        await client.query('UPDATE users SET name=$1,email=$2,password_hash=$3,updated_at=NOW() WHERE id=$4', [ownerName,email,await bcrypt.hash(password,12),owner.id]);
+      } else await client.query('UPDATE users SET name=$1,email=$2,updated_at=NOW() WHERE id=$3', [ownerName,email,owner.id]);
+    }
+    const branch = (await client.query('SELECT id FROM branches WHERE tenant_id=$1 ORDER BY created_at ASC LIMIT 1',[id])).rows[0];
+    if (branch) await client.query('UPDATE branches SET name=$1,phone=$2,address=$3,updated_at=NOW() WHERE id=$4',[branchName,phone,address,branch.id]);
+    else await client.query("INSERT INTO branches(tenant_id,name,branch_key,phone,address,active) VALUES($1,$2,'sucursal_1',$3,$4,TRUE)",[id,branchName,phone,address]);
+    await client.query('COMMIT');
+    const { rows } = await poolDB1.query(`${companySelectSql} WHERE t.id=$1`, [id]);
+    res.json(mapCompany(rows[0]));
+  } catch (error) {
+    await client.query('ROLLBACK');
+    if (error.code === '23505') return res.status(409).json({ error: 'El correo ya está registrado' });
+    throw error;
+  } finally { client.release(); }
+}));
+
+app.patch('/api/companies/:id/activate', authRequired, companiesOwnerOnly, ah(async (req, res) => {
+  const { rows } = await poolDB1.query("UPDATE tenants SET status='active',updated_at=NOW() WHERE id=$1 RETURNING id,status", [req.params.id]);
+  if (!rows[0]) return res.status(404).json({ error: 'Empresa no encontrada' });
+  res.json({ ok:true, ...rows[0] });
+}));
+
+app.patch('/api/companies/:id/suspend', authRequired, companiesOwnerOnly, ah(async (req, res) => {
+  if (req.auth?.tenantId === req.params.id) return res.status(400).json({ error: 'No puedes suspender la empresa de tu sesión actual' });
+  const { rows } = await poolDB1.query("UPDATE tenants SET status='suspended',updated_at=NOW() WHERE id=$1 RETURNING id,status", [req.params.id]);
+  if (!rows[0]) return res.status(404).json({ error: 'Empresa no encontrada' });
+  res.json({ ok:true, ...rows[0] });
+}));
+// ===============================================================================
+
 // Crea Dentalux y el primer propietario solo cuando se configuran las variables
 // BOOTSTRAP_ADMIN_EMAIL y BOOTSTRAP_ADMIN_PASSWORD en Render.
 // Después del primer acceso se recomienda eliminar BOOTSTRAP_ADMIN_PASSWORD.
