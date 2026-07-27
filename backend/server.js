@@ -23,6 +23,51 @@ const morgan = require('morgan');
 const { Pool } = require('pg');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+
+
+// =========================================================
+// AUTENTICACIÓN GLOBAL — debe declararse antes de las rutas
+// =========================================================
+const GLOBAL_JWT_SECRET = String(process.env.JWT_SECRET || '').trim();
+
+function requireGlobalJwtSecret() {
+  if (!GLOBAL_JWT_SECRET) {
+    const error = new Error('Falta JWT_SECRET en las variables de entorno');
+    error.statusCode = 503;
+    throw error;
+  }
+  return GLOBAL_JWT_SECRET;
+}
+
+function authRequired(req, res, next) {
+  try {
+    const header = String(req.headers.authorization || '');
+    const match = header.match(/^Bearer\s+(.+)$/i);
+
+    if (!match) {
+      return res.status(401).json({ error: 'Sesión requerida' });
+    }
+
+    req.auth = jwt.verify(match[1], requireGlobalJwtSecret());
+    next();
+  } catch (error) {
+    return res.status(401).json({
+      error: error?.name === 'TokenExpiredError'
+        ? 'La sesión expiró. Inicia sesión nuevamente.'
+        : 'Sesión inválida'
+    });
+  }
+}
+
+function getTenantId(req) {
+  const tenantId = req?.auth?.tenantId;
+  if (!tenantId) {
+    const error = new Error('No se pudo identificar la empresa de la sesión');
+    error.status = 401;
+    throw error;
+  }
+  return tenantId;
+}
 const { AsyncLocalStorage } = require('async_hooks');
 
 
