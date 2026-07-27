@@ -141,21 +141,17 @@ function BroadcastTodayButton({
 
       const url = `${API_BASE}/api/whatsapp/broadcast/confirmations?${qs.toString()}`;
 
-      const res = await fetch(url, {
+      const apiPath = `/whatsapp/broadcast/confirmations?${qs.toString()}`;
+
+      const json: any = await api(apiPath, {
         method: "POST",
         headers: {
           ...(secret ? { "x-wa-secret": secret, "x-wa-broadcast-secret": secret } : {}),
           ...(dbKey ? { "x-db": dbKey } : {}),
           ...(appId ? { "x-app": appId } : {}),
+          "x-sucursal": sucursalId || "sucursal_1",
         },
-        credentials: "omit",
       });
-
-      const json: any = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        setLastResult(`Error HTTP ${res.status}${json?.error ? `: ${json.error}` : ""}`);
-        return;
-      }
 
       const errs = Array.isArray(json?.errors) ? json.errors.length : 0;
       const phoneIssues = Array.isArray(json?.phoneIssues) ? json.phoneIssues.length : 0;
