@@ -1,0 +1,8 @@
+[{
+      "relation": ["delegate_permission/common.handle_all_urls"],
+      "target": {
+        "namespace": "android_app",
+        "package_name": "com.cliniqone.app",
+        "sha256_cert_fingerprints": ["61:EC:E0:8C:0F:3B:C8:BB:69:3C:2A:7E:3B:F2:51:5A:39:01:14:F0:08:C3:B5:B9:41:6B:60:8B:48:84:68:A1"]
+      }
+    }]
