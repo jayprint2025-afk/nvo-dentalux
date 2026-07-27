@@ -1,6 +1,7 @@
 // Configuración de la API
 const API_BASE = import.meta.env.VITE_API_BASE || 'https://localhost:5173/';
 const USE_MELISSA = import.meta.env.VITE_USE_MELISSA === 'true';
+const AUTH_TOKEN_KEY = 'dentalux_auth_token';
 
 let currentSucursal = 'sucursal_1';
 
@@ -44,8 +45,12 @@ export async function api(endpoint: string, options: RequestInit = {}) {
   
   console.log(`🔍 API Request ${USE_MELISSA ? '(MELISSA)' : '(DENTALUX)'}:`, url);
   
+  let token = '';
+  try { token = localStorage.getItem(AUTH_TOKEN_KEY) || ''; } catch {}
+
   const headers: HeadersInit = {
     'Content-Type': 'application/json',
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
     'x-sucursal': currentSucursal,
     ...(options.headers || {}),
   };
@@ -55,6 +60,11 @@ export async function api(endpoint: string, options: RequestInit = {}) {
       ...options,
       headers,
     });
+
+    if (response.status === 401) {
+      try { localStorage.removeItem(AUTH_TOKEN_KEY); } catch {}
+      window.dispatchEvent(new CustomEvent('dentalux:auth-expired'));
+    }
 
     if (!response.ok) {
   const errorText = await response.text().catch(() => 'Unknown error');
@@ -110,7 +120,10 @@ export const testSucursalAPI = async () => {
   try {
     const url = buildApiUrl('/health');
     const response = await fetch(url, {
-      headers: { 'x-sucursal': currentSucursal }
+      headers: {
+        'x-sucursal': currentSucursal,
+        ...(localStorage.getItem(AUTH_TOKEN_KEY) ? { Authorization: `Bearer ${localStorage.getItem(AUTH_TOKEN_KEY)}` } : {})
+      }
     });
     return { ok: response.ok, status: response.status, url };
   } catch (error) {

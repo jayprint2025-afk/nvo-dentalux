@@ -41,6 +41,12 @@ export default function AuthGate() {
   };
 
   useEffect(() => {
+    const handleExpiredSession = () => logout();
+    window.addEventListener('dentalux:auth-expired', handleExpiredSession);
+    return () => window.removeEventListener('dentalux:auth-expired', handleExpiredSession);
+  }, []);
+
+  useEffect(() => {
     if (!token) {
       setChecking(false);
       return;
