@@ -2344,6 +2344,87 @@ Seguiremos mejorando para que tu experiencia sea cada vez más agradable.`;
       });
     }
 
+    // Respaldo para plantillas de WhatsApp:
+    // algunos quick-reply llegan como CONFIRMAR/CANCELAR sin folio y sin context_id útil.
+    // En ese caso buscamos el último mensaje saliente con appointment_id enviado
+    // recientemente al mismo número, en cualquiera de las DB configuradas.
+    if (!idHint && /^(CONFIRMAR|CANCELAR)$/i.test(action)) {
+      const incomingDigits = onlyDigits(from);
+      const store = als.getStore();
+      const primary = store?.pool || poolDB1;
+      const pools = [primary, poolDB1, poolDB2, poolDB3].filter(Boolean);
+      const uniqPools = [];
+      const seenPools = new Set();
+
+      for (const p of pools) {
+        if (!seenPools.has(p)) {
+          seenPools.add(p);
+          uniqPools.push(p);
+        }
+      }
+
+      let latestOutgoing = null;
+      let latestPool = null;
+
+      for (const candidate of uniqPools) {
+        try {
+          const rLast = await candidate.query(
+            `SELECT appointment_id, sucursal_id, wa_message_id, created_at
+               FROM whatsapp_messages
+              WHERE direction = 'outgoing'
+                AND appointment_id IS NOT NULL
+                AND regexp_replace(COALESCE(phone, ''), '\\D', '', 'g') = $1
+                AND created_at >= NOW() - INTERVAL '72 hours'
+              ORDER BY created_at DESC, id DESC
+              LIMIT 1`,
+            [incomingDigits]
+          );
+
+          const row = rLast.rows[0] || null;
+          if (
+            row &&
+            (!latestOutgoing ||
+              new Date(row.created_at).getTime() > new Date(latestOutgoing.created_at).getTime())
+          ) {
+            latestOutgoing = row;
+            latestPool = candidate;
+          }
+        } catch (eLast) {
+          console.log('⚠️ [LAST OUTGOING] No se pudo buscar en una DB:', {
+            db: dbName(candidate),
+            error: String(eLast?.message || eLast)
+          });
+        }
+      }
+
+      if (latestOutgoing?.appointment_id) {
+        idHint = Number(latestOutgoing.appointment_id);
+
+        if (store && latestPool) {
+          store.pool = latestPool;
+          store.dbKey = dbName(latestPool);
+        }
+
+        if (!sucursalForIncoming && latestOutgoing.sucursal_id) {
+          sucursalForIncoming = latestOutgoing.sucursal_id;
+        }
+
+        console.log('✅ [LAST OUTGOING] Cita recuperada desde último recordatorio:', {
+          appointment_id: idHint,
+          sucursal_id: latestOutgoing.sucursal_id || null,
+          wa_message_id: latestOutgoing.wa_message_id || null,
+          created_at: latestOutgoing.created_at,
+          db_used: latestPool ? dbName(latestPool) : null,
+          phone_digits: incomingDigits
+        });
+      } else {
+        console.log('⚠️ [LAST OUTGOING] No se encontró recordatorio reciente con appointment_id:', {
+          phone: from,
+          phone_digits: incomingDigits
+        });
+      }
+    }
+
     const newStatus = (action === 'CONFIRMAR') ? 'Confirmada' : 'Cancelada';
 
 // ===================== Depósito: bloquear CONFIRMAR si falta referencia =====================
