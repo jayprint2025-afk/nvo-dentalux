@@ -3787,18 +3787,126 @@ console.log('✅ Correcciones aplicadas - Dashboard listo');
 
 (async () => {
   try {
-    // =========================================================
+    
+// =========================================================
+// 🏢 ESQUEMA MULTI-TENANT - FASE 1
+// =========================================================
+async function ensureMultiTenantSchema() {
+  console.log('🏢 Verificando esquema multi-tenant...');
+
+  // Necesario para generar UUID
+  await q(`
+    CREATE EXTENSION IF NOT EXISTS pgcrypto;
+  `);
+
+  // Clientes o empresas que usarán la plataforma
+  await q(`
+    CREATE TABLE IF NOT EXISTS tenants (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      name TEXT NOT NULL,
+      slug TEXT NOT NULL UNIQUE,
+      status TEXT NOT NULL DEFAULT 'active',
+      plan TEXT NOT NULL DEFAULT 'basic',
+      logo_url TEXT,
+      primary_color TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+
+  // Usuarios que iniciarán sesión
+  await q(`
+    CREATE TABLE IF NOT EXISTS users (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      name TEXT NOT NULL,
+      email TEXT NOT NULL UNIQUE,
+      password_hash TEXT NOT NULL,
+      active BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+
+  // Relación entre usuarios y clientes
+  await q(`
+    CREATE TABLE IF NOT EXISTS tenant_users (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      tenant_id UUID NOT NULL
+        REFERENCES tenants(id)
+        ON DELETE CASCADE,
+      user_id UUID NOT NULL
+        REFERENCES users(id)
+        ON DELETE CASCADE,
+      role TEXT NOT NULL DEFAULT 'employee',
+      active BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (tenant_id, user_id)
+    );
+  `);
+
+  // Sucursales pertenecientes a cada cliente
+  await q(`
+    CREATE TABLE IF NOT EXISTS branches (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      tenant_id UUID NOT NULL
+        REFERENCES tenants(id)
+        ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      branch_key TEXT NOT NULL,
+      phone TEXT,
+      address TEXT,
+      active BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (tenant_id, branch_key)
+    );
+  `);
+
+  // Índices
+  await q(`
+    CREATE INDEX IF NOT EXISTS idx_tenant_users_tenant_id
+    ON tenant_users(tenant_id);
+  `);
+
+  await q(`
+    CREATE INDEX IF NOT EXISTS idx_tenant_users_user_id
+    ON tenant_users(user_id);
+  `);
+
+  await q(`
+    CREATE INDEX IF NOT EXISTS idx_branches_tenant_id
+    ON branches(tenant_id);
+  `);
+
+  await q(`
+    CREATE INDEX IF NOT EXISTS idx_tenants_status
+    ON tenants(status);
+  `);
+
+  console.log('✅ Esquema multi-tenant listo');
+}
+// =========================================================
     // 🧬 MIGRACIONES POR CADA BASE (DB1/DB2/DB3)
     // =========================================================
     const runStartupFor = async (pool, dbKey) => {
-      if (!pool) return;
-      await als.run({ pool, dbKey }, async () => {
-        try {
-          // await ensureRequiredFields();
-         
-          
-          // 🤖 Crear tablas IA (ai_conversations/ai_messages) en cada DB
-          if (aiModule && typeof aiModule.createAiTables === 'function') {
+  if (!pool) return;
+
+  await als.run({ pool, dbKey }, async () => {
+    try {
+      // await ensureRequiredFields();
+
+      // 🏢 Crear tablas principales multi-tenant
+      try {
+        console.log(`🏢 Iniciando migración multi-tenant (${dbKey})...`);
+        await ensureMultiTenantSchema();
+        console.log(`✅ Migración multi-tenant lista (${dbKey})`);
+      } catch (err) {
+        console.error(`❌ Error en migración multi-tenant (${dbKey}):`, err);
+        throw err;
+      }
+
+      // 🤖 Crear tablas IA (ai_conversations/ai_messages) en cada DB
+      if (aiModule && typeof aiModule.createAiTables === 'function') {
             try {
               console.log(`🤖 Iniciando migración IA (${dbKey}).`);
               await aiModule.createAiTables(q);

@@ -19,3 +19,7 @@ backend/npm/
 npx
 * - copia.*
 * - copia.*
+
+# Respaldos locales multi-tenant
+backend/server-antes-multitenant.js
+dentalux_db_full_render_clean.sql
