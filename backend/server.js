@@ -1303,86 +1303,93 @@ app.get('/api/debug/sucursales', ah(async (_req, res) => {
 }));
 
 // ==============================
-// DOCTORS
+// DOCTORS — aislado por empresa + sucursal
 // ==============================
-app.get('/api/doctors', ah(async (req, res) => {
+app.get('/api/doctors', authRequired, ah(async (req, res) => {
   const s = getSucursal(req);
+  const tenantId = getTenantId(req);
   const { rows } = await q(
     `SELECT id, name, color, sucursal_id
      FROM doctors
-     WHERE ${sucWhereN(1)}
-     ORDER BY id ASC`, [s]
+     WHERE tenant_id = $1 AND ${sucWhereN(2)}
+     ORDER BY id ASC`, [tenantId, s]
   );
   res.json(rows);
 }));
 
-app.post('/api/doctors', ah(async (req, res) => {
+app.post('/api/doctors', authRequired, ah(async (req, res) => {
   const s = getSucursal(req);
+  const tenantId = getTenantId(req);
   const { name, color } = req.body || {};
   const { rows } = await q(
-    `INSERT INTO doctors (name, color, sucursal_id)
-     VALUES ($1,$2,$3) RETURNING *`,
-    [name, color || null, s]
+    `INSERT INTO doctors (name, color, sucursal_id, tenant_id)
+     VALUES ($1,$2,$3,$4) RETURNING *`,
+    [name, color || null, s, tenantId]
   );
   res.json(rows[0]);
 }));
 
-app.put('/api/doctors/:id', ah(async (req, res) => {
+app.put('/api/doctors/:id', authRequired, ah(async (req, res) => {
   const s = getSucursal(req);
+  const tenantId = getTenantId(req);
   const id = Number(req.params.id);
   const { name, color } = req.body || {};
   const { rows } = await q(
     `UPDATE doctors
      SET name = COALESCE($1, name),
          color = COALESCE($2, color)
-     WHERE id=$3 AND ${sucWhereN(4)}
+     WHERE id=$3 AND tenant_id=$4 AND ${sucWhereN(5)}
      RETURNING *`,
-    [name || null, color || null, id, s]
+    [name || null, color || null, id, tenantId, s]
   );
   res.json(rows[0] || null);
 }));
 
-app.delete('/api/doctors/:id', ah(async (req, res) => {
+app.delete('/api/doctors/:id', authRequired, ah(async (req, res) => {
   const s = getSucursal(req);
+  const tenantId = getTenantId(req);
   await q(
     `DELETE FROM doctors
-     WHERE id=$1 AND ${sucWhereN(2)}`,
-    [Number(req.params.id), s]
+     WHERE id=$1 AND tenant_id=$2 AND ${sucWhereN(3)}`,
+    [Number(req.params.id), tenantId, s]
   );
   res.status(204).end();
 }));
 
 // ==============================
-// SERVICES
+// SERVICES — aislado por empresa + sucursal
 // ==============================
-app.get('/api/services', ah(async (req, res) => {
+app.get('/api/services', authRequired, ah(async (req, res) => {
   const s = getSucursal(req);
+  const tenantId = getTenantId(req);
   const { rows } = await q(
     `SELECT id, name, sucursal_id
      FROM services
-     WHERE ${sucWhereN(1)}
-     ORDER BY id ASC`, [s]
+     WHERE tenant_id = $1 AND ${sucWhereN(2)}
+     ORDER BY id ASC`, [tenantId, s]
   );
   res.json(rows);
 }));
 
-app.post('/api/services', ah(async (req, res) => {
+app.post('/api/services', authRequired, ah(async (req, res) => {
   const s = getSucursal(req);
+  const tenantId = getTenantId(req);
   const { name } = req.body || {};
   const { rows } = await q(
-    `INSERT INTO services (name, sucursal_id)
-     VALUES ($1,$2) RETURNING *`,
-    [name, s]
+    `INSERT INTO services (name, sucursal_id, tenant_id)
+     VALUES ($1,$2,$3) RETURNING *`,
+    [name, s, tenantId]
   );
   res.json(rows[0]);
 }));
 
-app.delete('/api/services/:id', ah(async (req, res) => {
+app.delete('/api/services/:id', authRequired, ah(async (req, res) => {
   const s = getSucursal(req);
+  const tenantId = getTenantId(req);
   await q(
     `DELETE FROM services
-     WHERE id=$1 AND ${sucWhereN(2)}`,
-    [Number(req.params.id), s]
+     WHERE id=$1 AND tenant_id=$2 AND ${sucWhereN(3)}`,
+    [Number(req.params.id), tenantId, s]
   );
   res.status(204).end();
 }));
@@ -1695,283 +1702,175 @@ async function aplicarFormulaInventario(sucursalId, formulaItems) {
 }
 
 // ==============================
-// APPOINTMENTS
+// APPOINTMENTS — aislado por empresa + sucursal
 // ==============================
-app.get('/api/appointments', ah(async (req, res) => {
+app.get('/api/appointments', authRequired, ah(async (req, res) => {
   const s = getSucursal(req);
+  const tenantId = getTenantId(req);
   const { rows } = await q(
     `SELECT id, patient, doctor_id, date, start_time, duration_hours, service_id, phone, status, sucursal_id
      FROM appointments
-     WHERE ${sucWhereN(1)}
-     ORDER BY date DESC, start_time DESC`, [s]
+     WHERE tenant_id=$1 AND ${sucWhereN(2)}
+     ORDER BY date DESC, start_time DESC`, [tenantId, s]
   );
   res.json(rows);
 }));
 
-app.post('/api/appointments', ah(async (req, res) => {
+app.post('/api/appointments', authRequired, ah(async (req, res) => {
   const s = getSucursal(req);
+  const tenantId = getTenantId(req);
   const { patient, doctor_id, date, start_time, duration_hours, service_id, phone, status } = req.body || {};
-
   if (!patient || (typeof patient === 'string' && !patient.trim())) {
     return res.status(400).json({ error: 'El nombre del paciente es requerido' });
   }
   const cleanPatient = typeof patient === 'string' ? patient.trim() : String(patient);
-
   const { rows } = await q(
-    `INSERT INTO appointments (patient, doctor_id, date, start_time, duration_hours, service_id, phone, status, sucursal_id)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,COALESCE($8,'Pendiente'),$9)
+    `INSERT INTO appointments (patient, doctor_id, date, start_time, duration_hours, service_id, phone, status, sucursal_id, tenant_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,COALESCE($8,'Pendiente'),$9,$10)
      RETURNING *`,
-    [
-      cleanPatient,
-      doctor_id ? Number(doctor_id) : null,
-      date,
-      start_time || '09:00',
-      duration_hours ? Number(duration_hours) : 1,
-      service_id ? Number(service_id) : null,
-      phone || null,
-      status || 'Pendiente',
-      s
-    ]
+    [cleanPatient, doctor_id ? Number(doctor_id) : null, date, start_time || '09:00', duration_hours ? Number(duration_hours) : 1, service_id ? Number(service_id) : null, phone || null, status || 'Pendiente', s, tenantId]
   );
   res.json(rows[0]);
 }));
 
-app.put('/api/appointments/:id', ah(async (req, res) => {
+app.put('/api/appointments/:id', authRequired, ah(async (req, res) => {
   const s = getSucursal(req);
+  const tenantId = getTenantId(req);
   const id = Number(req.params.id);
-  const {
-    patient,
-    doctor_id,
-    date,
-    start_time,
-    duration_hours,
-    service_id,
-    phone,
-    status,
-  } = req.body || {};
+  const { patient, doctor_id, date, start_time, duration_hours, service_id, phone, status } = req.body || {};
 
-  // 1️⃣ Leer el estado anterior para no descontar dos veces
   const { rows: prevRows } = await q(
-    `SELECT status, service_id
-     FROM appointments
-     WHERE id=$1 AND ${sucWhereN(2)}`,
-    [id, s]
+    `SELECT status, service_id FROM appointments
+     WHERE id=$1 AND tenant_id=$2 AND ${sucWhereN(3)}`,
+    [id, tenantId, s]
   );
   const prev = prevRows[0] || null;
   const prevStatus = (prev?.status || '').toLowerCase();
   const yaEraFinalizada = FINAL_APPOINTMENT_STATUSES.includes(prevStatus);
 
-  // 2️⃣ Actualizar cita
   const { rows } = await q(
     `UPDATE appointments
-     SET patient = COALESCE($1, patient),
-         doctor_id = COALESCE($2, doctor_id),
-         date = COALESCE($3, date),
-         start_time = COALESCE($4, start_time),
-         duration_hours = COALESCE($5, duration_hours),
-         service_id = COALESCE($6, service_id),
-         phone = COALESCE($7, phone),
-         status = COALESCE($8, status)
-     WHERE id=$9 AND ${sucWhereN(10)}
-     RETURNING *`,
-    [patient, doctor_id, date, start_time, duration_hours, service_id, phone, status, id, s]
+     SET patient = COALESCE($1, patient), doctor_id = COALESCE($2, doctor_id),
+         date = COALESCE($3, date), start_time = COALESCE($4, start_time),
+         duration_hours = COALESCE($5, duration_hours), service_id = COALESCE($6, service_id),
+         phone = COALESCE($7, phone), status = COALESCE($8, status)
+     WHERE id=$9 AND tenant_id=$10 AND ${sucWhereN(11)} RETURNING *`,
+    [patient, doctor_id, date, start_time, duration_hours, service_id, phone, status, id, tenantId, s]
   );
-
   const updated = rows[0] || null;
 
   if (updated) {
     const finalStatus = (status || updated.status || '').toLowerCase();
     const esFinalizadaAhora = FINAL_APPOINTMENT_STATUSES.includes(finalStatus);
-
-    // Solo si ANTES no estaba finalizada y AHORA sí:
     if (esFinalizadaAhora && !yaEraFinalizada) {
-      console.log('✅ Cita finalizada, disparando acciones de cierre...', {
-        appointment_id: updated.id,
-        status: finalStatus,
-        phone: updated.phone,
-      });
-
-      // 3️⃣ Enviar encuesta de satisfacción por WhatsApp
-      try {
-        await triggerSatisfaccionWhatsApp(updated, s);
-      } catch (err) {
-        console.error('⚠️ Error enviando WhatsApp de satisfacción:', err);
-      }
-
-      // 4️⃣ Buscar el servicio para obtener el nombre
+      try { await triggerSatisfaccionWhatsApp(updated, s); } catch (err) { console.error('⚠️ Error enviando WhatsApp de satisfacción:', err); }
       const servicioId = updated.service_id || service_id || prev?.service_id;
       if (servicioId) {
         const { rows: serviceRows } = await q(
-          `SELECT id, name
-           FROM services
-           WHERE id=$1 AND ${sucWhereN(2)}`,
-          [servicioId, s]
+          `SELECT id, name FROM services WHERE id=$1 AND tenant_id=$2 AND ${sucWhereN(3)}`,
+          [servicioId, tenantId, s]
         );
         const service = serviceRows[0] || null;
-
         if (service) {
-          const serviceName = service.name;
-          const formulaItems = TREATMENT_FORMULAS[serviceName];
-
-          if (formulaItems && formulaItems.length) {
-            console.log('🧮 Aplicando fórmula de inventario por servicio finalizado...', {
-              appointment_id: updated.id,
-              service_id: servicioId,
-              service_name: serviceName,
-            });
-
-            try {
-              await aplicarFormulaInventario(s, formulaItems);
-            } catch (err) {
-              console.error('⚠️ Error aplicando fórmula de inventario:', err);
-            }
-          } else {
-            console.log('ℹ️ Cita finalizada sin fórmula de inventario asignada', {
-              appointment_id: updated.id,
-              service_id: servicioId,
-              service_name: service?.name,
-            });
+          const formulaItems = TREATMENT_FORMULAS[service.name];
+          if (formulaItems?.length) {
+            try { await aplicarFormulaInventario(s, formulaItems); } catch (err) { console.error('⚠️ Error aplicando fórmula de inventario:', err); }
           }
         }
       }
     }
   }
-
   res.json(updated);
 }));
 
-app.delete('/api/appointments/:id', ah(async (req, res) => {
+app.delete('/api/appointments/:id', authRequired, ah(async (req, res) => {
   const s = getSucursal(req);
-  await q(
-    `DELETE FROM appointments
-     WHERE id=$1 AND ${sucWhereN(2)}`,
-    [Number(req.params.id), s]
-  );
+  const tenantId = getTenantId(req);
+  await q(`DELETE FROM appointments WHERE id=$1 AND tenant_id=$2 AND ${sucWhereN(3)}`,
+    [Number(req.params.id), tenantId, s]);
   res.status(204).end();
 }));
 
 // ==============================
-// PAYMENTS
+// PAYMENTS — aislado por empresa + sucursal
 // ==============================
-app.get('/api/payments', ah(async (req, res) => {
-  const s = getSucursal(req);
+app.get('/api/payments', authRequired, ah(async (req, res) => {
+  const s = getSucursal(req); const tenantId = getTenantId(req);
   const { rows } = await q(
     `SELECT id, appointment_id, patient, service_id, amount, payment_method, date, doctor_id, sucursal_id
-     FROM payments
-     WHERE ${sucWhereN(1)}
-     ORDER BY date DESC, id DESC`, [s]
-  );
+     FROM payments WHERE tenant_id=$1 AND ${sucWhereN(2)} ORDER BY date DESC, id DESC`, [tenantId, s]);
   res.json(rows);
 }));
 
-app.post('/api/payments', ah(async (req, res) => {
-  const s = getSucursal(req);
+app.post('/api/payments', authRequired, ah(async (req, res) => {
+  const s = getSucursal(req); const tenantId = getTenantId(req);
   const { appointment_id, patient, service_id, amount, payment_method, date, doctor_id } = req.body || {};
-
   if (!patient || !patient.trim()) return res.status(400).json({ error: 'El nombre del paciente es requerido' });
-  if (!amount || amount <= 0)     return res.status(400).json({ error: 'El monto debe ser mayor a 0' });
+  if (!amount || amount <= 0) return res.status(400).json({ error: 'El monto debe ser mayor a 0' });
   if (!payment_method || !payment_method.trim()) return res.status(400).json({ error: 'El método de pago es requerido' });
   if (!date) return res.status(400).json({ error: 'La fecha es requerida' });
-
   const { rows } = await q(
-    `INSERT INTO payments (appointment_id, patient, service_id, amount, payment_method, date, doctor_id, sucursal_id)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
-    [
-      appointment_id || null,
-      patient.trim(),
-      service_id ? Number(service_id) : null,
-      Number(amount),
-      payment_method.trim(),
-      date,
-      doctor_id ? Number(doctor_id) : null,
-      s
-    ]
-  );
+    `INSERT INTO payments (appointment_id, patient, service_id, amount, payment_method, date, doctor_id, sucursal_id, tenant_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+    [appointment_id || null, patient.trim(), service_id ? Number(service_id) : null, Number(amount), payment_method.trim(), date, doctor_id ? Number(doctor_id) : null, s, tenantId]);
   res.json(rows[0]);
 }));
 
-app.put('/api/payments/:id', ah(async (req, res) => {
-  const s = getSucursal(req);
-  const id = Number(req.params.id);
-  const { patient, amount, payment_method, date } = req.body || {};
+app.put('/api/payments/:id', authRequired, ah(async (req, res) => {
+  const s = getSucursal(req); const tenantId = getTenantId(req);
+  const id = Number(req.params.id); const { patient, amount, payment_method, date } = req.body || {};
   const { rows } = await q(
-    `UPDATE payments
-     SET patient=$1, amount=$2, payment_method=$3, date=$4
-     WHERE id=$5 AND ${sucWhereN(6)}
-     RETURNING *`,
-    [patient, amount, payment_method, date, id, s]
-  );
+    `UPDATE payments SET patient=$1, amount=$2, payment_method=$3, date=$4
+     WHERE id=$5 AND tenant_id=$6 AND ${sucWhereN(7)} RETURNING *`,
+    [patient, amount, payment_method, date, id, tenantId, s]);
   res.json(rows[0] || null);
 }));
 
-app.delete('/api/payments/:id', ah(async (req, res) => {
-  const s = getSucursal(req);
-  await q(
-    `DELETE FROM payments
-     WHERE id=$1 AND ${sucWhereN(2)}`,
-    [Number(req.params.id), s]
-  );
+app.delete('/api/payments/:id', authRequired, ah(async (req, res) => {
+  const s = getSucursal(req); const tenantId = getTenantId(req);
+  await q(`DELETE FROM payments WHERE id=$1 AND tenant_id=$2 AND ${sucWhereN(3)}`,
+    [Number(req.params.id), tenantId, s]);
   res.status(204).end();
 }));
 
 // ==============================
-// EXPENSES
+// EXPENSES — aislado por empresa + sucursal
 // ==============================
-app.get('/api/expenses', ah(async (req, res) => {
-  const s = getSucursal(req);
+app.get('/api/expenses', authRequired, ah(async (req, res) => {
+  const s = getSucursal(req); const tenantId = getTenantId(req);
   const { rows } = await q(
     `SELECT id, concept, amount, date, doctor_id, payment_method, sucursal_id
-     FROM expenses
-     WHERE ${sucWhereN(1)}
-     ORDER BY date DESC, id DESC`, [s]
-  );
+     FROM expenses WHERE tenant_id=$1 AND ${sucWhereN(2)} ORDER BY date DESC, id DESC`, [tenantId, s]);
   res.json(rows);
 }));
 
-app.post('/api/expenses', ah(async (req, res) => {
-  const s = getSucursal(req);
+app.post('/api/expenses', authRequired, ah(async (req, res) => {
+  const s = getSucursal(req); const tenantId = getTenantId(req);
   const { concept, amount, date, doctor_id, payment_method } = req.body || {};
-
   if (!concept || !concept.trim()) return res.status(400).json({ error: 'El concepto del gasto es requerido' });
-  if (!amount || amount <= 0)     return res.status(400).json({ error: 'El monto debe ser mayor a 0' });
-  if (!date)                      return res.status(400).json({ error: 'La fecha es requerida' });
-
+  if (!amount || amount <= 0) return res.status(400).json({ error: 'El monto debe ser mayor a 0' });
+  if (!date) return res.status(400).json({ error: 'La fecha es requerida' });
   const { rows } = await q(
-    `INSERT INTO expenses (concept, amount, date, doctor_id, payment_method, sucursal_id)
-     VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
-    [
-      concept.trim(),
-      Number(amount),
-      date,
-      doctor_id ? Number(doctor_id) : null,
-      payment_method || null,
-      s
-    ]
-  );
+    `INSERT INTO expenses (concept, amount, date, doctor_id, payment_method, sucursal_id, tenant_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+    [concept.trim(), Number(amount), date, doctor_id ? Number(doctor_id) : null, payment_method || null, s, tenantId]);
   res.json(rows[0]);
 }));
 
-app.put('/api/expenses/:id', ah(async (req, res) => {
-  const s = getSucursal(req);
-  const id = Number(req.params.id);
-  const { concept, amount, date, doctor_id, payment_method } = req.body || {};
+app.put('/api/expenses/:id', authRequired, ah(async (req, res) => {
+  const s = getSucursal(req); const tenantId = getTenantId(req);
+  const id = Number(req.params.id); const { concept, amount, date, doctor_id, payment_method } = req.body || {};
   const { rows } = await q(
-    `UPDATE expenses
-     SET concept=$1, amount=$2, date=$3, doctor_id=$4, payment_method=$5
-     WHERE id=$6 AND ${sucWhereN(7)}
-     RETURNING *`,
-    [concept, amount, date, doctor_id || null, payment_method || null, id, s]
-  );
+    `UPDATE expenses SET concept=$1, amount=$2, date=$3, doctor_id=$4, payment_method=$5
+     WHERE id=$6 AND tenant_id=$7 AND ${sucWhereN(8)} RETURNING *`,
+    [concept, amount, date, doctor_id || null, payment_method || null, id, tenantId, s]);
   res.json(rows[0] || null);
 }));
 
-app.delete('/api/expenses/:id', ah(async (req, res) => {
-  const s = getSucursal(req);
-  await q(
-    `DELETE FROM expenses
-     WHERE id=$1 AND ${sucWhereN(2)}`,
-    [Number(req.params.id), s]
-  );
+app.delete('/api/expenses/:id', authRequired, ah(async (req, res) => {
+  const s = getSucursal(req); const tenantId = getTenantId(req);
+  await q(`DELETE FROM expenses WHERE id=$1 AND tenant_id=$2 AND ${sucWhereN(3)}`,
+    [Number(req.params.id), tenantId, s]);
   res.status(204).end();
 }));
 
@@ -3887,6 +3786,55 @@ async function ensureMultiTenantSchema() {
 
   console.log('✅ Esquema multi-tenant listo');
 }
+
+
+// =========================================================
+// 🏢 MULTIEMPRESA - FASE 2.1 (tablas operativas principales)
+// =========================================================
+const CORE_TENANT_TABLES = ['doctors', 'services', 'appointments', 'payments', 'expenses'];
+
+async function ensureCoreTenantSchema() {
+  console.log('🏢 Verificando tenant_id en tablas operativas principales...');
+
+  const { rows: tenantRows } = await q(`
+    SELECT id
+    FROM tenants
+    WHERE slug = $1
+    ORDER BY created_at ASC
+    LIMIT 1
+  `, [String(process.env.BOOTSTRAP_TENANT_SLUG || 'dentalux').trim().toLowerCase()]);
+
+  const tenantId = tenantRows[0]?.id;
+  if (!tenantId) {
+    throw new Error('No se encontró el tenant principal para migrar los datos existentes');
+  }
+
+  for (const table of CORE_TENANT_TABLES) {
+    const exists = await q(`SELECT to_regclass($1) AS name`, [`public.${table}`]);
+    if (!exists.rows[0]?.name) {
+      console.warn(`⚠️ Tabla ${table} todavía no existe; se omitió tenant_id`);
+      continue;
+    }
+
+    await q(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS tenant_id UUID`);
+    await q(`UPDATE ${table} SET tenant_id = $1 WHERE tenant_id IS NULL`, [tenantId]);
+    await q(`CREATE INDEX IF NOT EXISTS idx_${table}_tenant_id ON ${table}(tenant_id)`);
+    await q(`CREATE INDEX IF NOT EXISTS idx_${table}_tenant_sucursal ON ${table}(tenant_id, sucursal_id)`);
+  }
+
+  console.log('✅ tenant_id listo en doctors, services, appointments, payments y expenses');
+}
+
+function getTenantId(req) {
+  const tenantId = req?.auth?.tenantId;
+  if (!tenantId) {
+    const error = new Error('No se pudo identificar la empresa de la sesión');
+    error.status = 401;
+    throw error;
+  }
+  return tenantId;
+}
+
 // =========================================================
     // 🧬 MIGRACIONES POR CADA BASE (DB1/DB2/DB3)
     // =========================================================
@@ -3902,6 +3850,7 @@ async function ensureMultiTenantSchema() {
         console.log(`🏢 Iniciando migración multi-tenant (${dbKey})...`);
         await ensureMultiTenantSchema();
         await ensureBootstrapDentaluxAdmin();
+        await ensureCoreTenantSchema();
         console.log(`✅ Migración multi-tenant lista (${dbKey})`);
       } catch (err) {
         console.error(`❌ Error en migración multi-tenant (${dbKey}):`, err);
