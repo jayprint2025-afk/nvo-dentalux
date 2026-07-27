@@ -131,3 +131,11 @@ export const testSucursalAPI = async () => {
     return { ok: false, status: 0, url: API_BASE };
   }
 };
+
+
+// ===================== Empresas =====================
+export const fetchCompanies = () => api('/companies');
+export const createCompany = (data: unknown) => api('/companies', { method: 'POST', body: JSON.stringify(data) });
+export const updateCompany = (id: string, data: unknown) => api(`/companies/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+export const activateCompany = (id: string) => api(`/companies/${id}/activate`, { method: 'PATCH' });
+export const suspendCompany = (id: string) => api(`/companies/${id}/suspend`, { method: 'PATCH' });

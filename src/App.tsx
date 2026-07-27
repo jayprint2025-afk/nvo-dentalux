@@ -4,7 +4,7 @@ import {
   Calendar, DollarSign, BarChart3, Plus, X, Check, Edit, Trash2,
   AlertTriangle, Filter, RefreshCw, Wifi, WifiOff, CreditCard,
   MessageCircle, MessageSquare, Send, Search, Settings, TestTube,
-  ArrowUpRight, ArrowDownLeft, Package, User, FileText  // <- Agregar FileText aquí
+  ArrowUpRight, ArrowDownLeft, Package, User, FileText, Building2  // <- Agregar FileText aquí
 } from "lucide-react";
 import FacturacionModule from './FacturacionModule';
 import {
@@ -1191,6 +1191,147 @@ function PagarLaboratorioUI({
   );
 }
 
+
+type Empresa = {
+  id: string;
+  name: string;
+  slug: string;
+  plan: string;
+  status: 'active' | 'suspended';
+  ownerName: string;
+  ownerEmail: string;
+  branchName: string;
+  phone: string;
+  address: string;
+};
+
+const emptyEmpresaForm = {
+  name: '', ownerName: '', email: '', password: '', branchName: '',
+  phone: '', address: '', plan: 'basic'
+};
+
+function EmpresasModule() {
+  const [empresas, setEmpresas] = React.useState<Empresa[]>([]);
+  const [loading, setLoading] = React.useState(false);
+  const [showForm, setShowForm] = React.useState(false);
+  const [editing, setEditing] = React.useState<Empresa | null>(null);
+  const [form, setForm] = React.useState(emptyEmpresaForm);
+  const [message, setMessage] = React.useState('');
+
+  const load = React.useCallback(async () => {
+    setLoading(true);
+    try {
+      const data = await api('/companies');
+      setEmpresas(Array.isArray(data) ? data : []);
+    } catch (e: any) {
+      setMessage(`Error: ${e?.message || 'No se pudieron cargar las empresas'}`);
+    } finally { setLoading(false); }
+  }, []);
+
+  React.useEffect(() => { load(); }, [load]);
+
+  const openNew = () => {
+    setEditing(null);
+    setForm(emptyEmpresaForm);
+    setMessage('');
+    setShowForm(true);
+  };
+
+  const openEdit = (empresa: Empresa) => {
+    setEditing(empresa);
+    setForm({
+      name: empresa.name, ownerName: empresa.ownerName, email: empresa.ownerEmail,
+      password: '', branchName: empresa.branchName, phone: empresa.phone || '',
+      address: empresa.address || '', plan: empresa.plan || 'basic'
+    });
+    setMessage('');
+    setShowForm(true);
+  };
+
+  const save = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    setMessage('');
+    try {
+      const payload = {
+        name: form.name, ownerName: form.ownerName, email: form.email,
+        password: form.password, branchName: form.branchName,
+        phone: form.phone, address: form.address, plan: form.plan
+      };
+      if (editing) {
+        await api(`/companies/${editing.id}`, { method: 'PUT', body: JSON.stringify(payload) });
+        setMessage('Empresa actualizada correctamente.');
+      } else {
+        await api('/companies', { method: 'POST', body: JSON.stringify(payload) });
+        setMessage('Empresa creada correctamente.');
+      }
+      setShowForm(false);
+      await load();
+    } catch (e: any) {
+      setMessage(`Error: ${e?.message || 'No se pudo guardar'}`);
+    } finally { setLoading(false); }
+  };
+
+  const changeStatus = async (empresa: Empresa, action: 'activate' | 'suspend') => {
+    setLoading(true);
+    setMessage('');
+    try {
+      await api(`/companies/${empresa.id}/${action}`, { method: 'PATCH' });
+      setMessage(action === 'activate' ? 'Empresa activada.' : 'Empresa suspendida.');
+      await load();
+    } catch (e: any) {
+      setMessage(`Error: ${e?.message || 'No se pudo cambiar el estado'}`);
+    } finally { setLoading(false); }
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div>
+          <h2 className="text-2xl font-bold text-gray-800 flex items-center gap-2"><Building2 className="w-6 h-6" /> Empresas</h2>
+          <p className="text-sm text-gray-500">Administración básica de empresas, propietario y primera sucursal.</p>
+        </div>
+        <button onClick={openNew} className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg flex items-center gap-2">
+          <Plus className="w-4 h-4" /> Nueva Empresa
+        </button>
+      </div>
+
+      {message && <div className={`p-3 rounded-lg border text-sm ${message.startsWith('Error') ? 'bg-red-50 border-red-200 text-red-700' : 'bg-green-50 border-green-200 text-green-700'}`}>{message}</div>}
+
+      {showForm && (
+        <form onSubmit={save} className="border rounded-xl p-5 bg-gray-50 space-y-4">
+          <div className="flex items-center justify-between"><h3 className="font-semibold text-lg">{editing ? 'Editar Empresa' : 'Nueva Empresa'}</h3><button type="button" onClick={() => setShowForm(false)}><X className="w-5 h-5" /></button></div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {[
+              ['name','Nombre empresa','text'], ['ownerName','Propietario','text'], ['email','Correo','email'],
+              ['password', editing ? 'Nueva contraseña temporal (opcional)' : 'Contraseña temporal','password'],
+              ['branchName','Primera sucursal','text'], ['phone','Teléfono','text'], ['address','Dirección','text']
+            ].map(([key,label,type]) => (
+              <label key={key} className={key === 'address' ? 'md:col-span-2' : ''}>
+                <span className="block text-sm font-medium text-gray-700 mb-1">{label}</span>
+                <input required={!editing || key !== 'password'} type={type} value={(form as any)[key]} onChange={e => setForm(v => ({...v,[key]:e.target.value}))} className="w-full px-3 py-2 border rounded-lg bg-white" />
+              </label>
+            ))}
+            <label><span className="block text-sm font-medium text-gray-700 mb-1">Plan</span><select value={form.plan} onChange={e => setForm(v => ({...v,plan:e.target.value}))} className="w-full px-3 py-2 border rounded-lg bg-white"><option value="basic">Básico</option><option value="professional">Profesional</option><option value="enterprise">Enterprise</option></select></label>
+          </div>
+          <div className="flex gap-2 justify-end"><button type="button" onClick={() => setShowForm(false)} className="px-4 py-2 border rounded-lg">Cancelar</button><button disabled={loading} className="px-4 py-2 bg-blue-600 text-white rounded-lg disabled:opacity-60">{loading ? 'Guardando...' : 'Guardar'}</button></div>
+        </form>
+      )}
+
+      <div className="overflow-x-auto border rounded-xl">
+        <table className="w-full text-sm">
+          <thead className="bg-gray-50"><tr><th className="p-3 text-left">Empresa</th><th className="p-3 text-left">Propietario</th><th className="p-3 text-left">Plan</th><th className="p-3 text-left">Estado</th><th className="p-3 text-left">Acciones</th></tr></thead>
+          <tbody>
+            {empresas.map(empresa => <tr key={empresa.id} className="border-t"><td className="p-3"><div className="font-medium">{empresa.name}</div><div className="text-xs text-gray-500">{empresa.branchName}</div></td><td className="p-3"><div>{empresa.ownerName}</div><div className="text-xs text-gray-500">{empresa.ownerEmail}</div></td><td className="p-3 capitalize">{empresa.plan}</td><td className="p-3"><span className={`px-2 py-1 rounded-full text-xs font-medium ${empresa.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>{empresa.status === 'active' ? 'Activa' : 'Suspendida'}</span></td><td className="p-3"><div className="flex flex-wrap gap-2"><button onClick={() => openEdit(empresa)} className="px-3 py-1.5 border rounded flex items-center gap-1"><Edit className="w-3 h-3" /> Editar</button>{empresa.status === 'active' ? <button onClick={() => changeStatus(empresa,'suspend')} className="px-3 py-1.5 border border-red-300 text-red-600 rounded">Suspender</button> : <button onClick={() => changeStatus(empresa,'activate')} className="px-3 py-1.5 border border-green-300 text-green-700 rounded">Activar</button>}</div></td></tr>)}
+            {!loading && empresas.length === 0 && <tr><td colSpan={5} className="p-8 text-center text-gray-500">No hay empresas registradas.</td></tr>}
+            {loading && <tr><td colSpan={5} className="p-8 text-center text-gray-500">Cargando...</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 export default function App(){
   // Connection status
   const [isOnline, setIsOnline] = useState(true);
@@ -1206,7 +1347,7 @@ export default function App(){
   const { data: trabajos, reload: reloadTrabajos } = useReloadableFetch(fetchTrabajos);
 
   // UI States
-  const [activeTab, setActiveTab] = useState<'agenda'|'pagos'|'analytics'|'laboratorios'|'whatsapp'|'facturacion'>('agenda');
+  const [activeTab, setActiveTab] = useState<'agenda'|'pagos'|'analytics'|'laboratorios'|'whatsapp'|'facturacion'|'empresas'>('agenda');
 
   const [selectedDate, setSelectedDate] = useState<string>(fmtDate(today));
   const [selectedDoctor, setSelectedDoctor] = useState<string>('');
@@ -3260,6 +3401,7 @@ const [to, setTo] = useState<string>(defaultTo);
               { id: 'laboratorios', label: 'Laboratorios', icon: BarChart3 },
               { id: 'whatsapp', label: 'WhatsApp', icon: MessageCircle },
               { id: 'facturacion', label: 'Facturación', icon: CreditCard },
+              { id: 'empresas', label: 'Empresas', icon: Building2 },
             ].map(tab => (
   <button 
     key={tab.id as string} 
@@ -5459,6 +5601,9 @@ const [to, setTo] = useState<string>(defaultTo);
             </div>
           )}
         </div>
+
+{/* ========== EMPRESAS ========== */}
+{activeTab === 'empresas' && <EmpresasModule />}
 
 {/* ========== FACTURACIÓN ELECTRÓNICA ========== */}
 {activeTab === 'facturacion' && (
