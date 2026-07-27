@@ -1,5 +1,6 @@
 // backend/routes/whatsapp.js
 const express = require('express');
+const jwt = require('jsonwebtoken');
 const router = express.Router();
 const { evaluateAndExecute } = require('../rules/engine'); // motor de reglas
 
@@ -68,6 +69,7 @@ async function ensureAiConversationForPhone({ phone, sucursalId, phoneNumberId, 
   let clinicId = String(process.env.AI_CLINIC_ID || process.env.CLINIC_ID || 'dentalux').trim() || 'dentalux';
 
   // Asegurar columnas SaaS en DB actual sin romper tablas existentes.
+  await q(`ALTER TABLE ai_conversations ADD COLUMN IF NOT EXISTS tenant_id UUID`).catch(()=>{});
   await q(`ALTER TABLE ai_conversations ADD COLUMN IF NOT EXISTS clinic_id TEXT`).catch(()=>{});
   await q(`ALTER TABLE ai_conversations ADD COLUMN IF NOT EXISTS channel TEXT`).catch(()=>{});
   await q(`ALTER TABLE ai_conversations ADD COLUMN IF NOT EXISTS external_id TEXT`).catch(()=>{});
@@ -115,7 +117,7 @@ async function ensureAiConversationForPhone({ phone, sucursalId, phoneNumberId, 
         AND ($3::text = '' OR COALESCE(external_id, phone_number_id, $3) = $3)
       ORDER BY updated_at DESC NULLS LAST, id DESC
       LIMIT 1`,
-    [p, channel, externalId]
+    [p, channel, externalId, currentTenantId()]
   );
 
   // Compatibilidad: si existe una conversación legacy por teléfono, la convertimos a SaaS.
@@ -126,7 +128,7 @@ async function ensureAiConversationForPhone({ phone, sucursalId, phoneNumberId, 
         WHERE state->>'wa_phone' = $1
         ORDER BY updated_at DESC NULLS LAST, id DESC
         LIMIT 1`,
-      [p]
+      [p, currentTenantId()]
     );
   }
 
@@ -142,7 +144,8 @@ async function ensureAiConversationForPhone({ phone, sucursalId, phoneNumberId, 
 
     await q(
       `UPDATE ai_conversations
-          SET clinic_id = COALESCE(clinic_id, $2),
+          SET tenant_id = $7,
+               clinic_id = COALESCE(clinic_id, $2),
               channel = COALESCE(channel, $3),
               external_id = COALESCE(external_id, $4),
               phone_number_id = COALESCE(phone_number_id, $4),
@@ -150,17 +153,17 @@ async function ensureAiConversationForPhone({ phone, sucursalId, phoneNumberId, 
               state = $6::jsonb,
               updated_at = NOW()
         WHERE id = $1`,
-      [convId, clinicId, channel, externalId || null, sucursalId || null, JSON.stringify(mergedState)]
+      [convId, clinicId, channel, externalId || null, sucursalId || null, JSON.stringify(mergedState), currentTenantId()]
     );
     return convId;
   }
 
   const title = `WhatsApp ${p.slice(-10)}`;
   const created = await q(
-    `INSERT INTO ai_conversations(title, clinic_id, channel, external_id, sucursal_id, phone_number_id, state)
-     VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb)
+    `INSERT INTO ai_conversations(title, clinic_id, channel, external_id, sucursal_id, phone_number_id, state, tenant_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8)
      RETURNING id`,
-    [title, clinicId, channel, externalId || null, sucursalId || null, externalId || null, JSON.stringify(baseState)]
+    [title, clinicId, channel, externalId || null, sucursalId || null, externalId || null, JSON.stringify(baseState), currentTenantId()]
   );
 
   console.log('✨ [ensureAiConversation] Nueva conversación SaaS creada:', {
@@ -303,9 +306,9 @@ async function callAiChatInternal({ conversationId, message, phone, sucursalId, 
     method: 'POST',
     headers: {
       'content-type': 'application/json',
+      'authorization': `Bearer ${jwt.sign({ sub: 'whatsapp-webhook', tenantId: currentTenantId(), role: 'service' }, process.env.JWT_SECRET, { expiresIn: '2m' })}`,
       'x-channel': 'whatsapp', // Required for tenant resolution
-      ...(sucursalId ? { 'x-sucursal': sucursalId } : {}),
-      ...(dbKey ? { 'x-db': String(dbKey) } : {}),
+
       ...(phone ? { 'x-wa-phone': String(phone) } : {}),
       ...(phoneNumberId ? { 'x-wa-phone-number-id': String(phoneNumberId) } : {}),
     },
@@ -329,14 +332,14 @@ const { Pool } = require('pg');
 const { AsyncLocalStorage } = require('async_hooks');
 
 const DB1_URL = process.env.DATABASE_URL_DB1 || process.env.DATABASE_URL;
-const DB2_URL = process.env.DATABASE_URL_DB2 || '';
+const DB2_URL = ''; // SaaS CliniqOne: una sola BD, aislamiento por tenant_id
 if (!DB1_URL) throw new Error('DATABASE_URL_DB1/DATABASE_URL no está definida');
 
 const sslCfg = process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false;
 const poolDB1 = new Pool({ connectionString: DB1_URL, ssl: sslCfg });
 const poolDB2 = DB2_URL ? new Pool({ connectionString: DB2_URL, ssl: sslCfg }) : null;
 
-const DB3_URL = process.env.DATABASE_URL_DB3 || '';
+const DB3_URL = ''; // SaaS CliniqOne: una sola BD, aislamiento por tenant_id
 const poolDB3 = DB3_URL ? new Pool({ connectionString: DB3_URL, ssl: sslCfg }) : null;
 
 const als = new AsyncLocalStorage();
@@ -415,11 +418,51 @@ function runWithDbKey(dbKey, fn) {
 
 
 // q() usa el pool del contexto de la request (ALS)
-const q = (text, params = []) => {
+async function q(text, params = []) {
   const store = als.getStore();
   const p = store?.pool || poolDB1;
-  return p.query(text, params);
-};
+  const tenantId = store?.tenantId || null;
+  if (!tenantId) return p.query(text, params);
+  const client = await p.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(`SELECT set_config('app.tenant_id', $1, true)`, [String(tenantId)]);
+    const result = await client.query(text, params);
+    await client.query('COMMIT');
+    return result;
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally { client.release(); }
+}
+
+async function qBypass(text, params = []) {
+  const client = await poolDB1.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(`SELECT set_config('app.tenant_bypass', 'on', true)`);
+    const result = await client.query(text, params);
+    await client.query('COMMIT');
+    return result;
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally { client.release(); }
+}
+
+function currentTenantId() {
+  return als.getStore()?.tenantId || null;
+}
+
+function requireTenantId(req) {
+  const tenantId = req?.auth?.tenantId || currentTenantId();
+  if (!tenantId) {
+    const error = new Error('No se pudo identificar la empresa autenticada');
+    error.statusCode = 401;
+    throw error;
+  }
+  return String(tenantId);
+}
 
 // ===================== Depósito / anticipo (defensivo multi-DB) =====================
 // Algunas BDs NO tienen las columnas require_deposit_confirm/deposit_instructions.
@@ -633,7 +676,7 @@ async function findOneAcrossDbs(sql, params) {
 router.use((req, _res, next) => {
   const p = poolForReq(req);
   const key = pickDbKey(req);
-  return als.run({ pool: p, dbKey: key }, next);
+  return als.run({ pool: p, dbKey: key, tenantId: req.auth?.tenantId || null }, next);
 });
 
 // ===================== Helpers base =====================
@@ -878,12 +921,18 @@ function friendlyText(body = '', opts = {}) {
       `¿Qué hora te acomoda? (ej. 15:30) y tu *nombre completo*, por favor.`,
     booked: (fecha, hora, nombre) =>
       `${t} *Agendé tu cita* para ${fecha} a las ${hora}${nombre ? ` a nombre de ${nombre}` : ''}. ¿Confirmas?`,
-    confirmOk: (id, fecha, hora, suc) =>
-      `✅ ¡Gracias! Confirmamos tu cita #${id} para el ${fecha} a las ${hora}.\n` +
-      `Sucursal: ${suc}\n\nSi necesitas cambiarla, responde *Reprogramar* o *Cancelar*.`,
-    cancelOk: (id, fecha, hora, suc) =>
-      `❌ Cancelamos la cita #${id} del ${fecha} a las ${hora}.\n` +
-      `Sucursal: ${suc}\n\n¿Quieres agendar otra hora? Estoy aquí para ayudarte 🙂`,
+    confirmOk: () =>
+      `✅ ¡Gracias! Tu cita ha sido confirmada correctamente.
+
+Para reprogramar, cancelar o resolver cualquier duda, comunícate directamente con tu consultorio.
+
+Este número se utiliza exclusivamente para notificaciones y confirmaciones automáticas, por lo que no recibe consultas ni mensajes de atención.`,
+    cancelOk: () =>
+      `❌ Tu cita ha sido cancelada.
+
+Para agendar nuevamente o solicitar información comunícate directamente con tu consultorio.
+
+Este número únicamente envía notificaciones automáticas.`,
   };
   if (opts.kind && typeof tone[opts.kind] === 'function') {
     return tone[opts.kind](...(opts.args || []));
@@ -1003,14 +1052,14 @@ async function findLastAttendedWithoutSatisfaction(phoneE164) {
 // === Logger seguro a whatsapp_messages ===
 async function logWa({
   direction, phone, message, status = 'sent',
-  appointmentId = null, sucursalId = null, waMessageId = null, manual = false,
+  appointmentId = null, sucursalId = null, waMessageId = null, manual = false, tenantId = null,
 }) {
   try {
     await q(
       `INSERT INTO whatsapp_messages
-         (direction, phone, message, status, appointment_id, sucursal_id, wa_message_id, manual)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-      [direction, phone, message, status, appointmentId, sucursalId, waMessageId, manual]
+         (direction, phone, message, status, appointment_id, sucursal_id, wa_message_id, manual, tenant_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+      [direction, phone, message, status, appointmentId, sucursalId, waMessageId, manual, tenantId || currentTenantId()]
     );
   } catch (e) {
     console.error('logWa fail:', e.message);
@@ -1023,9 +1072,9 @@ async function logAiMessage(conversationId, role, content, meta = {}) {
     const cid = Number(conversationId);
     if (!Number.isFinite(cid)) return;
     await q(
-      `INSERT INTO ai_messages(conversation_id, role, content, meta)
-       VALUES ($1,$2,$3,$4::jsonb)`,
-      [cid, String(role), String(content || ''), JSON.stringify(meta || {})]
+      `INSERT INTO ai_messages(conversation_id, role, content, meta, tenant_id)
+       VALUES ($1,$2,$3,$4::jsonb,$5)`,
+      [cid, String(role), String(content || ''), JSON.stringify(meta || {}), currentTenantId()]
     );
     await q(`UPDATE ai_conversations SET updated_at = NOW() WHERE id = $1`, [cid]).catch(()=>{});
   } catch (e) {
@@ -1045,13 +1094,13 @@ async function ensureProcessedTable() {
 async function alreadyProcessed(wamid) {
   if (!wamid) return false;
   await ensureProcessedTable();
-  const r = await q(`SELECT 1 FROM wa_processed WHERE wamid = $1 LIMIT 1`, [wamid]);
+  const r = await qBypass(`SELECT 1 FROM wa_processed WHERE wamid = $1 LIMIT 1`, [wamid]);
   return !!r.rows[0];
 }
 async function markProcessed(wamid) {
   if (!wamid) return;
   await ensureProcessedTable();
-  await q(`INSERT INTO wa_processed (wamid) VALUES ($1) ON CONFLICT DO NOTHING`, [wamid]);
+  await qBypass(`INSERT INTO wa_processed (wamid) VALUES ($1) ON CONFLICT DO NOTHING`, [wamid]);
 }
 
 // --- WhatsApp / Config ---
@@ -1396,6 +1445,50 @@ router.get('/debug/lookup', async (req, res) => {
   }
 });
 
+// Resuelve el tenant de un mensaje entrante sin confiar en headers del frontend.
+async function resolveIncomingTenant({ from, contextId, text }) {
+  const digits = onlyDigits(from);
+  const variants = buildPhoneVariants(from).map(onlyDigits).filter(Boolean);
+
+  if (contextId) {
+    const r = await qBypass(`SELECT tenant_id FROM whatsapp_messages WHERE wa_message_id=$1 AND tenant_id IS NOT NULL ORDER BY id DESC LIMIT 1`, [contextId]);
+    if (r.rows[0]?.tenant_id) return { tenantId: String(r.rows[0].tenant_id), source: 'context' };
+  }
+
+  const m = String(text || '').match(/^(?:CONFIRMAR|CANCELAR)\s+(\d+)$/i);
+  if (m) {
+    const r = await qBypass(`SELECT DISTINCT tenant_id FROM appointments WHERE id=$1 AND tenant_id IS NOT NULL`, [Number(m[1])]);
+    if (r.rows.length === 1) return { tenantId: String(r.rows[0].tenant_id), source: 'appointment_id' };
+  }
+
+  const recent = await qBypass(`
+    SELECT DISTINCT tenant_id
+      FROM whatsapp_messages
+     WHERE tenant_id IS NOT NULL
+       AND regexp_replace(COALESCE(phone,''), '\\D', '', 'g') = ANY($1::text[])
+       AND direction='outgoing'
+       AND created_at >= NOW() - INTERVAL '30 days'
+     LIMIT 3`, [variants.length ? variants : [digits]]);
+  if (recent.rows.length === 1) return { tenantId: String(recent.rows[0].tenant_id), source: 'recent_outgoing' };
+  if (recent.rows.length > 1) return { tenantId: null, reason: 'ambiguous_recent_outgoing' };
+
+  const appts = await qBypass(`
+    SELECT DISTINCT tenant_id
+      FROM appointments
+     WHERE tenant_id IS NOT NULL
+       AND regexp_replace(COALESCE(phone,''), '\\D', '', 'g') = ANY($1::text[])
+       AND date >= CURRENT_DATE - INTERVAL '7 days'
+     LIMIT 3`, [variants.length ? variants : [digits]]);
+  if (appts.rows.length === 1) return { tenantId: String(appts.rows[0].tenant_id), source: 'appointment_phone' };
+  if (appts.rows.length > 1) return { tenantId: null, reason: 'ambiguous_appointments' };
+  return { tenantId: null, reason: 'tenant_not_found' };
+}
+
+async function saveUnroutedMessage({ wamid, from, contextId, reason, payload }) {
+  await qBypass(`INSERT INTO wa_unrouted_messages(wamid,phone,context_message_id,reason,payload) VALUES($1,$2,$3,$4,$5::jsonb)`,
+    [wamid || null, from || null, contextId || null, reason, JSON.stringify(payload || {})]);
+}
+
 // ===================== Webhook verify =====================
 router.get('/webhook', (req, res) => {
   const mode = req.query['hub.mode'];
@@ -1541,6 +1634,17 @@ router.post('/webhook', async (req, res) => {
     }
     
     console.log('📝 TEXT AFTER BUTTON MAPPING:', text);
+
+    const tenantResolution = await resolveIncomingTenant({ from, contextId, text });
+    if (!tenantResolution.tenantId) {
+      console.error('🚫 Mensaje WhatsApp sin tenant único:', tenantResolution.reason);
+      await saveUnroutedMessage({ wamid, from, contextId, reason: tenantResolution.reason, payload: req.body }).catch(() => {});
+      await markProcessed(wamid);
+      return res.sendStatus(200);
+    }
+    const waStore = als.getStore();
+    if (waStore) waStore.tenantId = tenantResolution.tenantId;
+    console.log('🔐 Tenant WhatsApp resuelto:', { tenantId: tenantResolution.tenantId, source: tenantResolution.source });
 
     
     
@@ -2711,6 +2815,7 @@ router.post('/broadcast/confirmations', async (req, res) => {
     const provided = String(req.query.secret || req.headers['x-wa-secret'] || '');
     if (REQUIRED && provided !== REQUIRED) return res.status(401).json({ ok: false, error: 'unauthorized' });
 
+    const tenantId = requireTenantId(req);
     const sucursalId = getSucursalFromReq(req);
     const limit = Math.max(1, Math.min(Number(req.query.limit || 500), 1000));
 
@@ -2723,21 +2828,22 @@ router.post('/broadcast/confirmations', async (req, res) => {
     if (/^\d{4}-\d{2}-\d{2}$/.test(when)) dateExpr = `'${when}'::date`;
 
     const IGNORE = (process.env.APPT_IGNORE_SUCURSAL || 'false').toLowerCase() === 'true';
-    const whereSuc = IGNORE ? 'TRUE' : 'sucursal_id = $2 OR sucursal_id IS NULL';
+    const whereSuc = IGNORE ? 'TRUE' : '(sucursal_id = $2 OR sucursal_id IS NULL)';
 
     const sql = `
       SELECT DISTINCT ON (${PHONE_COL})
              id, patient, ${PHONE_COL} AS phone, date, start_time, sucursal_id, service_id, status
         FROM appointments
-       WHERE UPPER(status) = 'PENDIENTE'
+       WHERE tenant_id = $1
+         AND UPPER(status) = 'PENDIENTE'
          AND (date::date = ${dateExpr})
          AND ${PHONE_COL} IS NOT NULL
          AND TRIM(${PHONE_COL}) <> ''
          AND (${whereSuc})
        ORDER BY ${PHONE_COL}, date ASC, start_time ASC
-       LIMIT $1
+       LIMIT $3
     `;
-    const params = (whereSuc === 'TRUE') ? [limit] : [limit, sucursalId];
+    const params = (whereSuc === 'TRUE') ? [tenantId, null, limit] : [tenantId, sucursalId, limit];
     const r = await q(sql, params);
     const rows = r.rows || [];
 
@@ -2917,6 +3023,7 @@ Después escribe *Confirmar* en el mensaje de la cita.`;
 // ===================== Panel: mensajes =====================
 router.get('/messages', async (req, res) => {
   try {
+    const tenantId = requireTenantId(req);
     const limit = Math.max(1, Math.min(Number(req.query.limit || 200), 1000));
     const suc = getSucursalFromReq(req) || null;
 
@@ -2924,16 +3031,17 @@ router.get('/messages', async (req, res) => {
       ? `SELECT id, wa_message_id, direction AS type, phone, message, status,
                 appointment_id, sucursal_id, manual, created_at AS timestamp
            FROM whatsapp_messages
-          WHERE (sucursal_id = $2 OR sucursal_id IS NULL)
+          WHERE tenant_id = $2 AND (sucursal_id = $3 OR sucursal_id IS NULL)
           ORDER BY created_at DESC
           LIMIT $1`
       : `SELECT id, wa_message_id, direction AS type, phone, message, status,
                 appointment_id, sucursal_id, manual, created_at AS timestamp
            FROM whatsapp_messages
+          WHERE tenant_id = $2
           ORDER BY created_at DESC
           LIMIT $1`;
 
-    const { rows } = await q(sql, suc ? [limit, String(suc)] : [limit]);
+    const { rows } = await q(sql, suc ? [limit, tenantId, String(suc)] : [limit, tenantId]);
 
     const apptIds = [...new Set(rows.map(r => r.appointment_id).filter(Boolean))];
     const phones  = [...new Set(rows.map(r => r.phone).filter(Boolean))];
@@ -2997,12 +3105,13 @@ router.get('/messages', async (req, res) => {
 // ===================== Panel: stats =====================
 router.get('/stats', async (req, res) => {
   try {
+    const tenantId = requireTenantId(req);
     const suc = getSucursalFromReq(req) || null;
 
-    const clauses = [];
-    const params = [];
+    const clauses = ['tenant_id = $1'];
+    const params = [tenantId];
     if (suc) {
-      clauses.push('(sucursal_id = $1 OR sucursal_id IS NULL)');
+      clauses.push(`(sucursal_id = $${params.length + 1} OR sucursal_id IS NULL)`);
       params.push(String(suc));
     }
     let idx = params.length;

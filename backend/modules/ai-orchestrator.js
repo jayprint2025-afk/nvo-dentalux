@@ -1,10 +1,20 @@
 // modules/ai-orchestrator.js
 const { normBranch, getBranchDisplayName } = require('./tenant-context');
-const { ensureStateDefaults, isBookingExpired, resetBooking, logEvent } = require('./conversation-state');
+const { ensureStateDefaults, isBookingExpired, resetBooking } = require('./conversation-state');
 const { getServices, computeAvailability, createAppointmentTransactional } = require('./booking-engine');
 const { generateAIReply } = require('../ai/assistant');
 
 function asText(v) { return (v === null || v === undefined) ? '' : String(v); }
+
+async function logTenantEvent(q, ctx, event, payload = {}) {
+  const tenantId = String(ctx?.tenant_id || ctx?.clinic_id || '').trim();
+  if (!tenantId) throw new Error('Tenant ausente en evento IA');
+  await q(
+    `INSERT INTO ai_logs(tenant_id, clinic_id, conversation_id, event, payload)
+     VALUES ($1::uuid, $1::text, $2, $3, $4::jsonb)`,
+    [tenantId, ctx.conversationId || null, String(event), JSON.stringify(payload || {})]
+  );
+}
 function normalizeForMatch(v) {
   return asText(v).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
 }
@@ -107,7 +117,7 @@ async function orchestrate(q, ctx, state, userText) {
 
   if (isBookingExpired(state)) {
     state = resetBooking(state, { branch_key: state.branch_key, phone: state.phone || ctx.phone });
-    await logEvent(q, { clinic_id: ctx.clinic_id, conversation_id: ctx.conversationId, event: 'booking_expired', payload: {} });
+    await logTenantEvent(q, ctx, 'booking_expired', {});
   }
   if (cancelIntent(text)) {
     const reset = resetBooking(state, { phone: state.phone || ctx.phone });

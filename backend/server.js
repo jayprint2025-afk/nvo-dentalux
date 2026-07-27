@@ -49,6 +49,8 @@ function authRequired(req, res, next) {
     }
 
     req.auth = jwt.verify(match[1], requireGlobalJwtSecret());
+    const store = als.getStore();
+    if (store) store.tenantId = req.auth?.tenantId || null;
     next();
   } catch (error) {
     return res.status(401).json({
@@ -159,7 +161,23 @@ function getCurrentPool() {
 }
 
 async function q(text, params = []) {
-  return getCurrentPool().query(text, params);
+  const pool = getCurrentPool();
+  const tenantId = als.getStore()?.tenantId || null;
+  if (!tenantId) return pool.query(text, params);
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(`SELECT set_config('app.tenant_id', $1, true)`, [String(tenantId)]);
+    const result = await client.query(text, params);
+    await client.query('COMMIT');
+    return result;
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 // Las rutas antiguas /api/melissa también usan la misma base física.
@@ -299,7 +317,9 @@ async function ensureAiSaasCompatibilityTables() {
 
 // ================================
 // 🤖 IA SaaS: rutas adicionales (/api/ai/chat)
+// Todas las rutas IA exigen JWT; el webhook usa un JWT interno de 2 minutos.
 // ================================
+app.use('/api/ai', authRequired);
 try {
   // Asegura tablas de compatibilidad IA antes de montar /api/ai/chat
   ensureAiSaasCompatibilityTables()
@@ -4723,6 +4743,8 @@ function authRequired(req, res, next) {
 
     const payload = jwt.verify(match[1], requireJwtSecret());
     req.auth = payload;
+    const store = als.getStore();
+    if (store) store.tenantId = payload?.tenantId || null;
     if (payload?.role === 'demo' && ['POST','PUT','PATCH','DELETE'].includes(req.method)) {
       return res.status(403).json({ error: 'La cuenta de demostración es solo de lectura' });
     }
@@ -5081,11 +5103,85 @@ async function ensureBootstrapDentaluxAdmin() {
 
 
 // ===============================================================================
+// AISLAMIENTO SaaS DE WHATSAPP / IA (tenant_id + PostgreSQL RLS)
+// ===============================================================================
+async function ensureWhatsAppTenantIsolationSchema() {
+  const client = await poolDB1.connect();
+  try {
+    await client.query('BEGIN');
+    const tables = ['appointments','whatsapp_messages','ai_conversations','ai_messages','clinic_channels','whatsapp_rules','whatsapp_faqs','wa_processed'];
+    for (const table of tables) {
+      await client.query(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS tenant_id UUID`).catch(() => {});
+    }
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS wa_unrouted_messages (
+        id BIGSERIAL PRIMARY KEY,
+        wamid TEXT,
+        phone TEXT,
+        context_message_id TEXT,
+        reason TEXT NOT NULL,
+        payload JSONB,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+
+    await client.query(`
+      UPDATE ai_messages m
+         SET tenant_id = c.tenant_id
+        FROM ai_conversations c
+       WHERE m.conversation_id = c.id
+         AND m.tenant_id IS NULL
+         AND c.tenant_id IS NOT NULL
+    `).catch(() => {});
+
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_appointments_tenant ON appointments(tenant_id)`).catch(() => {});
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_wa_messages_tenant_created ON whatsapp_messages(tenant_id, created_at DESC)`).catch(() => {});
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_wa_messages_tenant_phone ON whatsapp_messages(tenant_id, phone)`).catch(() => {});
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_ai_conversations_tenant ON ai_conversations(tenant_id, updated_at DESC)`).catch(() => {});
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_ai_messages_tenant_conv ON ai_messages(tenant_id, conversation_id)`).catch(() => {});
+
+    for (const table of tables) {
+      await client.query(`ALTER TABLE ${table} ENABLE ROW LEVEL SECURITY`).catch(() => {});
+      await client.query(`ALTER TABLE ${table} FORCE ROW LEVEL SECURITY`).catch(() => {});
+      await client.query(`DROP POLICY IF EXISTS ${table}_tenant_isolation ON ${table}`).catch(() => {});
+      await client.query(`
+        CREATE POLICY ${table}_tenant_isolation ON ${table}
+        USING (
+          current_setting('app.tenant_bypass', true) = 'on'
+          OR tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
+        )
+        WITH CHECK (
+          current_setting('app.tenant_bypass', true) = 'on'
+          OR tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
+        )
+      `).catch((e) => console.warn(`RLS ${table}:`, e.message));
+    }
+
+    await client.query('COMMIT');
+    console.log('✅ Aislamiento WhatsApp/IA por tenant y RLS activo');
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+// ===============================================================================
 // WHATSAPP CLOUD API
 // Monta GET/POST /api/whatsapp/webhook y las demás rutas del módulo.
 const whatsappRoutes = require('./routes/whatsapp');
-app.use('/api/whatsapp', whatsappRoutes);
-console.log('✅ Rutas de WhatsApp montadas en /api/whatsapp');
+ensureWhatsAppTenantIsolationSchema().catch((e) => {
+  console.error('❌ No se pudo activar aislamiento WhatsApp/IA:', e);
+  process.exitCode = 1;
+});
+app.use('/api/whatsapp', (req, res, next) => {
+  const isWebhook = req.path === '/webhook';
+  if (isWebhook) return next();
+  return authRequired(req, res, next);
+}, whatsappRoutes);
+console.log('✅ Rutas de WhatsApp montadas con JWT obligatorio (excepto webhook Meta)');
 // ===============================================================================
 
 
