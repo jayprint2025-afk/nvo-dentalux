@@ -45,8 +45,9 @@ import AIFloatingWidget from './AIFloatingWidget.tsx';
 
 const SUPERADMIN_EMAIL_FALLBACK = 'nhaelvaldez26@hotmail.com';
 
-function readJwtPayloadFromStorage(): any {
-  if (typeof window === 'undefined') return null;
+function readJwtPayloadsFromStorage(): any[] {
+  if (typeof window === 'undefined') return [];
+  const payloads: any[] = [];
   try {
     for (let i = 0; i < window.localStorage.length; i += 1) {
       const key = window.localStorage.key(i);
@@ -54,48 +55,20 @@ function readJwtPayloadFromStorage(): any {
       if (!value || value.split('.').length !== 3) continue;
       try {
         const part = value.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
-        return JSON.parse(decodeURIComponent(escape(window.atob(part))));
+        const padded = part + '='.repeat((4 - (part.length % 4)) % 4);
+        payloads.push(JSON.parse(decodeURIComponent(escape(window.atob(padded)))));
       } catch {}
     }
   } catch {}
-  return null;
+  return payloads;
 }
 
 function isSuperAdminSession(): boolean {
-  const payload = readJwtPayloadFromStorage();
-  return payload?.role === 'superadmin' || String(payload?.email || '').toLowerCase() === SUPERADMIN_EMAIL_FALLBACK;
+  return readJwtPayloadsFromStorage().some((payload) =>
+    String(payload?.role || '').toLowerCase() === 'superadmin' ||
+    String(payload?.email || '').toLowerCase() === SUPERADMIN_EMAIL_FALLBACK
+  );
 }
-
-function injectDentaluxPublicOffer() {
-  if (typeof document === 'undefined') return;
-  const ID = 'dentalux-public-offer';
-  const render = () => {
-    if (document.getElementById(ID)) return;
-    const hasJwt = !!readJwtPayloadFromStorage();
-    if (hasJwt) return;
-    const el = document.createElement('div');
-    el.id = ID;
-    el.innerHTML = `
-      <div style="font-weight:800;font-size:18px;margin-bottom:4px">Dentalux: administra tu clínica, haz crecer tu sonrisa.</div>
-      <div style="font-size:14px;margin-bottom:8px"><b>$20 USD al mes</b> — Agenda, Caja, Productividad, WhatsApp, Laboratorios, Inventario e Historial.</div>
-      <div style="font-size:13px;margin-bottom:4px"><b>Pago:</b> depósito o transferencia</div>
-      <div style="font-size:13px;margin-bottom:2px"><b>Banco:</b> Banamex</div>
-      <div style="font-size:13px;margin-bottom:2px"><b>Cuenta:</b> 3538825</div>
-      <div style="font-size:13px;margin-bottom:8px"><b>CLABE interbancaria:</b> 002020702235388255</div>
-      <div style="font-size:12px;color:#475569;margin-bottom:8px">Envía tu comprobante de pago a <b>Nhaelvaldez26@hotmail.com</b>. Para cualquier duda o aclaración, escribe al mismo correo.</div>
-      <div style="border-top:1px solid #dbeafe;padding-top:8px;font-size:13px"><b>Prueba gratis:</b><br/>Correo: CliniqOnedemo@gmail.com<br/>Contraseña: cliniqonedemo123</div>`;
-    Object.assign(el.style, {
-      position:'fixed', left:'20px', bottom:'20px', zIndex:'99999', maxWidth:'360px',
-      background:'#ffffff', border:'1px solid #bfdbfe', borderRadius:'16px', padding:'16px',
-      boxShadow:'0 18px 45px rgba(15,23,42,.18)', color:'#0f172a', fontFamily:'Arial, sans-serif'
-    });
-    document.body.appendChild(el);
-  };
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', render, { once:true });
-  else render();
-}
-injectDentaluxPublicOffer();
-
 
 // === Hoisted helpers to avoid TDZ for lab summaries ===
 function totalAbonado(t: any) {
@@ -3348,10 +3321,12 @@ const [to, setTo] = useState<string>(defaultTo);
       {showPatientHistory && <PatientHistoryModule onClose={() => setShowPatientHistory(false)} />}
       {showFacturacion && <FacturacionModule onClose={() => setShowFacturacion(false)} />}
  {/* Dashboard Global Integration */}
-      <DashboardIntegration 
-        sucursalActual={getSucursalActual()}
-        onClose={() => setMostrarDashboardGlobal(false)}
-      />
+      {isSuperAdmin && (
+        <DashboardIntegration 
+          sucursalActual={getSucursalActual()}
+          onClose={() => setMostrarDashboardGlobal(false)}
+        />
+      )}
 
       
       <div className="max-w-7xl mx-auto">
@@ -7138,12 +7113,26 @@ function DoctorQuickEdit({ doctor, settings, onChange }:{
     );
   }
 
-  if (typeof document !== 'undefined' && isSuperAdminSession()){
-    const old = document.getElementById('objetivos-floating-root') || document.getElementById('objetivos-floating-root-v3');
-    if (old && old.parentElement) old.parentElement.removeChild(old);
+  if (typeof document !== 'undefined'){
     const ROOT_ID = 'objetivos-floating-root-v3';
-    if (!document.getElementById(ROOT_ID)){
-      const el = document.createElement('div'); el.id = ROOT_ID; document.body.appendChild(el);
+    let mounting = false;
+
+    const syncObjetivosForSession = () => {
+      const legacy = document.getElementById('objetivos-floating-root');
+      if (legacy?.parentElement) legacy.parentElement.removeChild(legacy);
+
+      const existing = document.getElementById(ROOT_ID);
+      if (!isSuperAdminSession()) {
+        if (existing?.parentElement) existing.parentElement.removeChild(existing);
+        return;
+      }
+
+      if (existing || mounting) return;
+      mounting = true;
+      const el = document.createElement('div');
+      el.id = ROOT_ID;
+      document.body.appendChild(el);
+
       import('react-dom/client').then((m)=>{
         const root = m.createRoot(el);
         root.render(React.createElement(ObjetivosButtonAndPanel, {}));
@@ -7152,8 +7141,12 @@ function DoctorQuickEdit({ doctor, settings, onChange }:{
         btn.textContent = '🎯 Objetivos';
         Object.assign(btn.style,{position:'fixed',bottom:'16px',right:'16px',zIndex:'9998',padding:'10px 14px',borderRadius:'9999px',color:'#fff',background:'#2563eb',boxShadow:'0 10px 20px rgba(0,0,0,0.2)'});
         btn.onclick = ()=> alert('No se pudo cargar ReactDOM para el módulo de Objetivos.');
-        document.body.appendChild(btn);
-      });
-    }
+        el.appendChild(btn);
+      }).finally(()=>{ mounting = false; });
+    };
+
+    syncObjetivosForSession();
+    window.addEventListener('storage', syncObjetivosForSession);
+    window.setInterval(syncObjetivosForSession, 1200);
   }
 })()
