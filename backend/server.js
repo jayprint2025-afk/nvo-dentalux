@@ -2010,32 +2010,35 @@ app.get('/api/satisfaccion-servicio', ah(async (req, res) => {
 
 
 // ==============================
-// LABORATORIOS + TRABAJOS + ABONOS
+// LABORATORIOS + TRABAJOS + ABONOS — aislado por empresa + sucursal
 // ==============================
-app.get('/api/laboratorios', ah(async (req, res) => {
+app.get('/api/laboratorios', authRequired, ah(async (req, res) => {
   const s = getSucursal(req);
+  const tenantId = getTenantId(req);
   const { rows } = await q(
     `SELECT id, nombre, contacto, sucursal_id
      FROM laboratorios
-     WHERE ${sucWhereN(1)}
-     ORDER BY id ASC`, [s]
+     WHERE tenant_id = $1 AND ${sucWhereN(2)}
+     ORDER BY id ASC`, [tenantId, s]
   );
   res.json(rows);
 }));
 
-app.post('/api/laboratorios', ah(async (req, res) => {
+app.post('/api/laboratorios', authRequired, ah(async (req, res) => {
   const s = getSucursal(req);
+  const tenantId = getTenantId(req);
   const { nombre, contacto } = req.body || {};
   const { rows } = await q(
-    `INSERT INTO laboratorios (nombre, contacto, sucursal_id)
-     VALUES ($1,$2,$3) RETURNING *`,
-    [nombre, contacto || null, s]
+    `INSERT INTO laboratorios (nombre, contacto, sucursal_id, tenant_id)
+     VALUES ($1,$2,$3,$4) RETURNING *`,
+    [nombre, contacto || null, s, tenantId]
   );
   res.json(rows[0]);
 }));
 
-app.get('/api/trabajos-laboratorio', ah(async (req, res) => {
+app.get('/api/trabajos-laboratorio', authRequired, ah(async (req, res) => {
   const s = getSucursal(req);
+  const tenantId = getTenantId(req);
   const { rows } = await q(
     `SELECT lt.id,
             lt.paciente,
@@ -2048,26 +2051,30 @@ app.get('/api/trabajos-laboratorio', ah(async (req, res) => {
             lt.notas,
             lt.sucursal_id,
             COALESCE(
-  json_agg(json_build_object(
-    'id', la.id,
-    'monto', la.monto,
-    'fecha', la.fecha,
-    'nota', la.nota,
-    'metodo_pago', la.metodo_pago
-  ) ORDER BY la.fecha ASC)
-  FILTER (WHERE la.id IS NOT NULL), '[]'
-) AS abonos
+              json_agg(json_build_object(
+                'id', la.id,
+                'monto', la.monto,
+                'fecha', la.fecha,
+                'nota', la.nota,
+                'metodo_pago', la.metodo_pago
+              ) ORDER BY la.fecha ASC)
+              FILTER (WHERE la.id IS NOT NULL), '[]'
+            ) AS abonos
      FROM lab_trabajos lt
-     LEFT JOIN lab_abonos la ON la.trabajo_id = lt.id
-     WHERE ${sucWhereN(1,'lt')}
+     LEFT JOIN lab_abonos la
+       ON la.trabajo_id = lt.id
+      AND la.tenant_id = lt.tenant_id
+      AND (la.sucursal_id = lt.sucursal_id OR la.sucursal_id IS NULL)
+     WHERE lt.tenant_id = $1 AND ${sucWhereN(2,'lt')}
      GROUP BY lt.id
-     ORDER BY lt.id DESC`, [s]
+     ORDER BY lt.id DESC`, [tenantId, s]
   );
   res.json(rows);
 }));
 
-app.post('/api/trabajos-laboratorio', ah(async (req, res) => {
+app.post('/api/trabajos-laboratorio', authRequired, ah(async (req, res) => {
   const s = getSucursal(req);
+  const tenantId = getTenantId(req);
   const paciente  = req.body?.paciente;
   const laboratorio_id = req.body?.laboratorio_id ?? req.body?.laboratorioId;
   const servicio_id    = req.body?.servicio_id    ?? req.body?.servicioId;
@@ -2077,91 +2084,108 @@ app.post('/api/trabajos-laboratorio', ah(async (req, res) => {
   const etapa          = req.body?.etapa || 'Toma de impresión';
   const notas          = req.body?.notas ?? null;
 
-  const labCheck = await q(`SELECT 1 FROM laboratorios WHERE id=$1 AND ${sucWhereN(2)}`, [laboratorio_id, s]);
-  if (labCheck.rowCount === 0) return res.status(400).json({ error: 'Laboratorio inexistente en esta sucursal' });
+  const labCheck = await q(
+    `SELECT 1 FROM laboratorios WHERE id=$1 AND tenant_id=$2 AND ${sucWhereN(3)}`,
+    [laboratorio_id, tenantId, s]
+  );
+  if (labCheck.rowCount === 0) return res.status(400).json({ error: 'Laboratorio inexistente para esta empresa y sucursal' });
 
-  const servCheck = await q(`SELECT 1 FROM services WHERE id=$1 AND ${sucWhereN(2)}`, [servicio_id, s]);
-  if (servCheck.rowCount === 0) return res.status(400).json({ error: 'Servicio inexistente en esta sucursal' });
+  const servCheck = await q(
+    `SELECT 1 FROM services WHERE id=$1 AND tenant_id=$2 AND ${sucWhereN(3)}`,
+    [servicio_id, tenantId, s]
+  );
+  if (servCheck.rowCount === 0) return res.status(400).json({ error: 'Servicio inexistente para esta empresa y sucursal' });
 
   const { rows } = await q(
     `INSERT INTO lab_trabajos
-      (paciente, laboratorio_id, servicio_id, presupuesto, fecha_inicio, fecha_entrega_estimada, etapa, notas, sucursal_id)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+      (paciente, laboratorio_id, servicio_id, presupuesto, fecha_inicio, fecha_entrega_estimada, etapa, notas, sucursal_id, tenant_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
      RETURNING *`,
-    [paciente, laboratorio_id, servicio_id, presupuesto, fecha_inicio, fecha_entrega, etapa, notas, s]
+    [paciente, laboratorio_id, servicio_id, presupuesto, fecha_inicio, fecha_entrega, etapa, notas, s, tenantId]
   );
   res.json(rows[0]);
 }));
 
-app.patch('/api/trabajos-laboratorio/:id', ah(async (req, res) => {
+app.patch('/api/trabajos-laboratorio/:id', authRequired, ah(async (req, res) => {
   const s = getSucursal(req);
+  const tenantId = getTenantId(req);
   const id = req.params.id;
   const { etapa, notas } = req.body || {};
   const { rows } = await q(
     `UPDATE lab_trabajos
      SET etapa = COALESCE($1, etapa),
          notas = COALESCE($2, notas)
-     WHERE id=$3 AND ${sucWhereN(4)}
+     WHERE id=$3 AND tenant_id=$4 AND ${sucWhereN(5)}
      RETURNING *`,
-    [etapa || null, notas || null, id, s]
+    [etapa || null, notas || null, id, tenantId, s]
   );
-  res.json(rows[0] || null);
+  if (!rows[0]) return res.status(404).json({ error: 'Trabajo no encontrado' });
+  res.json(rows[0]);
 }));
 
-app.post('/api/trabajos-laboratorio/:id/abonos', ah(async (req, res) => {
+app.post('/api/trabajos-laboratorio/:id/abonos', authRequired, ah(async (req, res) => {
   const s = getSucursal(req);
+  const tenantId = getTenantId(req);
   const trabajo_id = req.params.id;
   const { monto, fecha, nota, metodo_pago } = req.body || {};
 
-  const chk = await q(`SELECT 1 FROM lab_trabajos WHERE id=$1 AND ${sucWhereN(2)}`, [trabajo_id, s]);
-  if (chk.rowCount === 0) return res.status(404).json({ error: 'Trabajo no encontrado en esta sucursal' });
+  const chk = await q(
+    `SELECT 1 FROM lab_trabajos WHERE id=$1 AND tenant_id=$2 AND ${sucWhereN(3)}`,
+    [trabajo_id, tenantId, s]
+  );
+  if (chk.rowCount === 0) return res.status(404).json({ error: 'Trabajo no encontrado para esta empresa y sucursal' });
 
   const { rows } = await q(
-    `INSERT INTO lab_abonos (trabajo_id, monto, fecha, nota, metodo_pago, sucursal_id)
-     VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
-    [trabajo_id, monto, fecha, nota || null, metodo_pago || null, s]
+    `INSERT INTO lab_abonos (trabajo_id, monto, fecha, nota, metodo_pago, sucursal_id, tenant_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+    [trabajo_id, monto, fecha, nota || null, metodo_pago || null, s, tenantId]
   );
   res.json(rows[0]);
 }));
 
 // ==============================
-// PAGOS DE LABORATORIO
+// PAGOS DE LABORATORIO — aislado por empresa + sucursal
 // ==============================
-app.get('/api/pagos-laboratorio', ah(async (req, res) => {
+app.get('/api/pagos-laboratorio', authRequired, ah(async (req, res) => {
   const s = getSucursal(req);
+  const tenantId = getTenantId(req);
   const trabajoId = req.query.trabajo_id || req.query.trabajoId;
   if (trabajoId) {
     const { rows } = await q(
       `SELECT id, trabajo_id, monto, fecha, sucursal_id
        FROM pagos_laboratorio
-       WHERE ${sucWhereN(1)} AND trabajo_id = $2
+       WHERE tenant_id=$1 AND ${sucWhereN(2)} AND trabajo_id = $3
        ORDER BY fecha DESC, created_at DESC`,
-      [s, String(trabajoId)]
+      [tenantId, s, String(trabajoId)]
     );
     return res.json(rows);
   }
   const { rows } = await q(
     `SELECT id, trabajo_id, monto, fecha, sucursal_id
      FROM pagos_laboratorio
-     WHERE ${sucWhereN(1)}
+     WHERE tenant_id=$1 AND ${sucWhereN(2)}
      ORDER BY fecha DESC, created_at DESC`,
-    [s]
+    [tenantId, s]
   );
   res.json(rows);
 }));
 
-app.post('/api/pagos-laboratorio', ah(async (req, res) => {
+app.post('/api/pagos-laboratorio', authRequired, ah(async (req, res) => {
   const s = getSucursal(req);
+  const tenantId = getTenantId(req);
   const { trabajo_id, monto, fecha } = req.body || {};
 
-  const chk = await q(`SELECT 1 FROM lab_trabajos WHERE id=$1 AND ${sucWhereN(2)}`, [String(trabajo_id), s]);
-  if (chk.rowCount === 0) return res.status(404).json({ error: 'Trabajo de laboratorio no encontrado en esta sucursal' });
+  const chk = await q(
+    `SELECT 1 FROM lab_trabajos WHERE id=$1 AND tenant_id=$2 AND ${sucWhereN(3)}`,
+    [String(trabajo_id), tenantId, s]
+  );
+  if (chk.rowCount === 0) return res.status(404).json({ error: 'Trabajo de laboratorio no encontrado para esta empresa y sucursal' });
 
   const { rows } = await q(
-    `INSERT INTO pagos_laboratorio (trabajo_id, monto, fecha, sucursal_id)
-     VALUES ($1,$2,$3,$4)
+    `INSERT INTO pagos_laboratorio (trabajo_id, monto, fecha, sucursal_id, tenant_id)
+     VALUES ($1,$2,$3,$4,$5)
      RETURNING *`,
-    [String(trabajo_id), Number(monto), fecha || null, s]
+    [String(trabajo_id), Number(monto), fecha || null, s, tenantId]
   );
   res.json(rows[0]);
 }));
@@ -3836,7 +3860,7 @@ async function ensureMultiTenantSchema() {
 // =========================================================
 // 🏢 MULTIEMPRESA - FASE 2.1 (tablas operativas principales)
 // =========================================================
-const CORE_TENANT_TABLES = ['doctors', 'services', 'appointments', 'payments', 'expenses'];
+const CORE_TENANT_TABLES = ['doctors', 'services', 'appointments', 'payments', 'expenses', 'laboratorios', 'lab_trabajos', 'lab_abonos', 'pagos_laboratorio'];
 
 async function ensureCoreTenantSchema() {
   console.log('🏢 Verificando tenant_id en tablas operativas principales...');
@@ -3867,7 +3891,7 @@ async function ensureCoreTenantSchema() {
     await q(`CREATE INDEX IF NOT EXISTS idx_${table}_tenant_sucursal ON ${table}(tenant_id, sucursal_id)`);
   }
 
-  console.log('✅ tenant_id listo en doctors, services, appointments, payments y expenses');
+  console.log('✅ tenant_id listo en doctors, services, appointments, payments, expenses, laboratorios, lab_trabajos, lab_abonos y pagos_laboratorio');
 }
 
 function getTenantId(req) {
