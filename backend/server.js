@@ -5726,7 +5726,7 @@ app.post('/api/whatsapp/cron/confirmations', ah(async (req, res) => {
             role: 'system',
             source: 'cron'
           },
-          requireGlobalJwtSecret(),
+          requireJwtSecret(),
           { expiresIn: '5m' }
         );
 
