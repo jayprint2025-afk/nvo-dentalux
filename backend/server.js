@@ -313,19 +313,59 @@ async function ensureAiSaasCompatibilityTables() {
     const ownerEmail = String(process.env.BOOTSTRAP_OWNER_EMAIL || 'nhaelvaldez26@hotmail.com').trim().toLowerCase();
     let defaultTenantId = null;
 
-    try {
+    // Resolver el tenant real del propietario usando el esquema actual:
+    // users <- tenant_users -> tenants. Comprobamos las tablas antes de consultar
+    // para no abortar la transacción de PostgreSQL por una relación inexistente.
+    const relationCheck = await adminQ(`
+      SELECT
+        to_regclass('public.tenants') AS tenants,
+        to_regclass('public.users') AS users,
+        to_regclass('public.tenant_users') AS tenant_users
+    `);
+    const relations = relationCheck.rows?.[0] || {};
+
+    if (relations.tenants && relations.users && relations.tenant_users) {
       const tenantResult = await adminQ(`
-        SELECT COALESCE(u.tenant_id, tm.tenant_id) AS tenant_id
-          FROM users u
-          LEFT JOIN tenant_memberships tm
-            ON tm.user_id = u.id AND tm.is_active = TRUE
+        SELECT t.id AS tenant_id
+          FROM tenants t
+          JOIN tenant_users tu
+            ON tu.tenant_id = t.id
+          JOIN users u
+            ON u.id = tu.user_id
          WHERE LOWER(u.email) = $1
-         ORDER BY tm.created_at ASC NULLS LAST
+           AND COALESCE(u.active, TRUE) = TRUE
+           AND COALESCE(tu.active, TRUE) = TRUE
+           AND COALESCE(t.status, 'active') = 'active'
+         ORDER BY
+           CASE WHEN COALESCE(tu.role, '') = 'owner' THEN 0 ELSE 1 END,
+           tu.created_at ASC
          LIMIT 1
       `, [ownerEmail]);
       defaultTenantId = tenantResult.rows?.[0]?.tenant_id || null;
-    } catch (tenantLookupError) {
-      console.warn('⚠️ No se pudo resolver tenant para clinic_channels:', tenantLookupError.message);
+    } else {
+      console.warn('⚠️ No se pudo resolver tenant para clinic_channels: faltan tenants/users/tenant_users');
+    }
+
+    // Fallback seguro por slug, útil cuando el correo propietario cambió.
+    if (!defaultTenantId && relations.tenants) {
+      const tenantSlug = String(
+        process.env.MESSENGER_TENANT_SLUG ||
+        process.env.BOOTSTRAP_TENANT_SLUG ||
+        'dentalux'
+      ).trim().toLowerCase();
+
+      const slugResult = await adminQ(`
+        SELECT id AS tenant_id
+          FROM tenants
+         WHERE LOWER(slug) = $1
+           AND COALESCE(status, 'active') = 'active'
+         LIMIT 1
+      `, [tenantSlug]);
+      defaultTenantId = slugResult.rows?.[0]?.tenant_id || null;
+    }
+
+    if (!defaultTenantId) {
+      console.warn('⚠️ clinic_channels se crearán sin tenant_id hasta configurar el tenant de Messenger');
     }
 
     for (const id of ids) {
