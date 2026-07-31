@@ -436,6 +436,24 @@ async function q(text, params = []) {
   } finally { client.release(); }
 }
 
+
+async function queryPoolForTenant(pool, tenantId, text, params = []) {
+  if (!tenantId) throw new Error('tenant_id ausente para consulta WhatsApp');
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(`SELECT set_config('app.tenant_id', $1, true)`, [String(tenantId)]);
+    const result = await client.query(text, params);
+    await client.query('COMMIT');
+    return result;
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 async function qBypass(text, params = []) {
   const client = await poolDB1.connect();
   try {
@@ -2434,8 +2452,22 @@ if (action === 'CONFIRMAR') {
         if (!seen.has(p)) { seen.add(p); uniq.push(p); }
       }
 
-      const sqlUpdate = `UPDATE appointments SET status = $1 WHERE id = $2 AND (${whereSuc}) RETURNING id,date,start_time,sucursal_id`;
-      const params = IGNORE_SUC ? [newStatus, idHint] : [newStatus, idHint, sucursalId];
+      const resolvedTenantId = String(tenantResolution.tenantId);
+      const sqlUpdate = IGNORE_SUC
+        ? `UPDATE appointments
+              SET status = $1
+            WHERE id = $2
+              AND tenant_id = $3::uuid
+            RETURNING id,date,start_time,sucursal_id,tenant_id`
+        : `UPDATE appointments
+              SET status = $1
+            WHERE id = $2
+              AND tenant_id = $3::uuid
+              AND (sucursal_id = $4::text OR sucursal_id IS NULL)
+            RETURNING id,date,start_time,sucursal_id,tenant_id`;
+      const params = IGNORE_SUC
+        ? [newStatus, idHint, resolvedTenantId]
+        : [newStatus, idHint, resolvedTenantId, sucursalId];
 
       console.log('🎯 UPDATE CON ID (multi-db):', {
         appointment_id: idHint,
@@ -2447,7 +2479,7 @@ if (action === 'CONFIRMAR') {
       let r = { rows: [] };
       let usedPool = null;
       for (const p of uniq) {
-        const rr = await p.query(sqlUpdate, params);
+        const rr = await queryPoolForTenant(p, resolvedTenantId, sqlUpdate, params);
         if (rr.rows && rr.rows.length) {
           r = rr;
           usedPool = p;
@@ -2464,7 +2496,8 @@ if (action === 'CONFIRMAR') {
       console.log('🎯 BÚSQUEDA CON ID EXPLÍCITO:', {
         appointment_id: idHint,
         whereSuc_clause: whereSuc,
-        sql_params: IGNORE_SUC ? [newStatus, idHint] : [newStatus, idHint, sucursalId]
+        sql_params: params,
+        tenant_id: resolvedTenantId
       });
 
       console.log('💾 RESULTADO UPDATE CON ID:', {
@@ -2622,9 +2655,15 @@ if (!appt && CROSS_SUC_FALLBACK) {
     }
 
     // ✅ Dual-DB: actualiza en la MISMA base donde encontramos la cita
-    await (apptPool || (als.getStore()?.pool || poolDB1)).query(
-      `UPDATE appointments SET status = $1 WHERE id = $2`,
-      [newStatus, appt.id]
+    const resolvedTenantId = String(tenantResolution.tenantId);
+    await queryPoolForTenant(
+      apptPool || (als.getStore()?.pool || poolDB1),
+      resolvedTenantId,
+      `UPDATE appointments
+          SET status = $1
+        WHERE id = $2
+          AND tenant_id = $3::uuid`,
+      [newStatus, appt.id, resolvedTenantId]
     );
 
     console.log('💾 UPDATE COMPLETADO:', {
