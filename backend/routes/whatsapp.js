@@ -2885,22 +2885,27 @@ router.post('/broadcast/confirmations', async (req, res) => {
     if (/^\d{4}-\d{2}-\d{2}$/.test(when)) dateExpr = `'${when}'::date`;
 
     const IGNORE = (process.env.APPT_IGNORE_SUCURSAL || 'false').toLowerCase() === 'true';
-    const whereSuc = IGNORE ? 'TRUE' : '(sucursal_id = $2 OR sucursal_id IS NULL)';
+    const whereSuc = IGNORE
+      ? 'TRUE'
+      : '(sucursal_id = $2::text OR sucursal_id IS NULL)';
+    const limitPlaceholder = IGNORE ? '$2' : '$3';
 
     const sql = `
       SELECT DISTINCT ON (${PHONE_COL})
              id, patient, ${PHONE_COL} AS phone, date, start_time, sucursal_id, service_id, status
         FROM appointments
-       WHERE tenant_id = $1
+       WHERE tenant_id = $1::uuid
          AND UPPER(status) = 'PENDIENTE'
          AND (date::date = ${dateExpr})
          AND ${PHONE_COL} IS NOT NULL
          AND TRIM(${PHONE_COL}) <> ''
          AND (${whereSuc})
        ORDER BY ${PHONE_COL}, date ASC, start_time ASC
-       LIMIT $3
+       LIMIT ${limitPlaceholder}
     `;
-    const params = (whereSuc === 'TRUE') ? [tenantId, null, limit] : [tenantId, sucursalId, limit];
+    const params = IGNORE
+      ? [tenantId, limit]
+      : [tenantId, sucursalId, limit];
     const r = await q(sql, params);
     const rows = r.rows || [];
 
@@ -3073,7 +3078,18 @@ Después escribe *Confirmar* en el mensaje de la cita.`;
     console.log('📊 [broadcast] Summary:', result.summary);
     res.json(result);
   } catch (e) {
-    res.status(500).json({ ok: false, error: String(e?.message || e) });
+    console.error('❌ POST /broadcast/confirmations error:', {
+      message: String(e?.message || e),
+      code: e?.code || null,
+      detail: e?.detail || null,
+      tenantId: req?.auth?.tenantId || currentTenantId() || null,
+      sucursalId: getSucursalFromReq(req) || null
+    });
+    res.status(500).json({
+      ok: false,
+      error: String(e?.message || e),
+      code: e?.code || 'BROADCAST_ERROR'
+    });
   }
 });
 
