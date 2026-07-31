@@ -4372,77 +4372,151 @@ function _poolForDbKey(dbKey) {
   return poolDB1;
 }
 
-async function getOrCreateAiConversationIdForMessenger(pageId, psid, dbKey) {
+async function resolveMessengerTenantId(pageId, pool) {
+  const pid = String(pageId || '').trim();
+
+  // 1) Mapeo explícito por Page ID (recomendado para varias empresas):
+  // MESSENGER_PAGE_TENANTS_JSON={"114659410337690":"uuid-del-tenant"}
+  const rawMap = String(process.env.MESSENGER_PAGE_TENANTS_JSON || '').trim();
+  if (rawMap) {
+    try {
+      const map = JSON.parse(rawMap);
+      const mapped = String(map?.[pid] || '').trim();
+      if (mapped) return mapped;
+    } catch (error) {
+      console.warn('⚠️ MESSENGER_PAGE_TENANTS_JSON inválido:', error.message);
+    }
+  }
+
+  // 2) Tenant único para todas las páginas de consultorio.
+  const directTenant = String(process.env.MESSENGER_TENANT_ID || '').trim();
+  if (directTenant) return directTenant;
+
+  // 3) Fallback seguro al tenant principal existente.
+  const slug = String(
+    process.env.MESSENGER_TENANT_SLUG ||
+    process.env.BOOTSTRAP_TENANT_SLUG ||
+    'dentalux'
+  ).trim().toLowerCase();
+
+  const { rows } = await pool.query(
+    `SELECT id
+       FROM tenants
+      WHERE slug = $1
+        AND status = 'active'
+      ORDER BY created_at ASC
+      LIMIT 1`,
+    [slug]
+  );
+
+  const tenantId = String(rows?.[0]?.id || '').trim();
+  if (!tenantId) {
+    throw new Error(
+      `No se encontró tenant para Messenger. Configura MESSENGER_TENANT_ID o MESSENGER_PAGE_TENANTS_JSON (page_id=${pid}).`
+    );
+  }
+  return tenantId;
+}
+
+async function getOrCreateAiConversationIdForMessenger(pageId, psid, dbKey, tenantId) {
   const pool = _poolForDbKey(dbKey);
   const pid = String(pageId || '').trim();
   const sid = String(psid || '').trim();
+  const tid = String(tenantId || '').trim();
+  if (!tid) throw new Error('tenantId ausente para conversación de Messenger');
 
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS messenger_threads (
-      id SERIAL PRIMARY KEY,
-      page_id TEXT NOT NULL,
-      psid TEXT NOT NULL,
-      conversation_id INTEGER,
-      created_at TIMESTAMPTZ DEFAULT NOW(),
-      UNIQUE(page_id, psid)
-    )
-  `);
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
 
-  const found = await pool.query(
-    `SELECT conversation_id FROM messenger_threads WHERE page_id=$1 AND psid=$2 LIMIT 1`,
-    [pid, sid]
-  );
+    // Todo acceso a tablas con RLS ocurre dentro del tenant correcto.
+    await client.query(`SELECT set_config('app.tenant_id', $1, true)`, [tid]);
 
-  const existingConvId = found.rows?.[0]?.conversation_id ? Number(found.rows[0].conversation_id) : null;
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS messenger_threads (
+        id SERIAL PRIMARY KEY,
+        page_id TEXT NOT NULL,
+        psid TEXT NOT NULL,
+        conversation_id BIGINT,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE(page_id, psid)
+      )
+    `);
 
-  // ✅ Si ya hay conversation_id, verifica que exista en ai_conversations.
-  // (Después de que borras conversaciones, messenger_threads puede quedar apuntando a ids viejos)
-  if (existingConvId) {
-    const chk = await pool.query(
-      `SELECT 1 FROM ai_conversations WHERE id=$1 LIMIT 1`,
-      [existingConvId]
-    );
-    if (chk.rows?.length) return existingConvId;
-
-    // Si ya no existe, limpiamos el mapping y creamos nueva
-    await pool.query(
-      `UPDATE messenger_threads SET conversation_id = NULL WHERE page_id=$1 AND psid=$2`,
+    const found = await client.query(
+      `SELECT conversation_id
+         FROM messenger_threads
+        WHERE page_id=$1 AND psid=$2
+        LIMIT 1`,
       [pid, sid]
     );
+
+    const existingConvId = found.rows?.[0]?.conversation_id
+      ? Number(found.rows[0].conversation_id)
+      : null;
+
+    if (existingConvId) {
+      const chk = await client.query(
+        `SELECT 1
+           FROM ai_conversations
+          WHERE id=$1 AND tenant_id=$2::uuid
+          LIMIT 1`,
+        [existingConvId, tid]
+      );
+
+      if (chk.rows?.length) {
+        await client.query('COMMIT');
+        return existingConvId;
+      }
+
+      await client.query(
+        `UPDATE messenger_threads
+            SET conversation_id=NULL
+          WHERE page_id=$1 AND psid=$2`,
+        [pid, sid]
+      );
+    }
+
+    const title = `Messenger:${pid}:${sid}`.slice(0, 200);
+    const created = await client.query(
+      `INSERT INTO ai_conversations
+         (tenant_id, title, clinic_id, channel, external_id,
+          sucursal_id, phone_number_id, state)
+       VALUES
+         ($1::uuid, $2, $1::text, 'messenger', $3,
+          NULL, $3, $4::jsonb)
+       RETURNING id`,
+      [
+        tid,
+        title,
+        pid,
+        JSON.stringify({
+          channel: 'messenger',
+          external_key: `ms:${pid}:${sid}`,
+          page_id: pid,
+          psid: sid
+        })
+      ]
+    );
+
+    const convId = Number(created.rows[0].id);
+
+    await client.query(
+      `INSERT INTO messenger_threads(page_id, psid, conversation_id)
+       VALUES ($1,$2,$3)
+       ON CONFLICT (page_id, psid)
+       DO UPDATE SET conversation_id=EXCLUDED.conversation_id`,
+      [pid, sid, convId]
+    );
+
+    await client.query('COMMIT');
+    return convId;
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally {
+    client.release();
   }
-
-  const title = `Messenger:${pid}:${sid}`.slice(0, 200);
-  
-  // Crear con formato SaaS (clinic_id, channel, external_id)
-  // clinic_id auto-generado igual que en tenant-context
-  const clinic_id = `clinic_messenger_${pid}`;
-  const channel = 'messenger';
-  const external_id = pid;
-
-  const created = await pool.query(
-    `INSERT INTO ai_conversations(title, clinic_id, channel, external_id, sucursal_id, phone_number_id, state)
-     VALUES ($1, $2, $3, $4, NULL, $5, $6::jsonb)
-     RETURNING id`,
-    [
-      title,
-      clinic_id,
-      channel,
-      external_id,
-      pid, // phone_number_id = pageId (backward compat)
-      JSON.stringify({ channel: 'messenger', external_key: `ms:${pid}:${sid}` })
-    ]
-  );
-
-  const convId = Number(created.rows[0].id);
-
-  await pool.query(
-    `INSERT INTO messenger_threads(page_id, psid, conversation_id)
-     VALUES ($1,$2,$3)
-     ON CONFLICT (page_id, psid) DO UPDATE SET conversation_id=EXCLUDED.conversation_id`,
-    [pid, sid, convId]
-  );
-
-  return convId;
 }
 
 async function callClinicAiForMessenger(senderId, pageId, msgText, req) {
@@ -4451,18 +4525,34 @@ async function callClinicAiForMessenger(senderId, pageId, msgText, req) {
 
   const dbKey = _dbKeyForMessengerPageId(pageId) || pickDbKey(req) || 'db1';
   const pool = _poolForDbKey(dbKey);
+  const tenantId = await resolveMessengerTenantId(pageId, pool);
+
+  // JWT interno corto: permite reutilizar las rutas SaaS protegidas sin abrirlas públicamente.
+  const internalToken = jwt.sign(
+    {
+      sub: `messenger:${String(senderId || '').trim()}`,
+      tenantId,
+      role: 'messenger'
+    },
+    requireGlobalJwtSecret(),
+    { expiresIn: '2m' }
+  );
 
   async function clearMessengerThread() {
     const pid = String(pageId || '').trim();
     const sid = String(senderId || '').trim();
     try {
-      await pool.query(`UPDATE messenger_threads SET conversation_id = NULL WHERE page_id=$1 AND psid=$2`, [pid, sid]);
+      await pool.query(
+        `UPDATE messenger_threads SET conversation_id=NULL WHERE page_id=$1 AND psid=$2`,
+        [pid, sid]
+      );
     } catch {}
   }
 
   async function runOnce(conversationId) {
     const headers = {
       'Content-Type': 'application/json',
+      'Authorization': `Bearer ${internalToken}`,
       'x-db': String(dbKey),
       'x-channel': 'messenger',
       'x-page-id': String(pageId || ''),
@@ -4484,22 +4574,36 @@ async function callClinicAiForMessenger(senderId, pageId, msgText, req) {
     return { resp, data };
   }
 
-  // 1) normal
-  let conversationId = await getOrCreateAiConversationIdForMessenger(pageId, senderId, dbKey);
+  let conversationId = await getOrCreateAiConversationIdForMessenger(
+    pageId,
+    senderId,
+    dbKey,
+    tenantId
+  );
   let { resp, data } = await runOnce(conversationId);
 
-  // 2) Si conversación no existe (404) o hay mismatch de tenant (403), limpiamos mapping y reintentamos 1 vez
-  if (!resp.ok && 
-      ((resp.status === 404 && String(data?.error || '').toLowerCase().includes('conversación')) ||
-       (resp.status === 403 && String(data?.error || '').toLowerCase().includes('tenant')))) {
+  // Limpia referencias antiguas y reintenta una sola vez.
+  const errorText = String(data?.error || '').toLowerCase();
+  if (!resp.ok && (
+    resp.status === 401 ||
+    resp.status === 403 ||
+    (resp.status === 404 && errorText.includes('conversación'))
+  )) {
     await clearMessengerThread();
-    conversationId = await getOrCreateAiConversationIdForMessenger(pageId, senderId, dbKey);
+    conversationId = await getOrCreateAiConversationIdForMessenger(
+      pageId,
+      senderId,
+      dbKey,
+      tenantId
+    );
     ({ resp, data } = await runOnce(conversationId));
   }
 
   if (!resp.ok) {
     console.error('❌ [messenger][clinic] /api/ai/chat error', resp.status, data);
-    return { reply: data?.reply || 'Estoy teniendo un problema técnico. Intenta de nuevo.' };
+    return {
+      reply: data?.reply || 'Estoy teniendo un problema técnico. Intenta de nuevo.'
+    };
   }
 
   return data;
