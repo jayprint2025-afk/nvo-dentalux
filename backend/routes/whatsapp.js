@@ -2848,10 +2848,10 @@ Responde solo con un número del 1 al 5.`;
 // --- Broadcast HOY ---
 router.post('/broadcast/confirmations', async (req, res) => {
   try {
-    const REQUIRED = process.env.WA_BROADCAST_SECRET || '';
-    const provided = String(req.query.secret || req.headers['x-wa-secret'] || '');
-    if (REQUIRED && provided !== REQUIRED) return res.status(401).json({ ok: false, error: 'unauthorized' });
-
+    // Esta ruta ya está protegida por JWT en server.js.
+    // WA_BROADCAST_SECRET se usa únicamente en /api/whatsapp/cron/confirmations.
+    // No se valida aquí para evitar que un secreto ausente o desactualizado
+    // cierre la sesión válida del usuario que usa el botón manual.
     const tenantId = requireTenantId(req);
 
     // Aplica tanto al botón manual como al cronjob de las 8:00 a. m.,
