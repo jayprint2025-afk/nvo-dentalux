@@ -237,7 +237,7 @@ let aiModule = null;
 
 // ================================
 // 🧩 Compatibilidad IA SaaS / WhatsApp identifiers
-// Crea clinic_channels y perfiles para WhatsApp/Messenger, incluyendo external_id.
+// Crea clinic_channels y perfiles para PHONE_NUMBER_ID nuevo y WABA_ID viejo.
 // Esto evita errores tipo: relation "clinic_channels" does not exist
 // y evita que la IA deje de responder al cambiar el número de WhatsApp.
 // ================================
@@ -257,7 +257,6 @@ async function ensureAiSaasCompatibilityTables() {
         id SERIAL PRIMARY KEY,
         tenant_id UUID,
         phone_number_id TEXT,
-        external_id TEXT,
         channel TEXT DEFAULT 'whatsapp',
         name TEXT,
         clinic_name TEXT,
@@ -4202,8 +4201,38 @@ const FB_PAGE_TOKENS_JSON = process.env.FB_PAGE_TOKENS_JSON || '';
 // (Compatibilidad) Token único - evita usarlo si manejas varias páginas
 const FB_PAGE_ACCESS_TOKEN = process.env.FB_PAGE_ACCESS_TOKEN || '';
 
-function getFbPageToken(pageId) {
+async function getFbPageToken(pageId) {
   const pid = String(pageId || '').trim();
+
+  // Fuente principal: token guardado por empresa en clinic_channels.
+  if (pid) {
+    const client = await poolDB1.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(`SELECT set_config('app.tenant_bypass', 'on', true)`);
+      const { rows } = await client.query(`
+        SELECT config->>'access_token' AS access_token
+          FROM clinic_channels
+         WHERE LOWER(COALESCE(channel,'')) = 'messenger'
+           AND (external_id = $1 OR phone_number_id = $1)
+           AND COALESCE(active, TRUE) = TRUE
+           AND COALESCE(is_active, TRUE) = TRUE
+           AND tenant_id IS NOT NULL
+         ORDER BY updated_at DESC NULLS LAST, id DESC
+         LIMIT 1
+      `, [pid]);
+      await client.query('COMMIT');
+      const dbToken = String(rows?.[0]?.access_token || '').trim();
+      if (dbToken) return dbToken;
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => {});
+      console.warn('⚠️ No se pudo leer el token Messenger desde clinic_channels:', error.message);
+    } finally {
+      client.release();
+    }
+  }
+
+  // Respaldo para instalaciones existentes.
   if (FB_PAGE_TOKENS_JSON) {
     try {
       const map = JSON.parse(FB_PAGE_TOKENS_JSON);
@@ -4232,7 +4261,7 @@ function getPublicBaseUrl(req) {
 }
 
 async function fbSendText(psid, text, pageId) {
-  const token = getFbPageToken(pageId);
+  const token = await getFbPageToken(pageId);
   if (!token) {
     console.warn('⚠️ No hay token para responder Messenger (FB_PAGE_TOKENS_JSON/FB_PAGE_ACCESS_TOKEN). pageId=', String(pageId||''));
     return;
@@ -4466,98 +4495,25 @@ function _poolForDbKey(dbKey) {
 
 async function resolveMessengerTenantId(pageId, pool) {
   const pid = String(pageId || '').trim();
-  if (!pid) throw new Error('Page ID de Messenger ausente');
 
-  // 1) Fuente principal: clinic_channels.
-  // Como todavía no conocemos el tenant, esta lectura administrativa usa bypass
-  // únicamente dentro de una transacción corta y de solo lectura.
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    await client.query(`SELECT set_config('app.tenant_bypass', 'on', true)`);
-
-    const tableCheck = await client.query(
-      `SELECT to_regclass('public.clinic_channels') AS table_name`
-    );
-
-    if (tableCheck.rows?.[0]?.table_name) {
-      const columnCheck = await client.query(`
-        SELECT column_name
-          FROM information_schema.columns
-         WHERE table_schema='public'
-           AND table_name='clinic_channels'
-           AND column_name IN ('external_id','phone_number_id')
-      `);
-      const columns = new Set((columnCheck.rows || []).map(r => String(r.column_name)));
-
-      const matchParts = [];
-      const params = [pid];
-
-      if (columns.has('external_id')) matchParts.push(`external_id = $1`);
-      // Compatibilidad temporal con registros antiguos.
-      if (columns.has('phone_number_id')) matchParts.push(`phone_number_id = $1`);
-
-      if (matchParts.length) {
-        const { rows } = await client.query(
-          `SELECT tenant_id, db_key, name, clinic_name
-             FROM clinic_channels
-            WHERE LOWER(COALESCE(channel, '')) = 'messenger'
-              AND (${matchParts.join(' OR ')})
-              AND COALESCE(active, TRUE) = TRUE
-              AND COALESCE(is_active, TRUE) = TRUE
-              AND tenant_id IS NOT NULL
-            ORDER BY updated_at DESC NULLS LAST, id DESC
-            LIMIT 2`,
-          params
-        );
-
-        if (rows.length > 1) {
-          throw new Error(`Hay más de un canal Messenger activo para page_id=${pid}`);
-        }
-
-        const tenantId = String(rows?.[0]?.tenant_id || '').trim();
-        if (tenantId) {
-          await client.query('COMMIT');
-          console.log('✅ Messenger tenant resuelto desde clinic_channels', {
-            pageId: pid,
-            tenantId,
-            channelName: rows[0]?.name || rows[0]?.clinic_name || null
-          });
-          return tenantId;
-        }
-      }
-    }
-
-    await client.query('COMMIT');
-  } catch (error) {
-    await client.query('ROLLBACK').catch(() => {});
-    throw error;
-  } finally {
-    client.release();
-  }
-
-  // 2) Respaldo temporal por variables de entorno.
+  // 1) Mapeo explícito por Page ID (recomendado para varias empresas):
+  // MESSENGER_PAGE_TENANTS_JSON={"114659410337690":"uuid-del-tenant"}
   const rawMap = String(process.env.MESSENGER_PAGE_TENANTS_JSON || '').trim();
   if (rawMap) {
     try {
       const map = JSON.parse(rawMap);
       const mapped = String(map?.[pid] || '').trim();
-      if (mapped) {
-        console.warn('⚠️ Messenger tenant resuelto por MESSENGER_PAGE_TENANTS_JSON; registra la página en clinic_channels');
-        return mapped;
-      }
+      if (mapped) return mapped;
     } catch (error) {
       console.warn('⚠️ MESSENGER_PAGE_TENANTS_JSON inválido:', error.message);
     }
   }
 
+  // 2) Tenant único para todas las páginas de consultorio.
   const directTenant = String(process.env.MESSENGER_TENANT_ID || '').trim();
-  if (directTenant) {
-    console.warn('⚠️ Messenger tenant resuelto por MESSENGER_TENANT_ID; registra la página en clinic_channels');
-    return directTenant;
-  }
+  if (directTenant) return directTenant;
 
-  // 3) Último respaldo por slug para no interrumpir instalaciones antiguas.
+  // 3) Fallback seguro al tenant principal existente.
   const slug = String(
     process.env.MESSENGER_TENANT_SLUG ||
     process.env.BOOTSTRAP_TENANT_SLUG ||
@@ -4567,8 +4523,8 @@ async function resolveMessengerTenantId(pageId, pool) {
   const { rows } = await pool.query(
     `SELECT id
        FROM tenants
-      WHERE LOWER(slug) = $1
-        AND COALESCE(status, 'active') = 'active'
+      WHERE slug = $1
+        AND status = 'active'
       ORDER BY created_at ASC
       LIMIT 1`,
     [slug]
@@ -4577,11 +4533,9 @@ async function resolveMessengerTenantId(pageId, pool) {
   const tenantId = String(rows?.[0]?.id || '').trim();
   if (!tenantId) {
     throw new Error(
-      `No existe un canal Messenger activo en clinic_channels para page_id=${pid}`
+      `No se encontró tenant para Messenger. Configura MESSENGER_TENANT_ID o MESSENGER_PAGE_TENANTS_JSON (page_id=${pid}).`
     );
   }
-
-  console.warn('⚠️ Messenger tenant resuelto por slug de respaldo:', slug);
   return tenantId;
 }
 
@@ -4776,9 +4730,41 @@ async function callClinicAiForMessenger(senderId, pageId, msgText, req) {
   return data;
 }
 
+
+async function isRegisteredMessengerClinicPage(pageId) {
+  const pid = String(pageId || '').trim();
+  if (!pid) return false;
+
+  const client = await poolDB1.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(`SELECT set_config('app.tenant_bypass', 'on', true)`);
+    const { rows } = await client.query(`
+      SELECT 1
+        FROM clinic_channels
+       WHERE LOWER(COALESCE(channel,'')) = 'messenger'
+         AND (external_id = $1 OR phone_number_id = $1)
+         AND COALESCE(active, TRUE) = TRUE
+         AND COALESCE(is_active, TRUE) = TRUE
+         AND tenant_id IS NOT NULL
+       LIMIT 1
+    `, [pid]);
+    await client.query('COMMIT');
+    return Boolean(rows?.length);
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.warn('⚠️ No se pudo clasificar la página Messenger desde clinic_channels:', error.message);
+    return false;
+  } finally {
+    client.release();
+  }
+}
+
 async function callAiChatForMessenger(senderId, pageId, msgText, req) {
   const pid = String(pageId || '').trim();
-  const isClinic = MESSENGER_CONSULTORIO_PAGE_IDS.includes(pid);
+  const isClinic =
+    await isRegisteredMessengerClinicPage(pid) ||
+    MESSENGER_CONSULTORIO_PAGE_IDS.includes(pid);
   if (isClinic) return await callClinicAiForMessenger(senderId, pid, msgText, req);
 
   const isDetalles = MESSENGER_DETALLES_PAGE_IDS.includes(pid);
@@ -5240,6 +5226,190 @@ app.put('/api/companies/:id', authRequired, companiesSuperAdminOnly, ah(async (r
     if (error.code === '23505') return res.status(409).json({ error: 'El correo ya está registrado' });
     throw error;
   } finally { client.release(); }
+}));
+
+
+function mapCompanyChannel(row) {
+  const config = row?.config && typeof row.config === 'object' ? row.config : {};
+  return {
+    id: Number(row.id),
+    tenantId: row.tenant_id,
+    channel: row.channel,
+    externalId: row.external_id || row.phone_number_id || '',
+    name: row.name || '',
+    active: row.active !== false && row.is_active !== false,
+    hasAccessToken: Boolean(config.access_token),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+app.get('/api/companies/:id/channels', authRequired, companiesSuperAdminOnly, ah(async (req, res) => {
+  const tenantId = String(req.params.id || '').trim();
+  const client = await poolDB1.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(`SELECT set_config('app.tenant_bypass', 'on', true)`);
+    const exists = await client.query('SELECT 1 FROM tenants WHERE id=$1::uuid LIMIT 1', [tenantId]);
+    if (!exists.rows[0]) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Empresa no encontrada' });
+    }
+    const { rows } = await client.query(`
+      SELECT id, tenant_id, channel, external_id, phone_number_id, name,
+             active, is_active, config, created_at, updated_at
+        FROM clinic_channels
+       WHERE tenant_id=$1::uuid
+       ORDER BY channel, name, id
+    `, [tenantId]);
+    await client.query('COMMIT');
+    res.json(rows.map(mapCompanyChannel));
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+}));
+
+app.post('/api/companies/:id/channels', authRequired, companiesSuperAdminOnly, ah(async (req, res) => {
+  const tenantId = String(req.params.id || '').trim();
+  const channel = String(req.body?.channel || '').trim().toLowerCase();
+  const externalId = String(req.body?.externalId || '').trim();
+  const name = String(req.body?.name || '').trim();
+  const accessToken = String(req.body?.accessToken || '').trim();
+  const active = req.body?.active !== false;
+
+  if (!['messenger', 'whatsapp'].includes(channel)) {
+    return res.status(400).json({ error: 'Canal inválido. Usa messenger o whatsapp.' });
+  }
+  if (!externalId) {
+    return res.status(400).json({ error: channel === 'messenger' ? 'El Page ID es obligatorio' : 'El Phone Number ID es obligatorio' });
+  }
+
+  const client = await poolDB1.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(`SELECT set_config('app.tenant_bypass', 'on', true)`);
+
+    const tenantResult = await client.query('SELECT id, name FROM tenants WHERE id=$1::uuid LIMIT 1', [tenantId]);
+    if (!tenantResult.rows[0]) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Empresa no encontrada' });
+    }
+
+    // Un identificador externo sólo puede pertenecer a una empresa activa.
+    const conflict = await client.query(`
+      SELECT tenant_id
+        FROM clinic_channels
+       WHERE LOWER(COALESCE(channel,''))=$1
+         AND external_id=$2
+         AND tenant_id<>$3::uuid
+       LIMIT 1
+    `, [channel, externalId, tenantId]);
+    if (conflict.rows[0]) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ error: 'Ese identificador ya está ligado a otra empresa' });
+    }
+
+    const existing = await client.query(`
+      SELECT id, config
+        FROM clinic_channels
+       WHERE tenant_id=$1::uuid
+         AND LOWER(COALESCE(channel,''))=$2
+         AND external_id=$3
+       ORDER BY id DESC
+       LIMIT 1
+    `, [tenantId, channel, externalId]);
+
+    let row;
+    if (existing.rows[0]) {
+      const config = existing.rows[0].config || {};
+      if (accessToken) config.access_token = accessToken;
+      const updated = await client.query(`
+        UPDATE clinic_channels
+           SET phone_number_id=$1,
+               name=$2,
+               clinic_name=$3,
+               active=$4,
+               is_active=$4,
+               config=$5::jsonb,
+               metadata=COALESCE(metadata,'{}'::jsonb) || jsonb_build_object('source','company_channels_ui'),
+               updated_at=NOW()
+         WHERE id=$6
+         RETURNING *
+      `, [
+        externalId,
+        name || `${channel === 'messenger' ? 'Facebook Messenger' : 'WhatsApp'} ${tenantResult.rows[0].name}`,
+        tenantResult.rows[0].name,
+        active,
+        JSON.stringify(config),
+        existing.rows[0].id
+      ]);
+      row = updated.rows[0];
+    } else {
+      const config = accessToken ? { access_token: accessToken } : {};
+      const inserted = await client.query(`
+        INSERT INTO clinic_channels
+          (tenant_id, channel, external_id, phone_number_id, name, clinic_name,
+           db_key, active, is_active, config, metadata)
+        VALUES
+          ($1::uuid,$2,$3,$3,$4,$5,'db1',$6,$6,$7::jsonb,
+           jsonb_build_object('source','company_channels_ui'))
+        RETURNING *
+      `, [
+        tenantId,
+        channel,
+        externalId,
+        name || `${channel === 'messenger' ? 'Facebook Messenger' : 'WhatsApp'} ${tenantResult.rows[0].name}`,
+        tenantResult.rows[0].name,
+        active,
+        JSON.stringify(config)
+      ]);
+      row = inserted.rows[0];
+    }
+
+    await client.query('COMMIT');
+    res.status(existing.rows[0] ? 200 : 201).json(mapCompanyChannel(row));
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    if (error.code === '23505') {
+      return res.status(409).json({ error: 'Ese canal o identificador ya está registrado' });
+    }
+    throw error;
+  } finally {
+    client.release();
+  }
+}));
+
+app.delete('/api/companies/:id/channels/:channelId', authRequired, companiesSuperAdminOnly, ah(async (req, res) => {
+  const tenantId = String(req.params.id || '').trim();
+  const channelId = Number(req.params.channelId);
+  if (!Number.isSafeInteger(channelId) || channelId <= 0) {
+    return res.status(400).json({ error: 'Canal inválido' });
+  }
+
+  const client = await poolDB1.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(`SELECT set_config('app.tenant_bypass', 'on', true)`);
+    const { rows } = await client.query(`
+      DELETE FROM clinic_channels
+       WHERE id=$1 AND tenant_id=$2::uuid
+       RETURNING id
+    `, [channelId, tenantId]);
+    if (!rows[0]) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Canal no encontrado' });
+    }
+    await client.query('COMMIT');
+    res.json({ ok: true, deleted: channelId });
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
 }));
 
 app.patch('/api/companies/:id/activate', authRequired, companiesSuperAdminOnly, ah(async (req, res) => {

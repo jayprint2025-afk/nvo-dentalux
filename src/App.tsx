@@ -1225,9 +1225,27 @@ type Empresa = {
   address: string;
 };
 
+type EmpresaChannel = {
+  id: number;
+  tenantId: string;
+  channel: 'messenger' | 'whatsapp';
+  externalId: string;
+  name: string;
+  active: boolean;
+  hasAccessToken: boolean;
+};
+
 const emptyEmpresaForm = {
   name: '', ownerName: '', email: '', password: '', branchName: '',
   phone: '', address: ''
+};
+
+const emptyChannelForm = {
+  channel: 'messenger' as 'messenger' | 'whatsapp',
+  externalId: '',
+  name: '',
+  accessToken: '',
+  active: true
 };
 
 function EmpresasModule() {
@@ -1237,6 +1255,12 @@ function EmpresasModule() {
   const [editing, setEditing] = React.useState<Empresa | null>(null);
   const [form, setForm] = React.useState(emptyEmpresaForm);
   const [message, setMessage] = React.useState('');
+
+  const [channelsCompany, setChannelsCompany] = React.useState<Empresa | null>(null);
+  const [channels, setChannels] = React.useState<EmpresaChannel[]>([]);
+  const [channelsLoading, setChannelsLoading] = React.useState(false);
+  const [channelForm, setChannelForm] = React.useState(emptyChannelForm);
+  const [channelMessage, setChannelMessage] = React.useState('');
 
   const load = React.useCallback(async () => {
     setLoading(true);
@@ -1304,12 +1328,84 @@ function EmpresasModule() {
     } finally { setLoading(false); }
   };
 
+  const loadChannels = React.useCallback(async (empresa: Empresa) => {
+    setChannelsLoading(true);
+    setChannelMessage('');
+    try {
+      const data = await api(`/companies/${empresa.id}/channels`);
+      setChannels(Array.isArray(data) ? data : []);
+    } catch (e: any) {
+      setChannelMessage(`Error: ${e?.message || 'No se pudieron cargar los canales'}`);
+    } finally {
+      setChannelsLoading(false);
+    }
+  }, []);
+
+  const openChannels = async (empresa: Empresa) => {
+    setChannelsCompany(empresa);
+    setChannelForm({
+      ...emptyChannelForm,
+      name: `Facebook Messenger ${empresa.name}`
+    });
+    await loadChannels(empresa);
+  };
+
+  const saveChannel = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!channelsCompany) return;
+    setChannelsLoading(true);
+    setChannelMessage('');
+    try {
+      await api(`/companies/${channelsCompany.id}/channels`, {
+        method: 'POST',
+        body: JSON.stringify(channelForm)
+      });
+      setChannelMessage('Canal guardado y ligado correctamente a la empresa.');
+      setChannelForm({
+        ...emptyChannelForm,
+        name: `Facebook Messenger ${channelsCompany.name}`
+      });
+      await loadChannels(channelsCompany);
+    } catch (e: any) {
+      setChannelMessage(`Error: ${e?.message || 'No se pudo guardar el canal'}`);
+    } finally {
+      setChannelsLoading(false);
+    }
+  };
+
+  const removeChannel = async (channel: EmpresaChannel) => {
+    if (!channelsCompany) return;
+    if (!window.confirm(`¿Eliminar el canal "${channel.name || channel.externalId}"?`)) return;
+    setChannelsLoading(true);
+    setChannelMessage('');
+    try {
+      await api(`/companies/${channelsCompany.id}/channels/${channel.id}`, { method: 'DELETE' });
+      setChannelMessage('Canal eliminado.');
+      await loadChannels(channelsCompany);
+    } catch (e: any) {
+      setChannelMessage(`Error: ${e?.message || 'No se pudo eliminar el canal'}`);
+    } finally {
+      setChannelsLoading(false);
+    }
+  };
+
+  const selectExistingChannel = (channel: EmpresaChannel) => {
+    setChannelForm({
+      channel: channel.channel,
+      externalId: channel.externalId,
+      name: channel.name,
+      accessToken: '',
+      active: channel.active
+    });
+    setChannelMessage('Editando canal. Deja el token vacío para conservar el actual.');
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
           <h2 className="text-2xl font-bold text-gray-800 flex items-center gap-2"><Building2 className="w-6 h-6" /> Empresas</h2>
-          <p className="text-sm text-gray-500">Administración de empresas · servicio único de $20 USD al mes.</p>
+          <p className="text-sm text-gray-500">Administra cuentas y conecta Messenger o WhatsApp con la empresa correcta.</p>
         </div>
         <button onClick={openNew} className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg flex items-center gap-2">
           <Plus className="w-4 h-4" /> Nueva Empresa
@@ -1337,16 +1433,149 @@ function EmpresasModule() {
         </form>
       )}
 
-      <div className="overflow-x-auto border rounded-xl">
+      <div className="overflow-x-auto border rounded-xl bg-white">
         <table className="w-full text-sm">
           <thead className="bg-gray-50"><tr><th className="p-3 text-left">Empresa</th><th className="p-3 text-left">Propietario</th><th className="p-3 text-left">Precio</th><th className="p-3 text-left">Estado</th><th className="p-3 text-left">Acciones</th></tr></thead>
           <tbody>
-            {empresas.map(empresa => <tr key={empresa.id} className="border-t"><td className="p-3"><div className="font-medium">{empresa.name}</div><div className="text-xs text-gray-500">{empresa.branchName}</div></td><td className="p-3"><div>{empresa.ownerName}</div><div className="text-xs text-gray-500">{empresa.ownerEmail}</div></td><td className="p-3 font-medium">$20 USD/mes</td><td className="p-3"><span className={`px-2 py-1 rounded-full text-xs font-medium ${empresa.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>{empresa.status === 'active' ? 'Activa' : 'Suspendida'}</span></td><td className="p-3"><div className="flex flex-wrap gap-2"><button onClick={() => openEdit(empresa)} className="px-3 py-1.5 border rounded flex items-center gap-1"><Edit className="w-3 h-3" /> Editar</button>{empresa.status === 'active' ? <button onClick={() => changeStatus(empresa,'suspend')} className="px-3 py-1.5 border border-red-300 text-red-600 rounded">Suspender</button> : <button onClick={() => changeStatus(empresa,'activate')} className="px-3 py-1.5 border border-green-300 text-green-700 rounded">Activar</button>}</div></td></tr>)}
+            {empresas.map(empresa => (
+              <tr key={empresa.id} className="border-t">
+                <td className="p-3"><div className="font-medium">{empresa.name}</div><div className="text-xs text-gray-500">{empresa.branchName}</div></td>
+                <td className="p-3"><div>{empresa.ownerName}</div><div className="text-xs text-gray-500">{empresa.ownerEmail}</div></td>
+                <td className="p-3 font-medium">$20 USD/mes</td>
+                <td className="p-3"><span className={`px-2 py-1 rounded-full text-xs font-medium ${empresa.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>{empresa.status === 'active' ? 'Activa' : 'Suspendida'}</span></td>
+                <td className="p-3">
+                  <div className="flex flex-wrap gap-2">
+                    <button onClick={() => openEdit(empresa)} className="px-3 py-1.5 border rounded flex items-center gap-1"><Edit className="w-3 h-3" /> Editar</button>
+                    <button onClick={() => openChannels(empresa)} className="px-3 py-1.5 border border-blue-300 text-blue-700 bg-blue-50 rounded flex items-center gap-1"><MessageCircle className="w-3 h-3" /> Canales</button>
+                    {empresa.status === 'active'
+                      ? <button onClick={() => changeStatus(empresa,'suspend')} className="px-3 py-1.5 border border-red-300 text-red-600 rounded">Suspender</button>
+                      : <button onClick={() => changeStatus(empresa,'activate')} className="px-3 py-1.5 border border-green-300 text-green-700 rounded">Activar</button>}
+                  </div>
+                </td>
+              </tr>
+            ))}
             {!loading && empresas.length === 0 && <tr><td colSpan={5} className="p-8 text-center text-gray-500">No hay empresas registradas.</td></tr>}
             {loading && <tr><td colSpan={5} className="p-8 text-center text-gray-500">Cargando...</td></tr>}
           </tbody>
         </table>
       </div>
+
+      {channelsCompany && (
+        <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-3xl max-h-[92vh] overflow-y-auto rounded-2xl bg-white shadow-2xl">
+            <div className="sticky top-0 flex items-center justify-between border-b bg-white px-6 py-4">
+              <div>
+                <h3 className="text-xl font-bold text-gray-900">Canales · {channelsCompany.name}</h3>
+                <p className="text-sm text-gray-500">Cada identificador quedará ligado automáticamente al tenant de esta empresa.</p>
+              </div>
+              <button type="button" onClick={() => setChannelsCompany(null)} className="rounded-lg p-2 hover:bg-gray-100"><X className="w-5 h-5" /></button>
+            </div>
+
+            <div className="space-y-6 p-6">
+              {channelMessage && <div className={`p-3 rounded-lg border text-sm ${channelMessage.startsWith('Error') ? 'bg-red-50 border-red-200 text-red-700' : 'bg-green-50 border-green-200 text-green-700'}`}>{channelMessage}</div>}
+
+              <form onSubmit={saveChannel} className="space-y-4 rounded-xl border bg-gray-50 p-5">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <label>
+                    <span className="block text-sm font-medium text-gray-700 mb-1">Canal</span>
+                    <select
+                      value={channelForm.channel}
+                      onChange={e => {
+                        const channel = e.target.value as 'messenger' | 'whatsapp';
+                        setChannelForm(v => ({
+                          ...v,
+                          channel,
+                          name: `${channel === 'messenger' ? 'Facebook Messenger' : 'WhatsApp'} ${channelsCompany.name}`
+                        }));
+                      }}
+                      className="w-full px-3 py-2 border rounded-lg bg-white"
+                    >
+                      <option value="messenger">Facebook Messenger</option>
+                      <option value="whatsapp">WhatsApp</option>
+                    </select>
+                  </label>
+
+                  <label>
+                    <span className="block text-sm font-medium text-gray-700 mb-1">
+                      {channelForm.channel === 'messenger' ? 'Page ID de Facebook' : 'Phone Number ID de WhatsApp'}
+                    </span>
+                    <input
+                      required
+                      value={channelForm.externalId}
+                      onChange={e => setChannelForm(v => ({...v, externalId: e.target.value.replace(/\s/g,'')}))}
+                      placeholder={channelForm.channel === 'messenger' ? '114659410337690' : '903268306212311'}
+                      className="w-full px-3 py-2 border rounded-lg bg-white font-mono"
+                    />
+                  </label>
+
+                  <label>
+                    <span className="block text-sm font-medium text-gray-700 mb-1">Nombre visible</span>
+                    <input
+                      required
+                      value={channelForm.name}
+                      onChange={e => setChannelForm(v => ({...v, name: e.target.value}))}
+                      className="w-full px-3 py-2 border rounded-lg bg-white"
+                    />
+                  </label>
+
+                  <label>
+                    <span className="block text-sm font-medium text-gray-700 mb-1">
+                      {channelForm.channel === 'messenger' ? 'Page Access Token' : 'Access Token'}
+                    </span>
+                    <input
+                      type="password"
+                      value={channelForm.accessToken}
+                      onChange={e => setChannelForm(v => ({...v, accessToken: e.target.value}))}
+                      placeholder="Déjalo vacío para conservar el token actual"
+                      className="w-full px-3 py-2 border rounded-lg bg-white"
+                    />
+                  </label>
+                </div>
+
+                <label className="flex items-center gap-2 text-sm text-gray-700">
+                  <input type="checkbox" checked={channelForm.active} onChange={e => setChannelForm(v => ({...v, active:e.target.checked}))} />
+                  Canal activo
+                </label>
+
+                <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-xs text-blue-800">
+                  Messenger usa el Page ID para escoger la empresa, sus doctores, servicios y agenda. El token se guarda sólo en el backend y nunca vuelve a mostrarse en pantalla.
+                </div>
+
+                <div className="flex justify-end gap-2">
+                  <button type="button" onClick={() => setChannelForm({...emptyChannelForm, name:`Facebook Messenger ${channelsCompany.name}`})} className="px-4 py-2 border rounded-lg">Limpiar</button>
+                  <button disabled={channelsLoading} className="px-4 py-2 bg-blue-600 text-white rounded-lg disabled:opacity-60">{channelsLoading ? 'Guardando...' : 'Guardar canal'}</button>
+                </div>
+              </form>
+
+              <div>
+                <h4 className="font-semibold text-gray-800 mb-3">Canales registrados</h4>
+                <div className="space-y-3">
+                  {channels.map(channel => (
+                    <div key={channel.id} className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-xl border p-4">
+                      <div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-semibold">{channel.name || channel.channel}</span>
+                          <span className={`rounded-full px-2 py-0.5 text-xs ${channel.active ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'}`}>{channel.active ? 'Activo' : 'Inactivo'}</span>
+                          <span className={`rounded-full px-2 py-0.5 text-xs ${channel.hasAccessToken ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'}`}>{channel.hasAccessToken ? 'Token configurado' : 'Sin token'}</span>
+                        </div>
+                        <div className="mt-1 text-xs text-gray-500">
+                          {channel.channel === 'messenger' ? 'Page ID' : 'Phone Number ID'}: <span className="font-mono">{channel.externalId}</span>
+                        </div>
+                      </div>
+                      <div className="flex gap-2">
+                        <button type="button" onClick={() => selectExistingChannel(channel)} className="px-3 py-1.5 border rounded flex items-center gap-1"><Edit className="w-3 h-3" /> Editar</button>
+                        <button type="button" onClick={() => removeChannel(channel)} className="px-3 py-1.5 border border-red-300 text-red-600 rounded flex items-center gap-1"><Trash2 className="w-3 h-3" /> Eliminar</button>
+                      </div>
+                    </div>
+                  ))}
+                  {!channelsLoading && channels.length === 0 && <div className="rounded-xl border border-dashed p-8 text-center text-gray-500">Esta empresa todavía no tiene canales conectados.</div>}
+                  {channelsLoading && <div className="p-6 text-center text-gray-500">Cargando canales...</div>}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
