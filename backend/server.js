@@ -5659,12 +5659,156 @@ ensureWhatsAppTenantIsolationSchema().catch((e) => {
   console.error('❌ No se pudo activar aislamiento WhatsApp/IA:', e);
   process.exitCode = 1;
 });
+
+// Cron global de confirmaciones.
+// No usa una sesión de usuario: exige WA_BROADCAST_SECRET y genera JWT internos
+// de corta duración para ejecutar el mismo flujo protegido de cada empresa.
+app.post('/api/whatsapp/cron/confirmations', ah(async (req, res) => {
+  const configuredSecret = String(process.env.WA_BROADCAST_SECRET || '').trim();
+  const providedSecret = String(
+    req.query?.secret ||
+    req.headers['x-wa-secret'] ||
+    req.headers['x-wa-broadcast-secret'] ||
+    ''
+  ).trim();
+
+  if (!configuredSecret) {
+    return res.status(503).json({
+      ok: false,
+      error: 'WA_BROADCAST_SECRET no está configurado en Render'
+    });
+  }
+
+  const crypto = require('crypto');
+  const expected = Buffer.from(configuredSecret);
+  const received = Buffer.from(providedSecret);
+  const validSecret =
+    expected.length === received.length &&
+    crypto.timingSafeEqual(expected, received);
+
+  if (!validSecret) {
+    return res.status(401).json({ ok: false, error: 'unauthorized' });
+  }
+
+  const when = String(req.query?.when || 'today').trim();
+  const limit = Math.max(1, Math.min(Number(req.query?.limit || 500), 1000));
+  const useTemplate = String(req.query?.use_template || 'true').toLowerCase() !== 'false';
+  const results = [];
+
+  // Sólo procesa empresas activas con el servicio WhatsApp habilitado.
+  const { rows: companies } = await poolDB1.query(`
+    SELECT id, name
+      FROM tenants
+     WHERE COALESCE(status, 'active') = 'active'
+       AND COALESCE(whatsapp_enabled, TRUE) = TRUE
+     ORDER BY name
+  `);
+
+  for (const company of companies) {
+    const { rows: branchRows } = await poolDB1.query(`
+      SELECT branch_key
+        FROM branches
+       WHERE tenant_id=$1::uuid
+         AND COALESCE(active, TRUE)=TRUE
+       ORDER BY created_at, branch_key
+    `, [company.id]);
+
+    const branches = branchRows.length
+      ? branchRows.map(row => String(row.branch_key || 'sucursal_1'))
+      : ['sucursal_1'];
+
+    for (const sucursalId of branches) {
+      try {
+        const internalToken = jwt.sign(
+          {
+            sub: 'cron-whatsapp-confirmations',
+            tenantId: company.id,
+            role: 'system',
+            source: 'cron'
+          },
+          requireGlobalJwtSecret(),
+          { expiresIn: '5m' }
+        );
+
+        const params = new URLSearchParams({
+          when,
+          sucursal_id: sucursalId,
+          limit: String(limit),
+          buttons: 'false',
+          use_template: String(useTemplate)
+        });
+
+        const localUrl =
+          `http://127.0.0.1:${PORT}/api/whatsapp/broadcast/confirmations?${params.toString()}`;
+
+        const response = await fetch(localUrl, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${internalToken}`,
+            'Content-Type': 'application/json'
+          },
+          body: '{}'
+        });
+
+        const body = await response.json().catch(() => ({}));
+
+        results.push({
+          tenantId: company.id,
+          company: company.name,
+          sucursalId,
+          status: response.status,
+          ok: response.ok,
+          targeted: Number(body?.targeted || 0),
+          sent: Number(body?.sent || 0),
+          skipped: Boolean(body?.skipped),
+          code: body?.code || null,
+          error: body?.error || null
+        });
+      } catch (error) {
+        results.push({
+          tenantId: company.id,
+          company: company.name,
+          sucursalId,
+          status: 500,
+          ok: false,
+          targeted: 0,
+          sent: 0,
+          skipped: false,
+          code: 'CRON_INTERNAL_ERROR',
+          error: String(error?.message || error)
+        });
+      }
+    }
+  }
+
+  const summary = results.reduce(
+    (acc, item) => {
+      acc.executions += 1;
+      acc.targeted += item.targeted || 0;
+      acc.sent += item.sent || 0;
+      if (!item.ok) acc.errors += 1;
+      if (item.skipped) acc.skipped += 1;
+      return acc;
+    },
+    { executions: 0, targeted: 0, sent: 0, errors: 0, skipped: 0 }
+  );
+
+  console.log('⏰ Cron WhatsApp completado', summary);
+
+  res.json({
+    ok: summary.errors === 0,
+    when,
+    summary,
+    results
+  });
+}));
+
 app.use('/api/whatsapp', (req, res, next) => {
   const isWebhook = req.path === '/webhook';
   if (isWebhook) return next();
   return authRequired(req, res, next);
 }, whatsappRoutes);
-console.log('✅ Rutas de WhatsApp montadas con JWT obligatorio (excepto webhook Meta)');
+console.log('✅ Rutas de WhatsApp montadas con JWT; cron protegido por WA_BROADCAST_SECRET');
 // ===============================================================================
 
 
