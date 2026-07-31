@@ -30,6 +30,7 @@ async function getAppointmentsColumns(q) {
   );
   const set = new Set((rows || []).map(r => String(r.column_name)));
   _apptColsCache = {
+    hasTenantId: set.has('tenant_id'),
     hasClinicId: set.has('clinic_id'),
     hasSucursalId: set.has('sucursal_id'),
     hasSucursal: set.has('sucursal'),
@@ -70,7 +71,15 @@ async function getAppointmentsForDay(q, { clinic_id, branch_key, date }) {
   const where = [];
   const params = [];
 
-  // clinic_id (encuentra citas del tenant si existe la columna; si no, omitimos)
+  // tenant_id: aislamiento SaaS explícito cuando la columna existe.
+  // clinic_id contiene el tenant UUID autenticado desde ai-saas-routes.
+  if (cols.hasTenantId) {
+    if (!clinic_id) throw new Error('tenant_id ausente al consultar disponibilidad');
+    params.push(String(clinic_id));
+    where.push(`tenant_id = $${params.length}::uuid`);
+  }
+
+  // Compatibilidad con esquemas que también conservan clinic_id.
   if (cols.hasClinicId) {
     params.push(String(clinic_id));
     where.push(`clinic_id = $${params.length}`);
@@ -186,6 +195,12 @@ async function createAppointmentTransactional(q, { clinic_id, branch_key, patien
     const lockWhere = [];
     const lockParams = [];
 
+    if (cols.hasTenantId) {
+      if (!clinic_id) throw new Error('tenant_id ausente al confirmar la cita');
+      lockParams.push(String(clinic_id));
+      lockWhere.push(`tenant_id=$${lockParams.length}::uuid`);
+    }
+
     if (cols.hasClinicId) {
       lockParams.push(String(clinic_id));
       lockWhere.push(`clinic_id=$${lockParams.length}`);
@@ -218,6 +233,10 @@ async function createAppointmentTransactional(q, { clinic_id, branch_key, patien
       values.push(`$${params.length}`);
     }
 
+    if (cols.hasTenantId) {
+      if (!clinic_id) throw new Error('tenant_id ausente al crear la cita');
+      add('tenant_id', String(clinic_id));
+    }
     if (cols.hasClinicId) add('clinic_id', String(clinic_id));
 
     // sucursal: intentamos guardar branch_key en donde exista
@@ -251,7 +270,7 @@ async function createAppointmentTransactional(q, { clinic_id, branch_key, patien
       doctor_id: rows[0].doctor_id
     };
   } catch (e) {
-    await q('ROLLBACK');
+    await q('ROLLBACK').catch(() => {});
     throw e;
   }
 }
