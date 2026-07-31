@@ -188,22 +188,52 @@ function parseTimePreference(text) {
   const raw = asText(text);
   if (/\b\d{4}-\d{2}-\d{2}\b/.test(raw) || /\b\d{1,2}[\/-]\d{1,2}(?:[\/-]\d{2,4})?\b/.test(raw)) return null;
   const value = normalizeForMatch(raw);
-  if (/\b(en la manana|por la manana|temprano)\b/.test(value)) return { label: 'por la mañana', min: 8 * 60, max: 12 * 60 };
-  if (/\b(medio dia|mediodia)\b/.test(value)) return { label: 'al mediodía', min: 11 * 60, max: 14 * 60 };
-  if (/\b(en la tarde|por la tarde)\b/.test(value)) return { label: 'por la tarde', min: 12 * 60, max: 18 * 60 };
-  if (/\b(en la noche|por la noche)\b/.test(value)) return { label: 'por la tarde-noche', min: 17 * 60, max: 20 * 60 };
 
-  const match = value.match(/\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/);
-  if (!match) return null;
-  let hour = Number(match[1]);
-  const minute = Number(match[2] || 0);
-  const meridiem = match[3];
-  if (hour > 23 || minute > 59) return null;
-  if (meridiem === 'pm' && hour < 12) hour += 12;
-  if (meridiem === 'am' && hour === 12) hour = 0;
-  if (!meridiem && hour >= 1 && hour <= 7) hour += 12;
-  const target = hour * 60 + minute;
-  return { label: `cerca de las ${formatTime(`${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`)}`, min: target - 90, max: target + 90, target };
+  // Una hora explícita siempre tiene prioridad sobre "por la mañana/tarde".
+  const match = value.match(/\b(?:a\s+las?\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/);
+  if (match) {
+    let hour = Number(match[1]);
+    const minute = Number(match[2] || 0);
+    let meridiem = match[3] || null;
+
+    if (hour > 23 || minute > 59) return null;
+
+    if (!meridiem) {
+      if (/\b(manana|temprano)\b/.test(value)) meridiem = 'am';
+      else if (/\b(tarde|noche)\b/.test(value)) meridiem = 'pm';
+    }
+
+    if (meridiem === 'pm' && hour < 12) hour += 12;
+    if (meridiem === 'am' && hour === 12) hour = 0;
+    if (!meridiem && hour >= 1 && hour <= 7) hour += 12;
+
+    const target = hour * 60 + minute;
+    const normalizedTime = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+
+    return {
+      label: `a las ${formatTime(normalizedTime)}`,
+      min: target,
+      max: target,
+      target,
+      exact: true,
+      requested_time: normalizedTime,
+    };
+  }
+
+  if (/\b(en la manana|por la manana|temprano)\b/.test(value)) {
+    return { label: 'por la mañana', min: 8 * 60, max: 12 * 60, exact: false };
+  }
+  if (/\b(medio dia|mediodia)\b/.test(value)) {
+    return { label: 'al mediodía', min: 11 * 60, max: 14 * 60, exact: false };
+  }
+  if (/\b(en la tarde|por la tarde)\b/.test(value)) {
+    return { label: 'por la tarde', min: 12 * 60, max: 18 * 60, exact: false };
+  }
+  if (/\b(en la noche|por la noche)\b/.test(value)) {
+    return { label: 'por la tarde-noche', min: 17 * 60, max: 20 * 60, exact: false };
+  }
+
+  return null;
 }
 
 function timeToMins(time) {
@@ -238,6 +268,7 @@ function clearSlotState(state) {
   state.selected_slot = null;
   state.slot_rejections = 0;
   state.confirmation_requested = false;
+  state.exact_time_unavailable = false;
   return state;
 }
 
@@ -251,6 +282,7 @@ function cleanReset(state, keep = {}) {
   reset.slot_rejections = 0;
   reset.confirmation_requested = false;
   reset.time_pref = null;
+  reset.exact_time_unavailable = false;
   return reset;
 }
 
@@ -351,21 +383,41 @@ async function loadAndFilterSlots(q, ctx, state) {
     date: state.date,
     duration_hours: Number(state.duration_hours || 1),
     limit: Number(process.env.AI_AVAILABILITY_LIMIT || 50),
-    min_start_mins: preference?.min ?? null,
+    min_start_mins: preference?.exact ? null : (preference?.min ?? null),
   });
 
-  let filtered = slots || [];
-  if (preference?.max != null) {
-    const withinRange = filtered.filter((slot) => timeToMins(slot.start_time) <= preference.max);
-    if (withinRange.length) filtered = withinRange;
-  }
-  if (preference?.target != null) {
-    filtered = [...filtered].sort((a, b) => {
-      return Math.abs(timeToMins(a.start_time) - preference.target) - Math.abs(timeToMins(b.start_time) - preference.target);
-    });
+  const allSlots = Array.isArray(slots) ? slots : [];
+  let filtered = allSlots;
+  state.exact_time_unavailable = false;
+
+  if (preference?.exact && preference?.target != null) {
+    const exactMatches = allSlots.filter((slot) => timeToMins(slot.start_time) === preference.target);
+
+    if (exactMatches.length) {
+      filtered = exactMatches;
+    } else {
+      state.exact_time_unavailable = true;
+      filtered = [...allSlots]
+        .sort((a, b) => {
+          return Math.abs(timeToMins(a.start_time) - preference.target)
+            - Math.abs(timeToMins(b.start_time) - preference.target);
+        })
+        .slice(0, 5);
+    }
+  } else {
+    if (preference?.max != null) {
+      const withinRange = filtered.filter((slot) => timeToMins(slot.start_time) <= preference.max);
+      if (withinRange.length) filtered = withinRange;
+    }
+
+    if (preference?.target != null) {
+      filtered = [...filtered].sort((a, b) => {
+        return Math.abs(timeToMins(a.start_time) - preference.target)
+          - Math.abs(timeToMins(b.start_time) - preference.target);
+      });
+    }
   }
 
-  // Nunca se muestran los doctores al paciente, pero el slot conserva doctor_id internamente.
   state.options = filtered;
   state.slot_index = 0;
   state.current_slot = filtered[0] || null;
@@ -438,6 +490,7 @@ async function orchestrate(q, ctx, incomingState, userText) {
     date: state.date,
     service: state.service_id,
     slot: state.current_slot?.start_time || state.selected_slot?.start_time || null,
+    time_pref: state.time_pref || null,
   });
 
   if (isBookingExpired(state)) {
@@ -472,12 +525,26 @@ async function orchestrate(q, ctx, incomingState, userText) {
   if (branch) state.branch_key = branch;
 
   const parsedDate = parseDateFromText(text);
+  const preference = parseTimePreference(text);
+
+  const dateChanged = Boolean(parsedDate && !isPastDate(parsedDate) && parsedDate !== state.date);
+  const timeChanged = Boolean(
+    preference &&
+    (
+      preference.target !== state.time_pref?.target ||
+      preference.min !== state.time_pref?.min ||
+      preference.max !== state.time_pref?.max
+    )
+  );
+
+  if (dateChanged || timeChanged) {
+    clearSlotState(state);
+  }
+
   if (parsedDate && !isPastDate(parsedDate)) {
-    if (state.date && state.date !== parsedDate) clearSlotState(state);
     state.date = parsedDate;
   }
 
-  const preference = parseTimePreference(text);
   if (preference && ['collect_date', 'offer_slot', 'revise_confirmation'].includes(state.stage)) {
     state.time_pref = preference;
   }
@@ -540,22 +607,12 @@ async function orchestrate(q, ctx, incomingState, userText) {
       state.stage = 'collect_date';
       return { reply: 'Por ese día ya no tengo otra opción disponible. ¿Qué otro día te gustaría?', state, used: 'ask_another_date' };
     } else {
-      const newDate = parseDateFromText(text);
-      if (newDate && !isPastDate(newDate) && newDate !== state.date) {
-        state.date = newDate;
-        clearSlotState(state);
-      } else {
-        const newPreference = parseTimePreference(text);
-        if (newPreference) {
-          state.time_pref = newPreference;
-          clearSlotState(state);
-        } else {
-          return {
-            reply: `Para asegurarme 😊 ¿te funciona el horario de las ${formatTime(state.current_slot.start_time)}? Puedes responder “sí” o pedir otra hora.`,
-            state,
-            used: 'clarify_slot',
-          };
-        }
+      if (!parsedDate && !preference) {
+        return {
+          reply: `Para asegurarme 😊 ¿te funciona el horario de las ${formatTime(state.current_slot.start_time)}? Puedes responder “sí” o pedir otra hora.`,
+          state,
+          used: 'clarify_slot',
+        };
       }
     }
   }
@@ -572,6 +629,15 @@ async function orchestrate(q, ctx, incomingState, userText) {
     }
 
     state.stage = 'offer_slot';
+
+    if (state.exact_time_unavailable && state.time_pref?.requested_time) {
+      return {
+        reply: `A las ${formatTime(state.time_pref.requested_time)} no tengo espacio disponible ese día. La opción más cercana es a las ${formatTime(state.current_slot.start_time)}. ¿Te funciona?`,
+        state,
+        used: 'offer_nearest_slot',
+      };
+    }
+
     return { reply: slotPrompt(state.current_slot), state, used: 'offer_one_slot' };
   }
 
@@ -631,14 +697,24 @@ async function orchestrate(q, ctx, incomingState, userText) {
   }
 
   try {
+    const resolvedTenantId = String(ctx?.tenant_id || ctx?.clinic_id || '').trim();
+    if (!resolvedTenantId) {
+      throw new Error('No se pudo identificar la empresa para crear la cita');
+    }
+
     const created = await createAppointmentTransactional(q, {
-      clinic_id: ctx.clinic_id,
+      tenant_id: resolvedTenantId,
+      clinic_id: ctx.clinic_id || resolvedTenantId,
       branch_key: state.branch_key,
       patient: state.patient,
       phone: state.phone,
       service_id: state.service_id,
       slot: state.selected_slot,
     });
+
+    if (!created?.id || !created?.verified) {
+      throw new Error('La cita no pudo verificarse en la agenda');
+    }
 
     const branchName = getBranchDisplayName(state.branch_key);
     const serviceName = state.service_name;
@@ -684,7 +760,24 @@ async function orchestrate(q, ctx, incomingState, userText) {
       state.stage = 'collect_date';
       return { reply: 'Ese horario acaba de ocuparse y ya no veo más espacios ese día. ¿Qué otro día te gustaría?', state, used: 'slot_taken_no_more' };
     }
-    throw error;
+
+    console.error('❌ Error final al crear cita desde IA:', {
+      message: String(error?.message || error),
+      tenantId: String(ctx?.tenant_id || ctx?.clinic_id || ''),
+      branch: state.branch_key,
+      date: state.selected_slot?.date || state.date,
+      time: state.selected_slot?.start_time || null,
+      serviceId: state.service_id,
+    });
+
+    state.stage = 'final_confirm';
+    state.confirmation_requested = true;
+
+    return {
+      reply: 'Tuve un problema al guardar la cita en la agenda. No se perdió la información. Por favor responde “sí” para intentarlo nuevamente o dime si deseas cambiar algún dato.',
+      state,
+      used: 'appointment_create_retry',
+    };
   }
 }
 

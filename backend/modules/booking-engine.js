@@ -183,8 +183,9 @@ async function computeAvailability(q, { clinic_id, branch_key, date, duration_ho
 }
 
 // ====== INSERT transaccional (SaaS-safe + legacy compatible) ======
-async function createAppointmentTransactional(q, { clinic_id, branch_key, patient, phone, service_id, slot }) {
+async function createAppointmentTransactional(q, { tenant_id, clinic_id, branch_key, patient, phone, service_id, slot }) {
   const cols = await getAppointmentsColumns(q);
+  const resolvedTenantId = String(tenant_id || clinic_id || '').trim();
 
   // nombre de columna de paciente (tu app legacy suele usar patient)
   const patientCol = cols.hasPatient ? 'patient' : (cols.hasPaciente ? 'paciente' : 'patient');
@@ -196,8 +197,8 @@ async function createAppointmentTransactional(q, { clinic_id, branch_key, patien
     const lockParams = [];
 
     if (cols.hasTenantId) {
-      if (!clinic_id) throw new Error('tenant_id ausente al confirmar la cita');
-      lockParams.push(String(clinic_id));
+      if (!resolvedTenantId) throw new Error('tenant_id ausente al confirmar la cita');
+      lockParams.push(resolvedTenantId);
       lockWhere.push(`tenant_id=$${lockParams.length}::uuid`);
     }
 
@@ -234,10 +235,10 @@ async function createAppointmentTransactional(q, { clinic_id, branch_key, patien
     }
 
     if (cols.hasTenantId) {
-      if (!clinic_id) throw new Error('tenant_id ausente al crear la cita');
-      add('tenant_id', String(clinic_id));
+      if (!resolvedTenantId) throw new Error('tenant_id ausente al crear la cita');
+      add('tenant_id', resolvedTenantId);
     }
-    if (cols.hasClinicId) add('clinic_id', String(clinic_id));
+    if (cols.hasClinicId) add('clinic_id', String(clinic_id || resolvedTenantId));
 
     // sucursal: intentamos guardar branch_key en donde exista
     if (cols.hasSucursalId) add('sucursal_id', String(branch_key));
@@ -260,14 +261,39 @@ async function createAppointmentTransactional(q, { clinic_id, branch_key, patien
       params
     );
 
-    if (!rows?.[0]?.id) throw new Error('No se pudo confirmar la cita');
+    const inserted = rows?.[0];
+    if (!inserted?.id) throw new Error('No se pudo confirmar la cita');
+
+    const verifyParams = [inserted.id];
+    let verifyWhere = 'id = $1';
+    if (cols.hasTenantId) {
+      verifyParams.push(resolvedTenantId);
+      verifyWhere += ` AND tenant_id = $2::uuid`;
+    }
+
+    const { rows: verifiedRows } = await q(
+      `SELECT id, ${patientCol} AS patient, date, start_time, doctor_id
+         FROM appointments
+        WHERE ${verifyWhere}
+        LIMIT 1`,
+      verifyParams
+    );
+
+    if (!verifiedRows?.[0]?.id) {
+      throw new Error('La cita se insertó pero no pudo verificarse para esta empresa');
+    }
+
     await q('COMMIT');
+
     return {
-      id: rows[0].id,
-      patient: rows[0].patient,
-      date: rows[0].date,
-      start_time: rows[0].start_time,
-      doctor_id: rows[0].doctor_id
+      id: verifiedRows[0].id,
+      patient: verifiedRows[0].patient,
+      date: verifiedRows[0].date,
+      start_time: verifiedRows[0].start_time,
+      doctor_id: verifiedRows[0].doctor_id,
+      tenant_id: resolvedTenantId || null,
+      branch_key: String(branch_key || ''),
+      verified: true,
     };
   } catch (e) {
     await q('ROLLBACK').catch(() => {});
