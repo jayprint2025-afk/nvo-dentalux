@@ -237,7 +237,7 @@ let aiModule = null;
 
 // ================================
 // 🧩 Compatibilidad IA SaaS / WhatsApp identifiers
-// Crea clinic_channels y perfiles para PHONE_NUMBER_ID nuevo y WABA_ID viejo.
+// Crea clinic_channels y perfiles para WhatsApp/Messenger, incluyendo external_id.
 // Esto evita errores tipo: relation "clinic_channels" does not exist
 // y evita que la IA deje de responder al cambiar el número de WhatsApp.
 // ================================
@@ -257,6 +257,7 @@ async function ensureAiSaasCompatibilityTables() {
         id SERIAL PRIMARY KEY,
         tenant_id UUID,
         phone_number_id TEXT,
+        external_id TEXT,
         channel TEXT DEFAULT 'whatsapp',
         name TEXT,
         clinic_name TEXT,
@@ -274,6 +275,7 @@ async function ensureAiSaasCompatibilityTables() {
 
     await adminQ(`ALTER TABLE clinic_channels ADD COLUMN IF NOT EXISTS tenant_id UUID`);
     await adminQ(`ALTER TABLE clinic_channels ADD COLUMN IF NOT EXISTS phone_number_id TEXT`);
+    await adminQ(`ALTER TABLE clinic_channels ADD COLUMN IF NOT EXISTS external_id TEXT`);
     await adminQ(`ALTER TABLE clinic_channels ADD COLUMN IF NOT EXISTS channel TEXT DEFAULT 'whatsapp'`);
     await adminQ(`ALTER TABLE clinic_channels ADD COLUMN IF NOT EXISTS name TEXT`);
     await adminQ(`ALTER TABLE clinic_channels ADD COLUMN IF NOT EXISTS clinic_name TEXT`);
@@ -287,6 +289,12 @@ async function ensureAiSaasCompatibilityTables() {
     await adminQ(`ALTER TABLE clinic_channels ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW()`);
     await adminQ(`ALTER TABLE clinic_channels ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()`);
     await adminQ(`CREATE INDEX IF NOT EXISTS idx_clinic_channels_phone ON clinic_channels(phone_number_id)`);
+    await adminQ(`CREATE INDEX IF NOT EXISTS idx_clinic_channels_external ON clinic_channels(channel, external_id)`);
+    await adminQ(`
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_clinic_channels_channel_external
+      ON clinic_channels(channel, external_id)
+      WHERE external_id IS NOT NULL
+    `);
     await adminQ(`CREATE INDEX IF NOT EXISTS idx_clinic_channels_suc ON clinic_channels(sucursal_id)`);
     await adminQ(`CREATE INDEX IF NOT EXISTS idx_clinic_channels_tenant ON clinic_channels(tenant_id)`);
 
@@ -4458,25 +4466,98 @@ function _poolForDbKey(dbKey) {
 
 async function resolveMessengerTenantId(pageId, pool) {
   const pid = String(pageId || '').trim();
+  if (!pid) throw new Error('Page ID de Messenger ausente');
 
-  // 1) Mapeo explícito por Page ID (recomendado para varias empresas):
-  // MESSENGER_PAGE_TENANTS_JSON={"114659410337690":"uuid-del-tenant"}
+  // 1) Fuente principal: clinic_channels.
+  // Como todavía no conocemos el tenant, esta lectura administrativa usa bypass
+  // únicamente dentro de una transacción corta y de solo lectura.
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(`SELECT set_config('app.tenant_bypass', 'on', true)`);
+
+    const tableCheck = await client.query(
+      `SELECT to_regclass('public.clinic_channels') AS table_name`
+    );
+
+    if (tableCheck.rows?.[0]?.table_name) {
+      const columnCheck = await client.query(`
+        SELECT column_name
+          FROM information_schema.columns
+         WHERE table_schema='public'
+           AND table_name='clinic_channels'
+           AND column_name IN ('external_id','phone_number_id')
+      `);
+      const columns = new Set((columnCheck.rows || []).map(r => String(r.column_name)));
+
+      const matchParts = [];
+      const params = [pid];
+
+      if (columns.has('external_id')) matchParts.push(`external_id = $1`);
+      // Compatibilidad temporal con registros antiguos.
+      if (columns.has('phone_number_id')) matchParts.push(`phone_number_id = $1`);
+
+      if (matchParts.length) {
+        const { rows } = await client.query(
+          `SELECT tenant_id, db_key, name, clinic_name
+             FROM clinic_channels
+            WHERE LOWER(COALESCE(channel, '')) = 'messenger'
+              AND (${matchParts.join(' OR ')})
+              AND COALESCE(active, TRUE) = TRUE
+              AND COALESCE(is_active, TRUE) = TRUE
+              AND tenant_id IS NOT NULL
+            ORDER BY updated_at DESC NULLS LAST, id DESC
+            LIMIT 2`,
+          params
+        );
+
+        if (rows.length > 1) {
+          throw new Error(`Hay más de un canal Messenger activo para page_id=${pid}`);
+        }
+
+        const tenantId = String(rows?.[0]?.tenant_id || '').trim();
+        if (tenantId) {
+          await client.query('COMMIT');
+          console.log('✅ Messenger tenant resuelto desde clinic_channels', {
+            pageId: pid,
+            tenantId,
+            channelName: rows[0]?.name || rows[0]?.clinic_name || null
+          });
+          return tenantId;
+        }
+      }
+    }
+
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+
+  // 2) Respaldo temporal por variables de entorno.
   const rawMap = String(process.env.MESSENGER_PAGE_TENANTS_JSON || '').trim();
   if (rawMap) {
     try {
       const map = JSON.parse(rawMap);
       const mapped = String(map?.[pid] || '').trim();
-      if (mapped) return mapped;
+      if (mapped) {
+        console.warn('⚠️ Messenger tenant resuelto por MESSENGER_PAGE_TENANTS_JSON; registra la página en clinic_channels');
+        return mapped;
+      }
     } catch (error) {
       console.warn('⚠️ MESSENGER_PAGE_TENANTS_JSON inválido:', error.message);
     }
   }
 
-  // 2) Tenant único para todas las páginas de consultorio.
   const directTenant = String(process.env.MESSENGER_TENANT_ID || '').trim();
-  if (directTenant) return directTenant;
+  if (directTenant) {
+    console.warn('⚠️ Messenger tenant resuelto por MESSENGER_TENANT_ID; registra la página en clinic_channels');
+    return directTenant;
+  }
 
-  // 3) Fallback seguro al tenant principal existente.
+  // 3) Último respaldo por slug para no interrumpir instalaciones antiguas.
   const slug = String(
     process.env.MESSENGER_TENANT_SLUG ||
     process.env.BOOTSTRAP_TENANT_SLUG ||
@@ -4486,8 +4567,8 @@ async function resolveMessengerTenantId(pageId, pool) {
   const { rows } = await pool.query(
     `SELECT id
        FROM tenants
-      WHERE slug = $1
-        AND status = 'active'
+      WHERE LOWER(slug) = $1
+        AND COALESCE(status, 'active') = 'active'
       ORDER BY created_at ASC
       LIMIT 1`,
     [slug]
@@ -4496,9 +4577,11 @@ async function resolveMessengerTenantId(pageId, pool) {
   const tenantId = String(rows?.[0]?.id || '').trim();
   if (!tenantId) {
     throw new Error(
-      `No se encontró tenant para Messenger. Configura MESSENGER_TENANT_ID o MESSENGER_PAGE_TENANTS_JSON (page_id=${pid}).`
+      `No existe un canal Messenger activo en clinic_channels para page_id=${pid}`
     );
   }
+
+  console.warn('⚠️ Messenger tenant resuelto por slug de respaldo:', slug);
   return tenantId;
 }
 
