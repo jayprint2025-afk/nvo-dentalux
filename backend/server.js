@@ -242,75 +242,119 @@ let aiModule = null;
 // y evita que la IA deje de responder al cambiar el número de WhatsApp.
 // ================================
 async function ensureAiSaasCompatibilityTables() {
-  await q(`
-    CREATE TABLE IF NOT EXISTS clinic_channels (
-      id SERIAL PRIMARY KEY,
-      phone_number_id TEXT,
-      channel TEXT DEFAULT 'whatsapp',
-      name TEXT,
-      clinic_name TEXT,
-      branch_key TEXT,
-      sucursal_id TEXT,
-      db_key TEXT DEFAULT 'db1',
-      active BOOLEAN DEFAULT TRUE,
-      is_active BOOLEAN DEFAULT TRUE,
-      config JSONB DEFAULT '{}'::jsonb,
-      metadata JSONB DEFAULT '{}'::jsonb,
-      created_at TIMESTAMPTZ DEFAULT NOW(),
-      updated_at TIMESTAMPTZ DEFAULT NOW()
-    )
-  `);
+  // Migración interna: usa bypass RLS solamente dentro de esta transacción.
+  const pool = getCurrentPool();
+  const client = await pool.connect();
 
-  await q(`ALTER TABLE clinic_channels ADD COLUMN IF NOT EXISTS phone_number_id TEXT`);
-  await q(`ALTER TABLE clinic_channels ADD COLUMN IF NOT EXISTS channel TEXT DEFAULT 'whatsapp'`);
-  await q(`ALTER TABLE clinic_channels ADD COLUMN IF NOT EXISTS name TEXT`);
-  await q(`ALTER TABLE clinic_channels ADD COLUMN IF NOT EXISTS clinic_name TEXT`);
-  await q(`ALTER TABLE clinic_channels ADD COLUMN IF NOT EXISTS branch_key TEXT`);
-  await q(`ALTER TABLE clinic_channels ADD COLUMN IF NOT EXISTS sucursal_id TEXT`);
-  await q(`ALTER TABLE clinic_channels ADD COLUMN IF NOT EXISTS db_key TEXT DEFAULT 'db1'`);
-  await q(`ALTER TABLE clinic_channels ADD COLUMN IF NOT EXISTS active BOOLEAN DEFAULT TRUE`);
-  await q(`ALTER TABLE clinic_channels ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE`);
-  await q(`ALTER TABLE clinic_channels ADD COLUMN IF NOT EXISTS config JSONB DEFAULT '{}'::jsonb`);
-  await q(`ALTER TABLE clinic_channels ADD COLUMN IF NOT EXISTS metadata JSONB DEFAULT '{}'::jsonb`);
-  await q(`ALTER TABLE clinic_channels ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW()`);
-  await q(`ALTER TABLE clinic_channels ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()`);
-  await q(`CREATE INDEX IF NOT EXISTS idx_clinic_channels_phone ON clinic_channels(phone_number_id)`);
-  await q(`CREATE INDEX IF NOT EXISTS idx_clinic_channels_suc ON clinic_channels(sucursal_id)`);
+  try {
+    await client.query('BEGIN');
+    await client.query(`SELECT set_config('app.tenant_bypass', 'on', true)`);
 
-  const ids = String([
-    process.env.WHATSAPP_PHONE_NUMBER_ID,
-    process.env.AI_DEFAULT_PHONE_NUMBER_ID,
-    process.env.AI_DEFAULT_WABA_ID,
-    process.env.WHATSAPP_WABA_ID,
-    process.env.WABA_ID,
-    process.env.WA_ALLOWED_PHONE_NUMBER_IDS,
-    '903268306212311',
-    '704780742729954'
-  ].filter(Boolean).join(','))
-    .split(',')
-    .map(s => String(s).trim())
-    .filter(Boolean)
-    .filter((v, i, a) => a.indexOf(v) === i);
+    const adminQ = (sql, params = []) => client.query(sql, params);
 
-  const branches = [
-    { key: 'sucursal_1', name: 'Dentalux Victoria', phone: '6863112623', address: 'Anillo Periferico 424 A, Victoria Residencial' },
-    { key: 'sucursal_2', name: 'Dentalux Condesa', phone: '6673434222', address: 'Calle Babel #1300, Residencial Condesa' }
-  ];
+    await adminQ(`
+      CREATE TABLE IF NOT EXISTS clinic_channels (
+        id SERIAL PRIMARY KEY,
+        tenant_id UUID,
+        phone_number_id TEXT,
+        channel TEXT DEFAULT 'whatsapp',
+        name TEXT,
+        clinic_name TEXT,
+        branch_key TEXT,
+        sucursal_id TEXT,
+        db_key TEXT DEFAULT 'db1',
+        active BOOLEAN DEFAULT TRUE,
+        is_active BOOLEAN DEFAULT TRUE,
+        config JSONB DEFAULT '{}'::jsonb,
+        metadata JSONB DEFAULT '{}'::jsonb,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
 
-  for (const id of ids) {
-    for (const b of branches) {
-      await q(`
-        INSERT INTO clinic_channels
-          (phone_number_id, channel, name, clinic_name, branch_key, sucursal_id, db_key, active, is_active, config, metadata)
-        SELECT $1, 'whatsapp', $2, $2, $3, $3, $4, TRUE, TRUE,
-               jsonb_build_object('phone', $5::text, 'address', $6::text),
-               jsonb_build_object('source', 'auto_migration')
-        WHERE NOT EXISTS (
-          SELECT 1 FROM clinic_channels
-          WHERE phone_number_id = $1 AND COALESCE(sucursal_id, branch_key) = $3
-        )
-      `, [id, b.name, b.key, process.env.WA_FORCE_DB || 'db1', b.phone, b.address]);
+    await adminQ(`ALTER TABLE clinic_channels ADD COLUMN IF NOT EXISTS tenant_id UUID`);
+    await adminQ(`ALTER TABLE clinic_channels ADD COLUMN IF NOT EXISTS phone_number_id TEXT`);
+    await adminQ(`ALTER TABLE clinic_channels ADD COLUMN IF NOT EXISTS channel TEXT DEFAULT 'whatsapp'`);
+    await adminQ(`ALTER TABLE clinic_channels ADD COLUMN IF NOT EXISTS name TEXT`);
+    await adminQ(`ALTER TABLE clinic_channels ADD COLUMN IF NOT EXISTS clinic_name TEXT`);
+    await adminQ(`ALTER TABLE clinic_channels ADD COLUMN IF NOT EXISTS branch_key TEXT`);
+    await adminQ(`ALTER TABLE clinic_channels ADD COLUMN IF NOT EXISTS sucursal_id TEXT`);
+    await adminQ(`ALTER TABLE clinic_channels ADD COLUMN IF NOT EXISTS db_key TEXT DEFAULT 'db1'`);
+    await adminQ(`ALTER TABLE clinic_channels ADD COLUMN IF NOT EXISTS active BOOLEAN DEFAULT TRUE`);
+    await adminQ(`ALTER TABLE clinic_channels ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE`);
+    await adminQ(`ALTER TABLE clinic_channels ADD COLUMN IF NOT EXISTS config JSONB DEFAULT '{}'::jsonb`);
+    await adminQ(`ALTER TABLE clinic_channels ADD COLUMN IF NOT EXISTS metadata JSONB DEFAULT '{}'::jsonb`);
+    await adminQ(`ALTER TABLE clinic_channels ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW()`);
+    await adminQ(`ALTER TABLE clinic_channels ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()`);
+    await adminQ(`CREATE INDEX IF NOT EXISTS idx_clinic_channels_phone ON clinic_channels(phone_number_id)`);
+    await adminQ(`CREATE INDEX IF NOT EXISTS idx_clinic_channels_suc ON clinic_channels(sucursal_id)`);
+    await adminQ(`CREATE INDEX IF NOT EXISTS idx_clinic_channels_tenant ON clinic_channels(tenant_id)`);
+
+    const ids = String([
+      process.env.WHATSAPP_PHONE_NUMBER_ID,
+      process.env.AI_DEFAULT_PHONE_NUMBER_ID,
+      process.env.AI_DEFAULT_WABA_ID,
+      process.env.WHATSAPP_WABA_ID,
+      process.env.WABA_ID,
+      process.env.WA_ALLOWED_PHONE_NUMBER_IDS,
+      '903268306212311',
+      '704780742729954'
+    ].filter(Boolean).join(','))
+      .split(',')
+      .map(s => String(s).trim())
+      .filter(Boolean)
+      .filter((v, i, a) => a.indexOf(v) === i);
+
+    const branches = [
+      { key: 'sucursal_1', name: 'Dentalux Victoria', phone: '6863112623', address: 'Anillo Periferico 424 A, Victoria Residencial' },
+      { key: 'sucursal_2', name: 'Dentalux Condesa', phone: '6673434222', address: 'Calle Babel #1300, Residencial Condesa' }
+    ];
+
+    const ownerEmail = String(process.env.BOOTSTRAP_OWNER_EMAIL || 'nhaelvaldez26@hotmail.com').trim().toLowerCase();
+    let defaultTenantId = null;
+
+    try {
+      const tenantResult = await adminQ(`
+        SELECT COALESCE(u.tenant_id, tm.tenant_id) AS tenant_id
+          FROM users u
+          LEFT JOIN tenant_memberships tm
+            ON tm.user_id = u.id AND tm.is_active = TRUE
+         WHERE LOWER(u.email) = $1
+         ORDER BY tm.created_at ASC NULLS LAST
+         LIMIT 1
+      `, [ownerEmail]);
+      defaultTenantId = tenantResult.rows?.[0]?.tenant_id || null;
+    } catch (tenantLookupError) {
+      console.warn('⚠️ No se pudo resolver tenant para clinic_channels:', tenantLookupError.message);
     }
+
+    for (const id of ids) {
+      for (const b of branches) {
+        await adminQ(`
+          INSERT INTO clinic_channels
+            (tenant_id, phone_number_id, channel, name, clinic_name, branch_key,
+             sucursal_id, db_key, active, is_active, config, metadata)
+          SELECT $1::uuid, $2, 'whatsapp', $3, $3, $4,
+                 $4, $5, TRUE, TRUE,
+                 jsonb_build_object('phone', $6::text, 'address', $7::text),
+                 jsonb_build_object('source', 'auto_migration')
+          WHERE NOT EXISTS (
+            SELECT 1
+              FROM clinic_channels
+             WHERE phone_number_id = $2
+               AND COALESCE(sucursal_id, branch_key) = $4
+               AND tenant_id IS NOT DISTINCT FROM $1::uuid
+          )
+        `, [defaultTenantId, id, b.name, b.key, process.env.WA_FORCE_DB || 'db1', b.phone, b.address]);
+      }
+    }
+
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally {
+    client.release();
   }
 }
 
