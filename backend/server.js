@@ -5713,9 +5713,17 @@ app.post('/api/whatsapp/cron/confirmations', ah(async (req, res) => {
        ORDER BY created_at, branch_key
     `, [company.id]);
 
-    const branches = branchRows.length
-      ? branchRows.map(row => String(row.branch_key || 'sucursal_1'))
-      : ['sucursal_1'];
+    // Si el broadcast ignora sucursales, debe ejecutarse una sola vez por empresa.
+    // De lo contrario, la misma cita se procesaría una vez por cada sucursal
+    // y el paciente recibiría recordatorios duplicados.
+    const ignoreSucursal =
+      String(process.env.APPT_IGNORE_SUCURSAL || 'false').toLowerCase() === 'true';
+
+    const branches = ignoreSucursal
+      ? ['sucursal_1']
+      : branchRows.length
+        ? [...new Set(branchRows.map(row => String(row.branch_key || 'sucursal_1')))]
+        : ['sucursal_1'];
 
     for (const sucursalId of branches) {
       try {
@@ -5793,7 +5801,10 @@ app.post('/api/whatsapp/cron/confirmations', ah(async (req, res) => {
     { executions: 0, targeted: 0, sent: 0, errors: 0, skipped: 0 }
   );
 
-  console.log('⏰ Cron WhatsApp completado', summary);
+  console.log('⏰ Cron WhatsApp completado', {
+    ...summary,
+    ignoreSucursal: String(process.env.APPT_IGNORE_SUCURSAL || 'false').toLowerCase() === 'true'
+  });
 
   res.json({
     ok: summary.errors === 0,
