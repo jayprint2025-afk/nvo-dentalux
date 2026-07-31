@@ -3926,10 +3926,13 @@ async function ensureMultiTenantSchema() {
       plan TEXT NOT NULL DEFAULT 'basic',
       logo_url TEXT,
       primary_color TEXT,
+      whatsapp_enabled BOOLEAN NOT NULL DEFAULT TRUE,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
   `);
+
+  await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS whatsapp_enabled BOOLEAN NOT NULL DEFAULT TRUE`);
 
   // Usuarios que iniciarán sesión
   await q(`
@@ -5136,6 +5139,7 @@ async function uniqueCompanySlug(client, name, excludeId = null) {
 
 const companySelectSql = `
   SELECT t.id, t.name, t.slug, t.plan, t.status,
+         COALESCE(t.whatsapp_enabled, TRUE) AS whatsapp_enabled,
          COALESCE(owner_u.name, '') AS owner_name,
          COALESCE(owner_u.email, '') AS owner_email,
          COALESCE(first_b.name, '') AS branch_name,
@@ -5153,6 +5157,7 @@ const companySelectSql = `
 
 function mapCompany(row) {
   return { id: row.id, name: row.name, slug: row.slug, plan: row.plan, status: row.status,
+    whatsappEnabled: row.whatsapp_enabled !== false,
     ownerName: row.owner_name, ownerEmail: row.owner_email, branchName: row.branch_name,
     phone: row.phone, address: row.address };
 }
@@ -5228,6 +5233,36 @@ app.put('/api/companies/:id', authRequired, companiesSuperAdminOnly, ah(async (r
   } finally { client.release(); }
 }));
 
+
+
+app.patch('/api/companies/:id/services/whatsapp', authRequired, companiesSuperAdminOnly, ah(async (req, res) => {
+  const tenantId = String(req.params.id || '').trim();
+  const enabled = req.body?.enabled;
+
+  if (typeof enabled !== 'boolean') {
+    return res.status(400).json({ error: 'El campo enabled debe ser true o false' });
+  }
+
+  const { rows } = await poolDB1.query(`
+    UPDATE tenants
+       SET whatsapp_enabled=$1,
+           updated_at=NOW()
+     WHERE id=$2::uuid
+     RETURNING id, name, status, whatsapp_enabled
+  `, [enabled, tenantId]);
+
+  if (!rows[0]) {
+    return res.status(404).json({ error: 'Empresa no encontrada' });
+  }
+
+  res.json({
+    ok: true,
+    tenantId: rows[0].id,
+    company: rows[0].name,
+    companyStatus: rows[0].status,
+    whatsappEnabled: rows[0].whatsapp_enabled !== false
+  });
+}));
 
 function mapCompanyChannel(row) {
   const config = row?.config && typeof row.config === 'object' ? row.config : {};

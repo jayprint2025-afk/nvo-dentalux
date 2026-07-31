@@ -416,25 +416,6 @@ function runWithDbKey(dbKey, fn) {
   return als.run({ pool: p, dbKey: String(dbKey || dbName(p)) }, fn);
 }
 
-// Ejecuta una consulta interna del webhook con bypass RLS solamente durante
-// esta transacción. Es necesario porque WhatsApp no trae la sesión del usuario
-// ni app.tenant_id, pero la tabla appointments ahora tiene FORCE ROW LEVEL SECURITY.
-async function queryWithTenantBypass(pool, sql, params = []) {
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    await client.query(`SELECT set_config('app.tenant_bypass', 'on', true)`);
-    const result = await client.query(sql, params);
-    await client.query('COMMIT');
-    return result;
-  } catch (error) {
-    await client.query('ROLLBACK').catch(() => {});
-    throw error;
-  } finally {
-    client.release();
-  }
-}
-
 
 // q() usa el pool del contexto de la request (ALS)
 async function q(text, params = []) {
@@ -482,6 +463,43 @@ function requireTenantId(req) {
   }
   return String(tenantId);
 }
+
+async function getWhatsappServiceState(tenantId) {
+  const { rows } = await q(`
+    SELECT status,
+           COALESCE(whatsapp_enabled, TRUE) AS whatsapp_enabled
+      FROM tenants
+     WHERE id=$1::uuid
+     LIMIT 1
+  `, [tenantId]);
+
+  if (!rows[0]) {
+    return {
+      allowed: false,
+      reason: 'Empresa no encontrada',
+      code: 'TENANT_NOT_FOUND'
+    };
+  }
+
+  if (String(rows[0].status || '').toLowerCase() !== 'active') {
+    return {
+      allowed: false,
+      reason: 'La empresa está suspendida',
+      code: 'COMPANY_SUSPENDED'
+    };
+  }
+
+  if (rows[0].whatsapp_enabled === false) {
+    return {
+      allowed: false,
+      reason: 'El servicio de WhatsApp está suspendido para esta empresa',
+      code: 'WHATSAPP_SUSPENDED'
+    };
+  }
+
+  return { allowed: true };
+}
+
 
 // ===================== Depósito / anticipo (defensivo multi-DB) =====================
 // Algunas BDs NO tienen las columnas require_deposit_confirm/deposit_instructions.
@@ -1524,40 +1542,9 @@ router.post('/webhook', async (req, res) => {
     console.log('📥 WEBHOOK RECEIVED');
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     
-    // Meta puede mandar varios entry/changes en un mismo webhook.
-    // No debemos tomar solamente [0], porque el primer change puede ser un status
-    // y el mensaje entrante real puede venir en otro change.
-    const entries = Array.isArray(req.body?.entry) ? req.body.entry : [];
-    const allChanges = entries.flatMap(entry =>
-      Array.isArray(entry?.changes) ? entry.changes : []
-    );
-
-    const messageChange =
-      allChanges.find(change =>
-        Array.isArray(change?.value?.messages) &&
-        change.value.messages.length > 0
-      ) || null;
-
-    const statusChange =
-      allChanges.find(change =>
-        Array.isArray(change?.value?.statuses) &&
-        change.value.statuses.length > 0
-      ) || null;
-
-    // Priorizar siempre el change que contiene messages.
-    // Si este webhook solo trae statuses, usamos ese value únicamente para registrarlo
-    // y responder 200 sin tratarlo como mensaje entrante.
-    const selectedChange = messageChange || statusChange || allChanges[0] || null;
-    const a = selectedChange?.value || null;
+    const entry = req.body?.entry?.[0];
+    const a = entry?.changes?.[0]?.value;
     const phoneNumberId = String(a?.metadata?.phone_number_id || '').trim() || null;
-
-    console.log('🧭 WEBHOOK CHANGE SCAN:', {
-      entries: entries.length,
-      changes: allChanges.length,
-      has_message_change: !!messageChange,
-      has_status_change: !!statusChange,
-      selected_type: messageChange ? 'message' : (statusChange ? 'status' : 'unknown')
-    });
     const aiPhoneNumberId = phoneNumberId || process.env.WHATSAPP_PHONE_NUMBER_ID || process.env.AI_DEFAULT_PHONE_NUMBER_ID || null;
 
     console.log('📱 PHONE_NUMBER_ID:', {
@@ -1610,14 +1597,7 @@ router.post('/webhook', async (req, res) => {
     });
     
     if (!msg) {
-      const statuses = Array.isArray(a?.statuses) ? a.statuses : [];
-      console.log('ℹ️ WEBHOOK SOLO DE STATUS - SIN MENSAJE ENTRANTE:', {
-        statuses: statuses.map(s => ({
-          id: s?.id || null,
-          status: s?.status || null,
-          recipient_id: s?.recipient_id || null
-        }))
-      });
+      console.log('❌ NO MESSAGE IN PAYLOAD - RETURNING');
       return res.sendStatus(200);
     }
 
@@ -2401,87 +2381,6 @@ Seguiremos mejorando para que tu experiencia sea cada vez más agradable.`;
       });
     }
 
-    // Respaldo para plantillas de WhatsApp:
-    // algunos quick-reply llegan como CONFIRMAR/CANCELAR sin folio y sin context_id útil.
-    // En ese caso buscamos el último mensaje saliente con appointment_id enviado
-    // recientemente al mismo número, en cualquiera de las DB configuradas.
-    if (!idHint && /^(CONFIRMAR|CANCELAR)$/i.test(action)) {
-      const incomingDigits = onlyDigits(from);
-      const store = als.getStore();
-      const primary = store?.pool || poolDB1;
-      const pools = [primary, poolDB1, poolDB2, poolDB3].filter(Boolean);
-      const uniqPools = [];
-      const seenPools = new Set();
-
-      for (const p of pools) {
-        if (!seenPools.has(p)) {
-          seenPools.add(p);
-          uniqPools.push(p);
-        }
-      }
-
-      let latestOutgoing = null;
-      let latestPool = null;
-
-      for (const candidate of uniqPools) {
-        try {
-          const rLast = await candidate.query(
-            `SELECT appointment_id, sucursal_id, wa_message_id, created_at
-               FROM whatsapp_messages
-              WHERE direction = 'outgoing'
-                AND appointment_id IS NOT NULL
-                AND regexp_replace(COALESCE(phone, ''), '\\D', '', 'g') = $1
-                AND created_at >= NOW() - INTERVAL '72 hours'
-              ORDER BY created_at DESC, id DESC
-              LIMIT 1`,
-            [incomingDigits]
-          );
-
-          const row = rLast.rows[0] || null;
-          if (
-            row &&
-            (!latestOutgoing ||
-              new Date(row.created_at).getTime() > new Date(latestOutgoing.created_at).getTime())
-          ) {
-            latestOutgoing = row;
-            latestPool = candidate;
-          }
-        } catch (eLast) {
-          console.log('⚠️ [LAST OUTGOING] No se pudo buscar en una DB:', {
-            db: dbName(candidate),
-            error: String(eLast?.message || eLast)
-          });
-        }
-      }
-
-      if (latestOutgoing?.appointment_id) {
-        idHint = Number(latestOutgoing.appointment_id);
-
-        if (store && latestPool) {
-          store.pool = latestPool;
-          store.dbKey = dbName(latestPool);
-        }
-
-        if (!sucursalForIncoming && latestOutgoing.sucursal_id) {
-          sucursalForIncoming = latestOutgoing.sucursal_id;
-        }
-
-        console.log('✅ [LAST OUTGOING] Cita recuperada desde último recordatorio:', {
-          appointment_id: idHint,
-          sucursal_id: latestOutgoing.sucursal_id || null,
-          wa_message_id: latestOutgoing.wa_message_id || null,
-          created_at: latestOutgoing.created_at,
-          db_used: latestPool ? dbName(latestPool) : null,
-          phone_digits: incomingDigits
-        });
-      } else {
-        console.log('⚠️ [LAST OUTGOING] No se encontró recordatorio reciente con appointment_id:', {
-          phone: from,
-          phone_digits: incomingDigits
-        });
-      }
-    }
-
     const newStatus = (action === 'CONFIRMAR') ? 'Confirmada' : 'Cancelada';
 
 // ===================== Depósito: bloquear CONFIRMAR si falta referencia =====================
@@ -2538,7 +2437,6 @@ if (action === 'CONFIRMAR') {
       const sqlUpdate = `UPDATE appointments SET status = $1 WHERE id = $2 AND (${whereSuc}) RETURNING id,date,start_time,sucursal_id`;
       const params = IGNORE_SUC ? [newStatus, idHint] : [newStatus, idHint, sucursalId];
 
-      console.log('🔓 RLS BYPASS INTERNO PARA CONFIRMACIÓN');
       console.log('🎯 UPDATE CON ID (multi-db):', {
         appointment_id: idHint,
         whereSuc_clause: whereSuc,
@@ -2549,59 +2447,11 @@ if (action === 'CONFIRMAR') {
       let r = { rows: [] };
       let usedPool = null;
       for (const p of uniq) {
-        const rr = await queryWithTenantBypass(p, sqlUpdate, params);
+        const rr = await p.query(sqlUpdate, params);
         if (rr.rows && rr.rows.length) {
           r = rr;
           usedPool = p;
           break;
-        }
-      }
-
-      // Respaldo multi-tenant:
-      // La cita puede existir pero tener otro identificador interno de sucursal
-      // (por ejemplo "victoria" en lugar de "sucursal_1").
-      // Para no actualizar una cita equivocada con el mismo ID en otra DB,
-      // validamos también que el teléfono de la cita coincida con quien respondió.
-      if (!r.rows.length) {
-        const incomingPhoneDigits = onlyDigits(from);
-        console.log('🔁 FALLBACK ID + TELÉFONO SIN FILTRO DE SUCURSAL:', {
-          appointment_id: idHint,
-          phone_digits: incomingPhoneDigits,
-          phone_column: PHONE_COL,
-          dbs: uniq.map(dbName)
-        });
-
-        for (const p of uniq) {
-          try {
-            const rr = await queryWithTenantBypass(
-              p,
-              `UPDATE appointments
-                  SET status = $1
-                WHERE id = $2
-                  AND RIGHT(
-                        regexp_replace(COALESCE(${PHONE_COL}::text, ''), '\\D', '', 'g'),
-                        10
-                      ) = RIGHT($3::text, 10)
-                RETURNING id,date,start_time,sucursal_id`,
-              [newStatus, idHint, incomingPhoneDigits]
-            );
-
-            if (rr.rows && rr.rows.length) {
-              r = rr;
-              usedPool = p;
-              console.log('✅ CITA ENCONTRADA POR ID + TELÉFONO:', {
-                appointment_id: idHint,
-                db_used: dbName(p),
-                sucursal_real: rr.rows[0]?.sucursal_id || null
-              });
-              break;
-            }
-          } catch (fallbackErr) {
-            console.log('⚠️ FALLBACK ID + TELÉFONO FALLÓ EN DB:', {
-              db: dbName(p),
-              error: String(fallbackErr?.message || fallbackErr)
-            });
-          }
         }
       }
 
@@ -3003,6 +2853,26 @@ router.post('/broadcast/confirmations', async (req, res) => {
     if (REQUIRED && provided !== REQUIRED) return res.status(401).json({ ok: false, error: 'unauthorized' });
 
     const tenantId = requireTenantId(req);
+
+    // Aplica tanto al botón manual como al cronjob de las 8:00 a. m.,
+    // porque ambos llaman este mismo endpoint.
+    const whatsappState = await getWhatsappServiceState(tenantId);
+    if (!whatsappState.allowed) {
+      console.log('⏭️ Envío WhatsApp omitido', {
+        tenantId,
+        code: whatsappState.code,
+        reason: whatsappState.reason
+      });
+      return res.status(403).json({
+        ok: false,
+        skipped: true,
+        code: whatsappState.code,
+        error: whatsappState.reason,
+        targeted: 0,
+        sent: 0
+      });
+    }
+
     const sucursalId = getSucursalFromReq(req);
     const limit = Math.max(1, Math.min(Number(req.query.limit || 500), 1000));
 
@@ -3015,10 +2885,7 @@ router.post('/broadcast/confirmations', async (req, res) => {
     if (/^\d{4}-\d{2}-\d{2}$/.test(when)) dateExpr = `'${when}'::date`;
 
     const IGNORE = (process.env.APPT_IGNORE_SUCURSAL || 'false').toLowerCase() === 'true';
-    const whereSuc = IGNORE
-      ? 'TRUE'
-      : '(sucursal_id = $2::text OR sucursal_id IS NULL)';
-    const limitPlaceholder = IGNORE ? '$2' : '$3';
+    const whereSuc = IGNORE ? 'TRUE' : '(sucursal_id = $2 OR sucursal_id IS NULL)';
 
     const sql = `
       SELECT DISTINCT ON (${PHONE_COL})
@@ -3031,11 +2898,9 @@ router.post('/broadcast/confirmations', async (req, res) => {
          AND TRIM(${PHONE_COL}) <> ''
          AND (${whereSuc})
        ORDER BY ${PHONE_COL}, date ASC, start_time ASC
-       LIMIT ${limitPlaceholder}
+       LIMIT $3
     `;
-    const params = IGNORE
-      ? [tenantId, limit]
-      : [tenantId, sucursalId, limit];
+    const params = (whereSuc === 'TRUE') ? [tenantId, null, limit] : [tenantId, sucursalId, limit];
     const r = await q(sql, params);
     const rows = r.rows || [];
 

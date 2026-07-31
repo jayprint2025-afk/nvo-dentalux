@@ -1218,6 +1218,7 @@ type Empresa = {
   slug: string;
   plan: string;
   status: 'active' | 'suspended';
+  whatsappEnabled: boolean;
   ownerName: string;
   ownerEmail: string;
   branchName: string;
@@ -1326,6 +1327,28 @@ function EmpresasModule() {
     } catch (e: any) {
       setMessage(`Error: ${e?.message || 'No se pudo cambiar el estado'}`);
     } finally { setLoading(false); }
+  };
+
+  const toggleWhatsappService = async (empresa: Empresa) => {
+    const nextEnabled = !empresa.whatsappEnabled;
+    setLoading(true);
+    setMessage('');
+    try {
+      await api(`/companies/${empresa.id}/services/whatsapp`, {
+        method: 'PATCH',
+        body: JSON.stringify({ enabled: nextEnabled })
+      });
+      setMessage(
+        nextEnabled
+          ? `WhatsApp activado para ${empresa.name}. Los recordatorios manuales y automáticos pueden enviarse.`
+          : `WhatsApp suspendido para ${empresa.name}. No se enviarán recordatorios manuales ni del cronjob.`
+      );
+      await load();
+    } catch (e: any) {
+      setMessage(`Error: ${e?.message || 'No se pudo cambiar el servicio de WhatsApp'}`);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const loadChannels = React.useCallback(async (empresa: Empresa) => {
@@ -1473,6 +1496,42 @@ function EmpresasModule() {
 
             <div className="space-y-6 p-6">
               {channelMessage && <div className={`p-3 rounded-lg border text-sm ${channelMessage.startsWith('Error') ? 'bg-red-50 border-red-200 text-red-700' : 'bg-green-50 border-green-200 text-green-700'}`}>{channelMessage}</div>}
+
+              <div className="rounded-xl border bg-white p-5">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <MessageCircle className="w-5 h-5 text-green-600" />
+                      <h4 className="font-semibold text-gray-900">Recordatorios por WhatsApp</h4>
+                      <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                        channelsCompany.whatsappEnabled
+                          ? 'bg-green-100 text-green-700'
+                          : 'bg-red-100 text-red-700'
+                      }`}>
+                        {channelsCompany.whatsappEnabled ? 'Activo' : 'Suspendido'}
+                      </span>
+                    </div>
+                    <p className="mt-1 text-sm text-gray-500">
+                      Controla el botón manual y el cronjob diario de las 8:00 a. m. No modifica el número ni la plantilla compartida.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={loading}
+                    onClick={async () => {
+                      await toggleWhatsappService(channelsCompany);
+                      setChannelsCompany(v => v ? {...v, whatsappEnabled: !v.whatsappEnabled} : v);
+                    }}
+                    className={`rounded-lg px-4 py-2 text-sm font-semibold text-white disabled:opacity-60 ${
+                      channelsCompany.whatsappEnabled
+                        ? 'bg-red-600 hover:bg-red-700'
+                        : 'bg-green-600 hover:bg-green-700'
+                    }`}
+                  >
+                    {channelsCompany.whatsappEnabled ? 'Suspender WhatsApp' : 'Activar WhatsApp'}
+                  </button>
+                </div>
+              </div>
 
               <form onSubmit={saveChannel} className="space-y-4 rounded-xl border bg-gray-50 p-5">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
