@@ -144,16 +144,76 @@ function canonicalBookingData(state, pending = null) {
     service_id: source.service_id || source.service?.id || null,
     service_name: source.service_name || source.service?.name || null,
     date: source.date || source.appointment_date || null,
-    start_time: source.start_time || source.selected_time || source.selected_slot?.start_time || source.current_slot?.start_time || null,
+    start_time:
+      source.start_time ||
+      source.exact_time ||
+      source.selected_time ||
+      source.selected_slot?.start_time ||
+      source.current_slot?.start_time ||
+      null,
     end_time: source.end_time || source.selected_slot?.end_time || source.current_slot?.end_time || null,
   };
+}
+
+function resolveServiceIdentity(data, knowledge) {
+  if (!data || typeof data !== 'object') return data;
+
+  const services = Array.isArray(knowledge?.services)
+    ? knowledge.services
+    : [];
+
+  if (data.service_id) {
+    const current = services.find(
+      item => String(item.id) === String(data.service_id)
+    );
+    if (current && !data.service_name) data.service_name = current.name;
+    return data;
+  }
+
+  const requestedName = String(
+    data.service_name ||
+    data.service ||
+    ''
+  ).trim();
+
+  if (!requestedName) return data;
+
+  const normalize = value =>
+    String(value || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9 ]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+  const requested = normalize(requestedName);
+
+  const service = services.find(item => {
+    const candidate = normalize(item.name);
+    return (
+      candidate === requested ||
+      candidate.includes(requested) ||
+      requested.includes(candidate)
+    );
+  });
+
+  if (service) {
+    data.service_id = service.id;
+    data.service_name = service.name;
+  }
+
+  return data;
 }
 
 function normalizedPendingBooking(state, knowledge) {
   const pending = state?.pending_booking;
   if (!pending || typeof pending !== 'object') return null;
 
-  const data = canonicalBookingData(state, pending);
+  const data = resolveServiceIdentity(
+    canonicalBookingData(state, pending),
+    knowledge
+  );
 
   const required = [
     'patient',
@@ -187,7 +247,10 @@ function normalizedPendingBooking(state, knowledge) {
 function ensurePendingBookingFromCollected(state, knowledge) {
   if (state?.pending_booking) return normalizedPendingBooking(state, knowledge);
 
-  const data = canonicalBookingData(state);
+  const data = resolveServiceIdentity(
+    canonicalBookingData(state),
+    knowledge
+  );
   const required = ['patient', 'phone', 'branch_key', 'service_id', 'date', 'start_time'];
   const missing = required.filter(key => !data[key]);
   if (missing.length) return { data, missing, complete: false };
@@ -424,12 +487,29 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
   }
 
   if (plan.action.type === 'prepare_confirmation') {
-    const args = canonicalBookingData({ collected: { ...state.collected, ...plan.action.args } });
+    const args = resolveServiceIdentity(
+      canonicalBookingData({
+        collected: { ...state.collected, ...plan.action.args },
+      }),
+      knowledge
+    );
     const required = ['patient', 'phone', 'branch_key', 'service_id', 'date', 'start_time'];
     const missing = required.filter(key => !args[key]);
 
     if (missing.length) {
-      plan.reply = plan.reply || `Para preparar la confirmación todavía necesito: ${missing.join(', ')}.`;
+      const labels = {
+        patient: 'el nombre del paciente',
+        phone: 'un teléfono de contacto',
+        branch_key: 'la sucursal',
+        service_id: 'el servicio',
+        date: 'la fecha',
+        start_time: 'el horario',
+      };
+      plan.reply =
+        plan.reply ||
+        `Para preparar la confirmación todavía necesito ${missing
+          .map(key => labels[key] || key)
+          .join(', ')}.`;
     } else {
       const key = Appointment.bookingKey(args);
       state.pending_booking = {
@@ -457,8 +537,18 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
 
     if (!pending) {
       const missing = normalized?.missing || [];
+      const labels = {
+        patient: 'el nombre del paciente',
+        phone: 'un teléfono de contacto',
+        branch_key: 'la sucursal',
+        service_id: 'el servicio',
+        date: 'la fecha',
+        start_time: 'el horario',
+      };
       plan.reply = missing.length
-        ? `Antes de confirmar todavía necesito completar: ${missing.join(', ')}.`
+        ? `Antes de confirmar todavía necesito ${missing
+          .map(key => labels[key] || key)
+          .join(', ')}.`
         : 'Antes de crear la cita necesito reunir los datos, mostrarte el resumen y recibir tu confirmación.';
       used = 'confirmation_missing_data';
     } else if (!explicitConfirmation(userText, state)) {
@@ -541,4 +631,5 @@ module.exports = {
   normalizedPendingBooking,
   canonicalBookingData,
   ensurePendingBookingFromCollected,
+  resolveServiceIdentity,
 };
