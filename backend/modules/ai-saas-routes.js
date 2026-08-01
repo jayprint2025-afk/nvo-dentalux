@@ -134,27 +134,12 @@ function setupAiSaasRoutes(app, q) {
         return res.status(404).json({ error: 'Conversación no encontrada' });
       }
 
+      // La ruta no debe imponer una versión del motor.
+      // El selector y cada recepcionista son responsables de interpretar o migrar su estado.
       const storedState = safeJson(conv.state, {});
-      const isV4State = String(storedState?.version || '').toLowerCase() === 'v4';
-
-      // V4 is now the only clinical receptionist. Legacy V2/V3 state is discarded
-      // once, while preserving the patient's known phone and requested branch.
-      const state = isV4State
-        ? storedState
-        : {
-            version: 'v4',
-            phone: storedState?.phone || storedState?.wa_phone || null,
-            branch_key: storedState?.branch_key || null,
-            migrated_from: storedState?.version || storedState?.stage || 'legacy',
-            migrated_at: new Date().toISOString()
-          };
-
-      if (!isV4State) {
-        console.log('♻️ Estado clínico migrado automáticamente a Recepcionista V4', {
-          conversationId,
-          previous: storedState?.version || storedState?.stage || 'legacy'
-        });
-      }
+      const state = storedState && typeof storedState === 'object'
+        ? { ...storedState }
+        : {};
 
       const authenticatedPhone = String(req.body?.phone || state.phone || state.wa_phone || '').trim() || null;
       const requestedBranch = String(req.body?.sucursal_id || '').trim();
@@ -180,17 +165,35 @@ function setupAiSaasRoutes(app, q) {
       );
 
       const out = await orchestrate(q, ctx, state, userText);
-      if (!out || typeof out.reply !== 'string') {
-        throw new Error('La IA produjo una respuesta inválida');
+      if (!out || typeof out.reply !== 'string' || !out.state || typeof out.state !== 'object') {
+        const error = new Error('La IA produjo una respuesta inválida');
+        error.statusCode = 502;
+        throw error;
       }
+
+      const engineVersion = String(
+        out.engine_version ||
+        out.engineVersion ||
+        out.state?.version ||
+        'desconocida'
+      ).trim();
 
       await q(
         `INSERT INTO ai_messages(tenant_id, conversation_id, role, content, meta)
          VALUES ($1::uuid, $2, 'assistant', $3, $4::jsonb)`,
-        [tenantId, conversationId, out.reply, JSON.stringify({ used: out.used || 'saas', tenant_id: tenantId, engine_version: 'v4' })]
+        [
+          tenantId,
+          conversationId,
+          out.reply,
+          JSON.stringify({
+            used: out.used || 'saas',
+            tenant_id: tenantId,
+            engine_version: engineVersion
+          })
+        ]
       );
 
-      // saveState es seguro por RLS; reforzamos además que la conversación ya fue validada por tenant.
+      // Guardar exactamente el estado producido por el motor seleccionado.
       await saveState(q, conversationId, out.state);
 
       try {
@@ -199,13 +202,22 @@ function setupAiSaasRoutes(app, q) {
           clinic_id: tenantId,
           conversation_id: conversationId,
           event: 'chat_turn',
-          payload: { used: out.used, text_len: userText.length, engine_version: 'v4' }
+          payload: {
+            used: out.used || 'saas',
+            text_len: userText.length,
+            engine_version: engineVersion
+          }
         });
       } catch (logError) {
         console.warn('⚠️ ai_logs falló sin cancelar la respuesta:', logError.message);
       }
 
-      return res.json({ conversationId, reply: out.reply, used: out.used, engineVersion: 'v4' });
+      return res.json({
+        conversationId,
+        reply: out.reply,
+        used: out.used || 'saas',
+        engineVersion
+      });
     } catch (error) {
       console.error('❌ ERROR /api/ai/chat:', error);
       return res.status(error.statusCode || 500).json({ error: error.message || String(error) });
