@@ -50,6 +50,14 @@ async function availability(q, ctx, state) {
       return m >= pref.min && m <= pref.max;
     });
     if (range.length) slots = range;
+  } else if (pref?.kind === 'after') {
+    slots = slots
+      .filter(s => timeToMinutes(s.start_time) >= Number(pref.min))
+      .sort((a, b) => timeToMinutes(a.start_time) - timeToMinutes(b.start_time));
+  } else if (pref?.kind === 'before') {
+    slots = slots
+      .filter(s => timeToMinutes(s.start_time) <= Number(pref.max))
+      .sort((a, b) => timeToMinutes(b.start_time) - timeToMinutes(a.start_time));
   }
   return slots;
 }

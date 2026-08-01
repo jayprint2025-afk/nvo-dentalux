@@ -3,7 +3,7 @@
 const { emptyExtraction, INTENTS, CONFIRMATIONS } = require('./schemas');
 const {
   normalize, parseDate, parseTime, normalizePhone, branchFromText,
-  affirmative, negative,
+  affirmative, negative, timeToMinutes,
 } = require('./utils');
 
 function infoRequests(text) {
@@ -86,6 +86,30 @@ function fallbackExtract(text, state = {}) {
   result.updates.branch_key = branchFromText(text);
   result.updates.date = parseDate(text);
   result.updates.preferred_time = parseTime(text);
+
+  const currentSlot =
+    state.selected_slot ||
+    state.proposed_slot ||
+    state.current_slot ||
+    null;
+  const currentMinutes = timeToMinutes(currentSlot?.start_time);
+
+  if (/\b(mas tarde|un poco mas tarde|despues de esa hora|posterior)\b/.test(n)) {
+    result.updates.preferred_time = {
+      kind: 'after',
+      min: Number.isFinite(currentMinutes) ? currentMinutes + 1 : 12 * 60,
+      reference_time: currentSlot?.start_time || null,
+      label: 'más tarde',
+    };
+  } else if (/\b(mas temprano|un poco mas temprano|antes de esa hora|anterior)\b/.test(n)) {
+    result.updates.preferred_time = {
+      kind: 'before',
+      max: Number.isFinite(currentMinutes) ? currentMinutes - 1 : 12 * 60,
+      reference_time: currentSlot?.start_time || null,
+      label: 'más temprano',
+    };
+  }
+
   result.updates.phone = normalizePhone(text);
   result.updates.service_text = servicePhrase(text);
   result.information_requests = infoRequests(text);
