@@ -250,14 +250,40 @@ function formatTime(time) {
   return `${displayHour}:${minute} ${suffix}`;
 }
 
-function formatDateSpanish(isoDate) {
-  if (!isoDate) return '';
-  const date = new Date(`${isoDate}T12:00:00Z`);
+function formatDateSpanish(value) {
+  if (!value) return '';
+
+  let date;
+
+  if (value instanceof Date) {
+    date = new Date(value.getTime());
+  } else {
+    const raw = asText(value).trim();
+    const isoMatch = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
+
+    if (isoMatch) {
+      date = new Date(Date.UTC(
+        Number(isoMatch[1]),
+        Number(isoMatch[2]) - 1,
+        Number(isoMatch[3]),
+        12, 0, 0
+      ));
+    } else {
+      date = new Date(raw);
+    }
+  }
+
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) {
+    console.warn('⚠️ Fecha inválida recibida al cerrar cita:', value);
+    return asText(value).slice(0, 10);
+  }
+
   return new Intl.DateTimeFormat('es-MX', {
     timeZone: 'UTC',
     weekday: 'long',
     day: 'numeric',
     month: 'long',
+    year: 'numeric',
   }).format(date);
 }
 
@@ -730,13 +756,16 @@ async function orchestrate(q, ctx, incomingState, userText) {
       start_time: created.start_time,
     });
 
+    const confirmedDate = formatDateSpanish(created.date);
+    const confirmedTime = formatTime(created.start_time);
+
     return {
       reply: [
         '✅ Tu cita quedó confirmada.',
         `• Nombre: ${created.patient}`,
         serviceName ? `• Servicio: ${serviceName}` : null,
-        `• Fecha: ${formatDateSpanish(created.date)}`,
-        `• Hora: ${formatTime(created.start_time)}`,
+        `• Fecha: ${confirmedDate}`,
+        `• Hora: ${confirmedTime}`,
         `• Sucursal: ${branchName}`,
         '',
         'Te esperamos 😊',
