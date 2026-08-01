@@ -1,5 +1,182 @@
-'use strict';const {GOAL_TYPES:G}=require('./command-schema');const S=require('./dialogue-state'),P=require('./conversation-patterns'),F=require('./flow-engine'),Policy=require('./policy-engine'),T=require('./tool-registry'),Planner=require('./response-planner'),Writer=require('./response-writer'),Safety=require('./safety-policy'),Telemetry=require('./telemetry');
-async function manageTurn(q,ctx,incoming,userText,interpretation,context){let state=S.initialState(incoming),pat=P.applyGlobalPatterns(state,interpretation);state=pat.state;if(pat.terminal)return finish(q,ctx,state,userText,interpretation,{type:'cancel_all'},context,{});F.applyTurnCommands(state,interpretation,context);if(state.pending_questions.length&&!S.hasGoal(state,G.INFORMATION))S.startGoal(state,G.INFORMATION);let action=Policy.nextPolicy(state),results={};if(action.type==='answer_information'){const answers=[],un=[];for(const question of[...state.pending_questions]){const r=await T.answerQuestion(q,ctx,state,question,context);if(r.unresolved)un.push({question,missing:r.unresolved});else{answers.push(r.answer);S.resolveQuestion(state,x=>x.id===question.id,r.answer)}}results.answers=answers;if(un.length){const m=un[0].missing;results.unresolved_prompt=m==='branch'?'¿De cuál sucursal deseas esa información?':'¿De qué servicio deseas esa información?';state.last_system_question={type:'slot_value',slot:m,goal:G.INFORMATION}}else{S.completeGoal(state,G.INFORMATION,{answered:answers.length});if(!S.hasGoal(state,G.BOOKING))results.answers.push('¿Deseas que también te ayude a agendar una cita?')}}if(action.type==='check_availability'){let slots=await T.availability(q,ctx,state);const alt=state.pending_actions.find(a=>a.type==='find_alternative');if(alt?.reference_slot){const ref=minutes(alt.reference_slot.start_time);slots=slots.filter(x=>alt.direction==='earlier'?minutes(x.start_time)<ref:minutes(x.start_time)>ref);state.pending_actions=state.pending_actions.filter(a=>a!==alt)}results.slot=slots[0]||null;state.last_offer=results.slot?{slot:results.slot,alternatives:slots.slice(1,8)}:null;state.last_system_question=results.slot?{type:'slot_offer',goal:G.BOOKING}:{type:'slot_value',slot:'date'}}if(action.type==='ask_slot')state.last_system_question={type:'slot_value',slot:action.slot,goal:G.BOOKING};if(action.type==='request_booking_confirmation')state.last_system_question={type:'booking_confirmation',goal:G.BOOKING};if(action.type==='create_appointment'){const errs=Safety.validateBeforeBooking(state);if(errs.length)action={type:'ask_slot',slot:errs[0]==='confirmation'?'selected_slot':errs[0]};else try{results.created=await T.createAppointment(q,ctx,state);action={type:'appointment_booked'};state.appointment_id=results.created.id;state.completed_at=new Date().toISOString();S.completeGoal(state,G.BOOKING,{appointment_id:results.created.id})}catch(e){if(Safety.safeToolError(e)==='slot_taken'){S.clearSlot(state,'selected_slot');delete state.commitments.booking_confirmed;action={type:'check_availability'};const slots=await T.availability(q,ctx,state);results.slot=slots[0]||null}else action={type:'general_help'}}return finish(q,ctx,state,userText,interpretation,action,context,results)}
+'use strict';
+
+const { GOAL_TYPES: G } = require('./command-schema');
+const State = require('./dialogue-state');
+const Patterns = require('./conversation-patterns');
+const Flow = require('./flow-engine');
+const Policy = require('./policy-engine');
+const Tools = require('./tool-registry');
+const Planner = require('./response-planner');
+const Writer = require('./response-writer');
+const Safety = require('./safety-policy');
+const Telemetry = require('./telemetry');
+
+async function manageTurn(q, ctx, incoming, userText, interpretation, context) {
+  let state = State.initialState(incoming);
+  const pattern = Patterns.applyGlobalPatterns(state, interpretation);
+  state = pattern.state;
+
+  if (pattern.terminal) {
+    return finish(
+      q,
+      ctx,
+      state,
+      userText,
+      interpretation,
+      { type: 'cancel_all' },
+      context,
+      {}
+    );
+  }
+
+  Flow.applyTurnCommands(state, interpretation, context);
+
+  if (state.pending_questions.length && !State.hasGoal(state, G.INFORMATION)) {
+    State.startGoal(state, G.INFORMATION);
+  }
+
+  let action = Policy.nextPolicy(state);
+  const results = {};
+
+  if (action.type === 'answer_information') {
+    const answers = [];
+    const unresolved = [];
+
+    for (const question of [...state.pending_questions]) {
+      const result = await Tools.answerQuestion(q, ctx, state, question, context);
+
+      if (result.unresolved) {
+        unresolved.push({ question, missing: result.unresolved });
+      } else {
+        answers.push(result.answer);
+        State.resolveQuestion(state, item => item.id === question.id, result.answer);
+      }
+    }
+
+    results.answers = answers;
+
+    if (unresolved.length) {
+      const missing = unresolved[0].missing;
+      results.unresolved_prompt = missing === 'branch'
+        ? '¿De cuál sucursal deseas esa información?'
+        : '¿De qué servicio deseas esa información?';
+
+      state.last_system_question = {
+        type: 'slot_value',
+        slot: missing,
+        goal: G.INFORMATION,
+      };
+    } else {
+      State.completeGoal(state, G.INFORMATION, { answered: answers.length });
+
+      if (!State.hasGoal(state, G.BOOKING)) {
+        results.answers.push('¿Deseas que también te ayude a agendar una cita?');
+      }
+    }
+  }
+
+  if (action.type === 'check_availability') {
+    let slots = await Tools.availability(q, ctx, state);
+    const alternative = state.pending_actions.find(item => item.type === 'find_alternative');
+
+    if (alternative?.reference_slot) {
+      const reference = minutes(alternative.reference_slot.start_time);
+      slots = slots.filter(slot => alternative.direction === 'earlier'
+        ? minutes(slot.start_time) < reference
+        : minutes(slot.start_time) > reference);
+      state.pending_actions = state.pending_actions.filter(item => item !== alternative);
+    }
+
+    results.slot = slots[0] || null;
+    state.last_offer = results.slot
+      ? { slot: results.slot, alternatives: slots.slice(1, 8) }
+      : null;
+    state.last_system_question = results.slot
+      ? { type: 'slot_offer', goal: G.BOOKING }
+      : { type: 'slot_value', slot: 'date' };
+  }
+
+  if (action.type === 'ask_slot') {
+    state.last_system_question = {
+      type: 'slot_value',
+      slot: action.slot,
+      goal: G.BOOKING,
+    };
+  }
+
+  if (action.type === 'request_booking_confirmation') {
+    state.last_system_question = {
+      type: 'booking_confirmation',
+      goal: G.BOOKING,
+    };
+  }
+
+  if (action.type === 'create_appointment') {
+    const errors = Safety.validateBeforeBooking(state);
+
+    if (errors.length) {
+      action = {
+        type: 'ask_slot',
+        slot: errors[0] === 'confirmation' ? 'selected_slot' : errors[0],
+      };
+    } else {
+      try {
+        results.created = await Tools.createAppointment(q, ctx, state);
+        action = { type: 'appointment_booked' };
+        state.appointment_id = results.created.id;
+        state.completed_at = new Date().toISOString();
+        State.completeGoal(state, G.BOOKING, {
+          appointment_id: results.created.id,
+        });
+      } catch (error) {
+        if (Safety.safeToolError(error) === 'slot_taken') {
+          State.clearSlot(state, 'selected_slot');
+          delete state.commitments.booking_confirmed;
+          action = { type: 'check_availability' };
+          const slots = await Tools.availability(q, ctx, state);
+          results.slot = slots[0] || null;
+        } else {
+          console.error('Recepcionista V5 create appointment error:', error);
+          action = { type: 'general_help' };
+        }
+      }
+    }
+  }
+
+  // This return must apply to every policy action, not only create_appointment.
+  return finish(q, ctx, state, userText, interpretation, action, context, results);
 }
-async function finish(q,ctx,state,userText,interpretation,action,context,results){const plan=Planner.plan(action,state,context,results),reply=await Writer.writeResponse(plan,state,context);S.recordTurn(state,userText,interpretation,action,reply);await Telemetry.emit(q,ctx,'v5_turn',{action:action.type,mode:state.mode,pending_questions:state.pending_questions.length,active_goals:state.active_goals.map(g=>g.type)});return{reply,state,used:action.type,engine_version:'v5'}}
-function minutes(t){const[h,m]=String(t||'00:00').split(':').map(Number);return h*60+m}module.exports={manageTurn};
+
+async function finish(q, ctx, state, userText, interpretation, action, context, results) {
+  const plan = Planner.plan(action, state, context, results);
+  const reply = await Writer.writeResponse(plan, state, context);
+
+  if (!reply || typeof reply !== 'string') {
+    const error = new Error(`V5 response writer returned an invalid reply for action ${action.type}`);
+    error.code = 'INVALID_V5_REPLY';
+    throw error;
+  }
+
+  State.recordTurn(state, userText, interpretation, action, reply);
+
+  await Telemetry.emit(q, ctx, 'v5_turn', {
+    action: action.type,
+    mode: state.mode,
+    pending_questions: state.pending_questions.length,
+    active_goals: state.active_goals.map(goal => goal.type),
+  });
+
+  return {
+    reply,
+    state,
+    used: action.type,
+    engine_version: 'v5',
+  };
+}
+
+function minutes(time) {
+  const [hours, mins] = String(time || '00:00').split(':').map(Number);
+  return hours * 60 + mins;
+}
+
+module.exports = { manageTurn };
