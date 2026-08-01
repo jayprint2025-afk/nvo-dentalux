@@ -42,27 +42,75 @@ async function getAppointmentsColumns(q) {
   return _apptColsCache;
 }
 
-// ====== servicios / doctores (filtrado por sucursal_id si tu DB ya lo usa) ======
-async function getDoctors(q, branch_key) {
+// ====== servicios / doctores aislados por tenant + sucursal ======
+async function resolveTenantId(q, explicitTenantId = null) {
+  const direct = String(explicitTenantId || '').trim();
+  if (direct) return direct;
+
+  const { rows } = await q(
+    `SELECT NULLIF(current_setting('app.tenant_id', true), '') AS tenant_id`
+  );
+
+  const tenantId = String(rows?.[0]?.tenant_id || '').trim();
+  if (!tenantId) {
+    throw new Error('tenant_id ausente al consultar catálogo');
+  }
+
+  return tenantId;
+}
+
+function resolveCatalogArgs(tenantOrBranch, maybeBranch) {
+  if (maybeBranch !== undefined) {
+    return {
+      tenant_id: tenantOrBranch,
+      branch_key: maybeBranch,
+    };
+  }
+
+  // Compatibilidad con llamadas anteriores getServices(q, branch_key).
+  // El tenant se obtiene de app.tenant_id configurado por la ruta SaaS.
+  return {
+    tenant_id: null,
+    branch_key: tenantOrBranch,
+  };
+}
+
+async function getDoctors(q, tenantOrBranch, maybeBranch) {
+  const args = resolveCatalogArgs(tenantOrBranch, maybeBranch);
+  const tenantId = await resolveTenantId(q, args.tenant_id);
+
   const { rows } = await q(
     `SELECT id, name
        FROM doctors
-      WHERE ($1::text IS NULL OR sucursal_id = $1::text)
+      WHERE tenant_id = $1::uuid
+        AND ($2::text IS NULL OR sucursal_id = $2::text)
       ORDER BY id ASC`,
-    [branch_key]
+    [tenantId, args.branch_key]
   );
-  return (rows || []).map(r => ({ id: String(r.id), name: r.name }));
+
+  return (rows || []).map(r => ({
+    id: String(r.id),
+    name: r.name,
+  }));
 }
 
-async function getServices(q, branch_key) {
+async function getServices(q, tenantOrBranch, maybeBranch) {
+  const args = resolveCatalogArgs(tenantOrBranch, maybeBranch);
+  const tenantId = await resolveTenantId(q, args.tenant_id);
+
   const { rows } = await q(
     `SELECT id, name
        FROM services
-      WHERE ($1::text IS NULL OR sucursal_id = $1::text)
+      WHERE tenant_id = $1::uuid
+        AND ($2::text IS NULL OR sucursal_id = $2::text)
       ORDER BY id ASC`,
-    [branch_key]
+    [tenantId, args.branch_key]
   );
-  return (rows || []).map(r => ({ id: String(r.id), name: r.name }));
+
+  return (rows || []).map(r => ({
+    id: String(r.id),
+    name: r.name,
+  }));
 }
 
 async function getAppointmentsForDay(q, { clinic_id, branch_key, date }) {
@@ -131,7 +179,7 @@ async function getAppointmentsForDay(q, { clinic_id, branch_key, date }) {
 
 // Calcula slots libres (08:00-20:00 paso 30min)
 async function computeAvailability(q, { clinic_id, branch_key, date, duration_hours = 1, limit = 50, min_start_mins = null }) {
-  const doctors = await getDoctors(q, branch_key);
+  const doctors = await getDoctors(q, clinic_id, branch_key);
   if (!doctors.length) return { slots: [], doctors: [] };
 
   const durationMins = Math.max(30, Math.round(Number(duration_hours) * 60));
@@ -190,75 +238,8 @@ async function createAppointmentTransactional(q, { tenant_id, clinic_id, branch_
   if (!resolvedTenantId) throw new Error('tenant_id ausente al crear la cita');
   if (!branch_key) throw new Error('sucursal ausente al crear la cita');
   if (!service_id) throw new Error('servicio ausente al crear la cita');
-
-  // El agente puede conservar correctamente fecha y hora, pero perder el doctor_id
-  // entre la oferta del horario y la confirmación. El motor de agenda reconstruye
-  // el slot desde la disponibilidad real antes de rechazar la creación.
-  let resolvedSlot = slot && typeof slot === 'object'
-    ? { ...slot }
-    : {};
-
-  resolvedSlot.date =
-    resolvedSlot.date ||
-    resolvedSlot.appointment_date ||
-    null;
-
-  resolvedSlot.start_time = String(
-    resolvedSlot.start_time ||
-    resolvedSlot.exact_time ||
-    resolvedSlot.selected_time ||
-    ''
-  ).slice(0, 5);
-
-  resolvedSlot.duration_hours = Number(
-    resolvedSlot.duration_hours ||
-    resolvedSlot.service_duration_hours ||
-    1
-  );
-
-  if (!resolvedSlot.date || !resolvedSlot.start_time) {
+  if (!slot?.doctor_id || !slot?.date || !slot?.start_time) {
     throw new Error('horario incompleto al crear la cita');
-  }
-
-  if (!resolvedSlot.doctor_id) {
-    const availability = await computeAvailability(q, {
-      clinic_id: resolvedTenantId,
-      branch_key,
-      date: resolvedSlot.date,
-      duration_hours: resolvedSlot.duration_hours,
-      limit: 200,
-      min_start_mins: null,
-    });
-
-    const recovered = (availability.slots || []).find(candidate =>
-      String(candidate.start_time || '').slice(0, 5) === resolvedSlot.start_time
-    );
-
-    if (!recovered?.doctor_id) {
-      throw new Error('El horario seleccionado ya no está disponible');
-    }
-
-    resolvedSlot = {
-      ...recovered,
-      ...resolvedSlot,
-      doctor_id: recovered.doctor_id,
-      doctor_name: recovered.doctor_name,
-      date: recovered.date || resolvedSlot.date,
-      start_time: String(recovered.start_time || resolvedSlot.start_time).slice(0, 5),
-      duration_hours: Number(
-        recovered.duration_hours ||
-        resolvedSlot.duration_hours ||
-        1
-      ),
-    };
-
-    console.log('♻️ SLOT RECUPERADO AUTOMÁTICAMENTE', {
-      branch_key,
-      date: resolvedSlot.date,
-      start_time: resolvedSlot.start_time,
-      doctor_id: resolvedSlot.doctor_id,
-      doctor_name: resolvedSlot.doctor_name || null,
-    });
   }
 
   // nombre de columna de paciente (tu app legacy suele usar patient)
@@ -280,11 +261,11 @@ async function createAppointmentTransactional(q, { tenant_id, clinic_id, branch_
       lockParams.push(String(clinic_id));
       lockWhere.push(`clinic_id=$${lockParams.length}`);
     }
-    lockParams.push(String(resolvedSlot.doctor_id));
+    lockParams.push(String(slot.doctor_id));
     lockWhere.push(`doctor_id=$${lockParams.length}`);
-    lockParams.push(resolvedSlot.date);
+    lockParams.push(slot.date);
     lockWhere.push(`date=$${lockParams.length}`);
-    lockParams.push(resolvedSlot.start_time);
+    lockParams.push(slot.start_time);
     lockWhere.push(`start_time=$${lockParams.length}`);
 
     if (cols.hasStatus) lockWhere.push(`UPPER(COALESCE(status,'')) NOT IN ('CANCELADA','CANCELADO','CANCELED','CANCELLED')`);
@@ -307,11 +288,11 @@ async function createAppointmentTransactional(q, { tenant_id, clinic_id, branch_
         duplicateWhere.push(`clinic_id = $${duplicateParams.length}`);
       }
 
-      duplicateParams.push(String(resolvedSlot.doctor_id));
+      duplicateParams.push(String(slot.doctor_id));
       duplicateWhere.push(`doctor_id = $${duplicateParams.length}`);
-      duplicateParams.push(resolvedSlot.date);
+      duplicateParams.push(slot.date);
       duplicateWhere.push(`date = $${duplicateParams.length}`);
-      duplicateParams.push(resolvedSlot.start_time);
+      duplicateParams.push(slot.start_time);
       duplicateWhere.push(`start_time = $${duplicateParams.length}`);
       duplicateParams.push(phone ? String(phone) : null);
       duplicateWhere.push(`COALESCE(phone,'') = COALESCE($${duplicateParams.length},'')`);
@@ -362,10 +343,10 @@ async function createAppointmentTransactional(q, { tenant_id, clinic_id, branch_
 
     add(patientCol, p);
     add('phone', phone ? String(phone) : null);
-    add('doctor_id', String(resolvedSlot.doctor_id));
-    add('date', resolvedSlot.date);
-    add('start_time', resolvedSlot.start_time);
-    add('duration_hours', Number(resolvedSlot.duration_hours || 1));
+    add('doctor_id', String(slot.doctor_id));
+    add('date', slot.date);
+    add('start_time', slot.start_time);
+    add('duration_hours', Number(slot.duration_hours || 1));
     add('service_id', String(service_id));
 
     if (cols.hasStatus) add('status', 'Pendiente');
@@ -422,4 +403,5 @@ module.exports = {
   getServices,
   computeAvailability,
   createAppointmentTransactional,
+  resolveTenantId,
 };
