@@ -17,16 +17,11 @@ function selectedVersion(ctx) {
     'v5'
   ).trim().toLowerCase();
 
-  const tenantId = String(
-    ctx?.tenant_id ||
-    ctx?.clinic_id ||
-    ''
-  ).trim();
-
+  const tenantId = String(ctx?.tenant_id || ctx?.clinic_id || '').trim();
   const allowlist = csvEnv('RECEPTIONIST_V5_TENANTS');
   const denylist = csvEnv('RECEPTIONIST_V5_DISABLED_TENANTS');
 
-  console.log('🧭 RECEPCIONISTA SELECTOR', {
+  console.log('RECEPCIONISTA SELECTOR', {
     configured,
     tenantId,
     allowlist,
@@ -36,68 +31,87 @@ function selectedVersion(ctx) {
   });
 
   if (denylist.includes(tenantId)) return 'v4';
-
   if (configured === 'v5') {
-    if (allowlist.length === 0) return 'v5';
-    return allowlist.includes(tenantId) ? 'v5' : 'v4';
+    return allowlist.length === 0 || allowlist.includes(tenantId) ? 'v5' : 'v4';
   }
-
   if (configured === 'v4' || configured === 'v3') return 'v4';
-
-  if (allowlist.length > 0) {
-    return allowlist.includes(tenantId) ? 'v5' : 'v4';
-  }
-
+  if (allowlist.length > 0) return allowlist.includes(tenantId) ? 'v5' : 'v4';
   return 'v5';
+}
+
+function assertValidOutput(out, version) {
+  if (!out || typeof out !== 'object') {
+    const error = new Error(`${version} devolvió una salida vacía o inválida`);
+    error.code = 'INVALID_RECEPTIONIST_OUTPUT';
+    throw error;
+  }
+  if (typeof out.reply !== 'string' || !out.reply.trim()) {
+    const error = new Error(`${version} no devolvió reply como texto`);
+    error.code = 'INVALID_RECEPTIONIST_REPLY';
+    error.details = {
+      outputType: typeof out,
+      keys: Object.keys(out || {}),
+      used: out?.used || null,
+      engine_version: out?.engine_version || null,
+    };
+    throw error;
+  }
+  if (!out.state || typeof out.state !== 'object') {
+    const error = new Error(`${version} no devolvió state válido`);
+    error.code = 'INVALID_RECEPTIONIST_STATE';
+    throw error;
+  }
+  return out;
 }
 
 async function orchestrate(q, ctx, state, text) {
   const version = selectedVersion(ctx);
+  const tenantId = String(ctx?.tenant_id || ctx?.clinic_id || '');
 
-  console.log('🧭 MOTOR SELECCIONADO', {
-    tenantId: String(ctx?.tenant_id || ctx?.clinic_id || ''),
-    version,
-  });
+  console.log('MOTOR SELECCIONADO', { tenantId, version });
 
   if (version === 'v4') {
-    const out = await v4.orchestrate(q, ctx, state, text);
-    return {
-      ...out,
-      engine_version: 'v4',
-    };
+    const out = assertValidOutput(await v4.orchestrate(q, ctx, state, text), 'V4');
+    return { ...out, engine_version: 'v4' };
   }
 
   try {
-    const out = await v5.orchestrate(q, ctx, state, text);
-    return {
-      ...out,
-      engine_version: 'v5',
-    };
+    const raw = await v5.orchestrate(q, ctx, state, text);
+    console.log('V5 OUTPUT DIAGNOSTIC', {
+      outputType: typeof raw,
+      isNull: raw === null,
+      keys: raw && typeof raw === 'object' ? Object.keys(raw) : [],
+      replyType: typeof raw?.reply,
+      used: raw?.used || null,
+    });
+    const out = assertValidOutput(raw, 'V5');
+    return { ...out, engine_version: 'v5' };
   } catch (error) {
-    console.error('❌ Recepcionista V5 falló:', {
+    console.error('Recepcionista V5 falló:', {
       message: error?.message,
+      code: error?.code || null,
+      details: error?.details || null,
       stack: error?.stack,
-      tenantId: String(ctx?.tenant_id || ctx?.clinic_id || ''),
+      tenantId,
     });
 
     const fallbackEnabled = String(
       process.env.RECEPTIONIST_V5_FALLBACK_TO_V4 || 'true'
     ).trim().toLowerCase() !== 'false';
 
-    if (fallbackEnabled) {
-      const out = await v4.orchestrate(q, ctx, state, text);
-      return {
-        ...out,
-        engine_version: 'v4-fallback',
-        v5_error: error?.message || String(error),
-      };
-    }
+    if (!fallbackEnabled) throw error;
 
-    throw error;
+    const fallback = assertValidOutput(
+      await v4.orchestrate(q, ctx, state, text),
+      'V4 fallback'
+    );
+
+    return {
+      ...fallback,
+      engine_version: 'v4-fallback',
+      v5_error: error?.message || String(error),
+    };
   }
 }
 
-module.exports = {
-  orchestrate,
-  selectedVersion,
-};
+module.exports = { orchestrate, selectedVersion, assertValidOutput };
