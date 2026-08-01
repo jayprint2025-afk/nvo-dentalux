@@ -1,7 +1,7 @@
 // modules/ai-saas-routes.js
 // CliniqOne SaaS: aislamiento estricto por tenant_id obtenido exclusivamente del JWT.
 const { safeJson, saveState, logEvent } = require('./conversation-state');
-const { orchestrate } = require('./ai-orchestrator');
+const { orchestrate } = require('./receptionist-selector');
 
 function tenantFromAuth(req) {
   const tenantId = req?.auth?.tenantId;
@@ -166,7 +166,7 @@ function setupAiSaasRoutes(app, q) {
       await q(
         `INSERT INTO ai_messages(tenant_id, conversation_id, role, content, meta)
          VALUES ($1::uuid, $2, 'assistant', $3, $4::jsonb)`,
-        [tenantId, conversationId, out.reply, JSON.stringify({ used: out.used || 'saas', tenant_id: tenantId })]
+        [tenantId, conversationId, out.reply, JSON.stringify({ used: out.used || 'saas', tenant_id: tenantId, engine_version: out.engine_version || 'v3' })]
       );
 
       // saveState es seguro por RLS; reforzamos además que la conversación ya fue validada por tenant.
@@ -184,7 +184,7 @@ function setupAiSaasRoutes(app, q) {
         console.warn('⚠️ ai_logs falló sin cancelar la respuesta:', logError.message);
       }
 
-      return res.json({ conversationId, reply: out.reply, used: out.used });
+      return res.json({ conversationId, reply: out.reply, used: out.used, engineVersion: out.engine_version || 'v3' });
     } catch (error) {
       console.error('❌ ERROR /api/ai/chat:', error);
       return res.status(error.statusCode || 500).json({ error: error.message || String(error) });

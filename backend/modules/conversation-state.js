@@ -35,8 +35,20 @@ async function saveState(q, conversationId, state) {
 
 function ensureStateDefaults(state) {
   const s = state && typeof state === 'object' ? state : {};
-  if (!s.stage) s.stage = 'idle'; // idle | collect_branch | collect_date | collect_service | offer_slots | confirm | done
+
+  if (!s.stage) s.stage = 'idle';
   if (!s.created_at_ms) s.created_at_ms = Date.now();
+  if (!s.turn_count) s.turn_count = 0;
+  if (!s.same_prompt_count) s.same_prompt_count = 0;
+  if (!s.same_user_text_count) s.same_user_text_count = 0;
+  if (!Array.isArray(s.prompt_history)) s.prompt_history = [];
+  if (!Array.isArray(s.recent_user_messages)) s.recent_user_messages = [];
+  if (!Array.isArray(s.recent_replies)) s.recent_replies = [];
+  if (!Array.isArray(s.options)) s.options = [];
+  if (s.duration_hours == null) s.duration_hours = 1;
+  if (s.confirmation_requested == null) s.confirmation_requested = false;
+  if (s.booking_completed == null) s.booking_completed = false;
+
   return s;
 }
 
@@ -55,13 +67,27 @@ function resetBooking(state, keep = {}) {
     branch_key: keep.branch_key || null,
     date: null,
     service_id: null,
+    service_name: null,
+    pending_service_text: null,
     patient: null,
     phone: keep.phone || null,
     duration_hours: 1,
     time_pref: null,
     min_start_mins: null,
     options: [],
+    current_slot: null,
+    selected_slot: null,
+    slot_index: 0,
+    slot_rejections: 0,
+    confirmation_requested: false,
+    exact_time_unavailable: false,
+    booking_completed: false,
     last_reply: null,
+    last_prompt_key: null,
+    same_prompt_count: 0,
+    same_user_text_count: 0,
+    recent_user_messages: [],
+    recent_replies: [],
   };
 }
 

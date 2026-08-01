@@ -104,18 +104,33 @@ function isPastDate(isoDate) {
 
 function isAffirmative(text) {
   const value = normalizeForMatch(text);
-  return /^(si|claro|ok|okay|va|sale|perfecto|correcto|confirmo|adelante|me funciona|esta bien|yes)$/.test(value)
-    || /\b(si me funciona|si confirmo|confirmada|confirmado|ese horario esta bien|de acuerdo)\b/.test(value);
+  return /^(si|sip|simon|claro|ok|okay|va|sale|perfecto|correcto|confirmo|confirmar|adelante|me funciona|esta bien|yes|dale|listo|asi esta bien|ese esta bien)$/.test(value)
+    || /\b(si me funciona|si confirmo|quiero confirmar|queda confirmado|confirmada|confirmado|ese horario esta bien|de acuerdo|agendala|agendalo|reservala|reservalo)\b/.test(value);
 }
 
 function isNegative(text) {
   const value = normalizeForMatch(text);
-  return /^(no|nop|nel|no gracias|ese no|no puedo|no me funciona)$/.test(value)
-    || /\b(otro horario|otra hora|mas tarde|mas temprano|no me sirve|no puedo a esa hora)\b/.test(value);
+  return /^(no|nop|nel|no gracias|ese no|esa no|no puedo|no me funciona|cambialo|cambiar)$/.test(value)
+    || /\b(otro horario|otra hora|otro dia|otra fecha|otra sucursal|otro servicio|mas tarde|mas temprano|no me sirve|no puedo a esa hora|prefiero otra|quiero cambiar)\b/.test(value);
 }
 
 function cancelIntent(text) {
   return /\b(ya no|no me interesa|cancelar proceso|olvidalo|mejor no|ya no quiero|salir|reiniciar|menu)\b/i.test(normalizeForMatch(text));
+}
+
+function restartIntent(text) {
+  const value = normalizeForMatch(text);
+  return /^(reiniciar|empezar de nuevo|volver a empezar|nueva cita|otra cita|menu principal)$/.test(value);
+}
+
+function humanHandoffIntent(text) {
+  const value = normalizeForMatch(text);
+  return /\b(hablar con una persona|hablar con alguien|asesor|recepcionista humana|humano|operador|atencion personal|que me llamen)\b/.test(value);
+}
+
+function gratitudeOnly(text) {
+  const value = normalizeForMatch(text);
+  return /^(gracias|muchas gracias|ok gracias|perfecto gracias|muy amable)$/.test(value);
 }
 
 function looksLikeBookingIntent(text) {
@@ -131,8 +146,11 @@ function looksLikeServiceRequest(text) {
 
 function isInformationRequest(text) {
   const value = normalizeForMatch(text);
-  return /\b(direccion|ubicacion|donde|como llegar|mapa|telefono|whatsapp|contacto|horario|horarios|abre|cierra|promocion|oferta|precio|costo|cuanto cuesta)\b/.test(value)
-    && !looksLikeBookingIntent(text);
+
+  // Las preguntas informativas tienen prioridad aunque también mencionen
+  // un servicio: "¿cuánto cuesta una consulta?" no es una orden de agendar.
+  return /\b(direccion|ubicacion|donde|como llegar|mapa|telefono|whatsapp|contacto|horario|horarios|abre|cierra|promocion|oferta|precio|precios|costo|costos|cuanto cuesta|cuanto sale|que valor)\b/.test(value)
+    || /\b(cuanto|que precio|que costo)\b.*\b(consulta|limpieza|resina|extraccion|endodoncia|corona|blanqueamiento|brackets|ortodoncia)\b/.test(value);
 }
 
 function findServiceByText(services, text) {
@@ -369,6 +387,56 @@ async function logTenantEvent(q, ctx, event, payload = {}) {
   }
 }
 
+
+function pendingBookingPrompt(state, services = []) {
+  if (!state || state.intent !== 'booking') return '';
+
+  if (!state.branch_key) {
+    return branchPrompt();
+  }
+
+  if (!state.service_id) {
+    return servicePrompt(services);
+  }
+
+  if (!state.date) {
+    return datePrompt(state.branch_key);
+  }
+
+  if (state.stage === 'offer_slot' && state.current_slot) {
+    return `Seguimos con tu cita: tengo disponible a las ${formatTime(state.current_slot.start_time)}. ¿Te funciona ese horario?`;
+  }
+
+  if (state.stage === 'collect_name') {
+    return 'Para continuar con la cita, ¿a nombre de quién la registramos?';
+  }
+
+  if (state.stage === 'collect_phone') {
+    return 'Para continuar, ¿qué número de teléfono deseas dejar para el recordatorio?';
+  }
+
+  if (state.stage === 'final_confirm' && state.selected_slot) {
+    return finalConfirmationText(state);
+  }
+
+  return '';
+}
+
+function joinInformationAndResume(infoReply, resumePrompt) {
+  const info = asText(infoReply).trim();
+  const resume = asText(resumePrompt).trim();
+
+  if (!resume) return info;
+  if (!info) return resume;
+
+  // Evita que el modelo repita exactamente la pregunta pendiente.
+  const normalizedInfo = normalizeForMatch(info);
+  const normalizedResume = normalizeForMatch(resume);
+  if (normalizedInfo.includes(normalizedResume)) return info;
+
+  return `${info}\n\n${resume}`;
+}
+
 async function friendlyAIReply(ctx, state, userText) {
   try {
     const aiResponse = await generateAIReply({
@@ -386,6 +454,8 @@ async function friendlyAIReply(ctx, state, userText) {
         rules: [
           'Responde en español, con tono cálido y profesional.',
           'No inventes precios, horarios, doctores, direcciones ni promociones.',
+          'Responde primero y directamente la pregunta informativa del paciente.',
+          'Si pregunta un precio y no está en el contexto disponible, dilo con honestidad y no inventes una cantidad.',
           'No repitas saludos ni preguntas ya contestadas.',
           'Usa máximo tres oraciones breves.',
           'No muestres calendarios ni listas de doctores.',
@@ -505,9 +575,152 @@ function applyRevisionRequest(state, text) {
   return false;
 }
 
-async function orchestrate(q, ctx, incomingState, userText) {
+
+function bookingFingerprint(state) {
+  return JSON.stringify({
+    stage: state.stage || null,
+    branch: state.branch_key || null,
+    service: state.service_id || null,
+    date: state.date || null,
+    time: state.current_slot?.start_time || state.selected_slot?.start_time || state.time_pref?.requested_time || null,
+    patient: state.patient || null,
+    phone: state.phone || null,
+  });
+}
+
+function missingBookingField(state) {
+  if (!state.branch_key) return 'branch';
+  if (!state.service_id) return 'service';
+  if (!state.date) return 'date';
+  if (!state.selected_slot && !state.current_slot) return 'slot';
+  if (!state.selected_slot) return 'slot_confirmation';
+  if (!state.phone) return 'phone';
+  if (!state.patient) return 'name';
+  return 'final_confirmation';
+}
+
+function recoveryPrompt(state) {
+  const missing = missingBookingField(state);
+  const known = [
+    state.branch_key ? `sucursal ${getBranchDisplayName(state.branch_key)}` : null,
+    state.service_name ? `servicio ${state.service_name}` : null,
+    state.date ? `fecha ${formatDateSpanish(state.date)}` : null,
+    (state.selected_slot || state.current_slot)?.start_time
+      ? `hora ${formatTime((state.selected_slot || state.current_slot).start_time)}`
+      : null,
+    state.patient ? `nombre ${state.patient}` : null,
+    state.phone ? `teléfono terminado en ${String(state.phone).slice(-4)}` : null,
+  ].filter(Boolean);
+
+  const prefix = known.length
+    ? `Tengo registrado: ${known.join(', ')}.`
+    : 'Vamos a continuar con tu cita.';
+
+  const questions = {
+    branch: '¿Prefieres sucursal Victoria o Condesa?',
+    service: '¿Qué servicio o tratamiento necesitas?',
+    date: '¿Qué día te gustaría asistir?',
+    slot: '¿Qué hora prefieres aproximadamente?',
+    slot_confirmation: `¿Confirmas el horario de las ${formatTime(state.current_slot?.start_time)}?`,
+    phone: '¿Qué número de 10 dígitos deseas dejar para la confirmación?',
+    name: '¿A nombre de quién registro la cita?',
+    final_confirmation: '¿Confirmas todos los datos para guardar la cita en la agenda?',
+  };
+
+  return `${prefix}\n\n${questions[missing]}`;
+}
+
+function applyLoopProtection(result, userText) {
+  const state = ensureStateDefaults(result?.state || {});
+  const normalizedUser = normalizeForMatch(userText);
+  const fingerprint = bookingFingerprint(state);
+  const promptKey = String(result?.used || state.stage || 'reply');
+  const reply = asText(result?.reply).trim();
+
+  state.turn_count = Number(state.turn_count || 0) + 1;
+
+  if (normalizedUser && normalizedUser === state.last_user_text) {
+    state.same_user_text_count = Number(state.same_user_text_count || 0) + 1;
+  } else {
+    state.same_user_text_count = 0;
+  }
+
+  if (promptKey === state.last_prompt_key && fingerprint === state.last_fingerprint) {
+    state.same_prompt_count = Number(state.same_prompt_count || 0) + 1;
+  } else {
+    state.same_prompt_count = 0;
+  }
+
+  state.recent_user_messages = [...(state.recent_user_messages || []), normalizedUser].slice(-6);
+  state.recent_replies = [...(state.recent_replies || []), reply].slice(-6);
+  state.prompt_history = [...(state.prompt_history || []), promptKey].slice(-12);
+
+  state.last_user_text = normalizedUser;
+  state.last_prompt_key = promptKey;
+  state.last_fingerprint = fingerprint;
+  state.last_reply = reply;
+
+  if (state.same_prompt_count >= 2) {
+    state.same_prompt_count = 0;
+    return {
+      ...result,
+      reply: `${recoveryPrompt(state)}\n\nTambién puedes escribir “hablar con una persona”.`,
+      state,
+      used: 'loop_recovery',
+    };
+  }
+
+  if (state.same_user_text_count >= 2) {
+    state.same_user_text_count = 0;
+    return {
+      ...result,
+      reply: `${recoveryPrompt(state)}\n\nParece que no interpreté bien tu respuesta. Puedes responder con una frase breve o pedir hablar con una persona.`,
+      state,
+      used: 'repeated_user_recovery',
+    };
+  }
+
+  if (state.turn_count >= 35 && state.intent === 'booking') {
+    state.turn_count = 0;
+    return {
+      ...result,
+      reply: `${recoveryPrompt(state)}\n\nLa conversación se ha extendido bastante; no perderé los datos que ya me diste.`,
+      state,
+      used: 'long_conversation_recovery',
+    };
+  }
+
+  return { ...result, state };
+}
+
+async function orchestrateCore(q, ctx, incomingState, userText) {
   let state = ensureStateDefaults(incomingState);
   const text = asText(userText).trim();
+
+  if (humanHandoffIntent(text)) {
+    state.handoff_requested = true;
+    return {
+      reply: 'Claro. Voy a dejar registrada tu solicitud para que una persona del equipo continúe contigo. Mientras tanto, conservaré los datos que ya proporcionaste.',
+      state,
+      used: 'human_handoff',
+    };
+  }
+
+  if (restartIntent(text)) {
+    const reset = cleanReset(state, {
+      phone: normalizePhone(state.phone || ctx.phone) || state.phone || ctx.phone || null,
+      branch_key: null,
+    });
+    return {
+      reply: 'Empecemos de nuevo 😊 ¿En qué sucursal deseas tu cita: Victoria o Condesa?',
+      state: { ...reset, intent: 'booking', stage: 'collect_branch', booking_started_at_ms: Date.now() },
+      used: 'booking_restarted',
+    };
+  }
+
+  if (gratitudeOnly(text) && state.stage === 'idle') {
+    return { reply: 'Con gusto 😊 Estoy aquí para ayudarte cuando lo necesites.', state, used: 'gratitude' };
+  }
 
   console.log('🤖 RECEPTIONIST V2', {
     text,
@@ -537,12 +750,20 @@ async function orchestrate(q, ctx, incomingState, userText) {
   const inBooking = state.intent === 'booking' || (state.stage && state.stage !== 'idle');
 
   if (!inBooking) {
+    if (isInformationRequest(text)) {
+      const reply = await friendlyAIReply(ctx, state, text);
+      state.last_info_provided = true;
+      state.last_info_question = normalizeForMatch(text);
+      state.last_info_at = new Date().toISOString();
+      return { reply, state, used: 'information_ai' };
+    }
+
     if (looksLikeBookingIntent(text)) {
       state = startBooking(state, ctx, text);
     } else {
       const reply = await friendlyAIReply(ctx, state, text);
-      state.last_info_provided = isInformationRequest(text);
-      return { reply, state, used: isInformationRequest(text) ? 'information_ai' : 'friendly_ai' };
+      state.last_info_provided = false;
+      return { reply, state, used: 'friendly_ai' };
     }
   }
 
@@ -573,6 +794,55 @@ async function orchestrate(q, ctx, incomingState, userText) {
 
   if (preference && ['collect_date', 'offer_slot', 'revise_confirmation'].includes(state.stage)) {
     state.time_pref = preference;
+  }
+
+  // Captura datos útiles aunque el paciente los envíe antes de que se soliciten.
+  const phoneAnywhere = normalizePhone(text);
+  if (phoneAnywhere && /\d/.test(text)) {
+    state.phone = phoneAnywhere;
+  }
+
+  if (!state.patient && !isAffirmative(text) && !isNegative(text) && !isInformationRequest(text)) {
+    const possibleName = asText(text).trim().replace(/^a nombre de\s+/i, '');
+    if (/^[a-záéíóúñü.' -]{2,80}$/i.test(possibleName)
+        && !looksLikeBookingIntent(possibleName)
+        && !normBranch(possibleName)
+        && !parseDateFromText(possibleName)
+        && !parseTimePreference(possibleName)) {
+      if (state.stage === 'collect_name' || /\b(me llamo|soy|a nombre de)\b/i.test(text)) {
+        state.patient = possibleName.replace(/^(me llamo|soy|a nombre de)\s+/i, '').trim();
+      }
+    }
+  }
+
+  // Una pregunta informativa puede aparecer en cualquier momento del agendamiento.
+  // Se responde sin reiniciar el estado ni convertirla por error en una nueva etapa.
+  if (inBooking && isInformationRequest(text)) {
+    const servicesForInfo = state.branch_key
+      ? await getServices(q, state.branch_key)
+      : [];
+
+    // Si menciona un servicio, lo recordamos, pero no avanzamos como si hubiera
+    // respondido una pregunta diferente.
+    const mentionedService = findServiceByText(servicesForInfo, text);
+    if (mentionedService && !state.service_id) {
+      state.service_id = mentionedService.id;
+      state.service_name = mentionedService.name;
+      state.pending_service_text = null;
+    }
+
+    const infoReply = await friendlyAIReply(ctx, state, text);
+    const resumePrompt = pendingBookingPrompt(state, servicesForInfo);
+
+    state.last_info_provided = true;
+    state.last_info_question = normalizeForMatch(text);
+    state.last_info_at = new Date().toISOString();
+
+    return {
+      reply: joinInformationAndResume(infoReply, resumePrompt),
+      state,
+      used: 'booking_information_interruption',
+    };
   }
 
   if (state.stage === 'revise_confirmation') {
@@ -699,7 +969,14 @@ async function orchestrate(q, ctx, incomingState, userText) {
   }
 
   if (!isAffirmative(text)) {
-    if (isNegative(text)) {
+    const containsCorrection =
+      Boolean(normBranch(text))
+      || Boolean(parseDateFromText(text))
+      || Boolean(parseTimePreference(text))
+      || Boolean(findServiceByText(services, text))
+      || /\b(nombre|telefono|numero)\b/.test(normalizeForMatch(text));
+
+    if (isNegative(text) || containsCorrection) {
       state.stage = 'revise_confirmation';
       if (applyRevisionRequest(state, text)) {
         if (state.stage === 'collect_branch') return { reply: branchPrompt(), state, used: 'revise_branch' };
@@ -810,4 +1087,24 @@ async function orchestrate(q, ctx, incomingState, userText) {
   }
 }
 
-module.exports = { orchestrate };
+async function orchestrate(q, ctx, incomingState, userText) {
+  const result = await orchestrateCore(q, ctx, incomingState, userText);
+  return applyLoopProtection(result, userText);
+}
+
+module.exports = {
+  orchestrate,
+  __test: {
+    normalizeForMatch,
+    parseDateFromText,
+    parseTimePreference,
+    normalizePhone,
+    isAffirmative,
+    isNegative,
+    isInformationRequest,
+    looksLikeBookingIntent,
+    bookingFingerprint,
+    missingBookingField,
+    recoveryPrompt,
+  },
+};

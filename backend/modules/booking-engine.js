@@ -187,6 +187,13 @@ async function createAppointmentTransactional(q, { tenant_id, clinic_id, branch_
   const cols = await getAppointmentsColumns(q);
   const resolvedTenantId = String(tenant_id || clinic_id || '').trim();
 
+  if (!resolvedTenantId) throw new Error('tenant_id ausente al crear la cita');
+  if (!branch_key) throw new Error('sucursal ausente al crear la cita');
+  if (!service_id) throw new Error('servicio ausente al crear la cita');
+  if (!slot?.doctor_id || !slot?.date || !slot?.start_time) {
+    throw new Error('horario incompleto al crear la cita');
+  }
+
   // nombre de columna de paciente (tu app legacy suele usar patient)
   const patientCol = cols.hasPatient ? 'patient' : (cols.hasPaciente ? 'paciente' : 'patient');
 
@@ -219,9 +226,51 @@ async function createAppointmentTransactional(q, { tenant_id, clinic_id, branch_
       `SELECT id FROM appointments WHERE ${lockWhere.join(' AND ')} FOR UPDATE`,
       lockParams
     );
-    if (exists.length) throw new Error('Horario ya fue tomado');
-
     const p = asText(patient).trim() || 'Paciente';
+
+    if (exists.length) {
+      const duplicateParams = [];
+      const duplicateWhere = [];
+
+      if (cols.hasTenantId) {
+        duplicateParams.push(resolvedTenantId);
+        duplicateWhere.push(`tenant_id = $${duplicateParams.length}::uuid`);
+      } else if (cols.hasClinicId) {
+        duplicateParams.push(String(clinic_id || resolvedTenantId));
+        duplicateWhere.push(`clinic_id = $${duplicateParams.length}`);
+      }
+
+      duplicateParams.push(String(slot.doctor_id));
+      duplicateWhere.push(`doctor_id = $${duplicateParams.length}`);
+      duplicateParams.push(slot.date);
+      duplicateWhere.push(`date = $${duplicateParams.length}`);
+      duplicateParams.push(slot.start_time);
+      duplicateWhere.push(`start_time = $${duplicateParams.length}`);
+      duplicateParams.push(phone ? String(phone) : null);
+      duplicateWhere.push(`COALESCE(phone,'') = COALESCE($${duplicateParams.length},'')`);
+
+      const { rows: duplicateRows } = await q(
+        `SELECT id, ${patientCol} AS patient, date, start_time, doctor_id
+           FROM appointments
+          WHERE ${duplicateWhere.join(' AND ')}
+          ORDER BY id DESC
+          LIMIT 1`,
+        duplicateParams
+      );
+
+      if (duplicateRows?.[0]?.id) {
+        await q('COMMIT');
+        return {
+          ...duplicateRows[0],
+          tenant_id: resolvedTenantId || null,
+          branch_key: String(branch_key || ''),
+          verified: true,
+          existing: true,
+        };
+      }
+
+      throw new Error('Horario ya fue tomado');
+    }
 
     // Construcción de INSERT por columnas existentes:
     const colNames = [];
