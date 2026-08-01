@@ -4,6 +4,7 @@
 const Memory = require('./conversation-memory');
 const Appointment = require('./appointment-tools');
 const Grounding = require('./conversation-grounding');
+const ObjectivePlanner = require('./booking-objective-planner');
 
 const SYSTEM_RULES = `
 Eres una recepcionista dental humana, cálida, eficiente y profesional.
@@ -28,7 +29,7 @@ Devuelve JSON:
 {
   "reply":"respuesta natural",
   "state_patch":{"collected":{},"conversation_summary":"","pending_booking":null},
-  "action":{"type":"none|check_availability|prepare_confirmation|create_appointment|handoff","args":{}},
+  "action":{"type":"none|check_availability|find_next_available_date|prepare_confirmation|create_appointment|handoff","args":{}},
   "reason":"breve explicación interna"
 }
 `;
@@ -65,7 +66,7 @@ function explicitConfirmation(text, state = null) {
 
 function safePlan(raw) {
   const plan = raw && typeof raw === 'object' ? raw : {};
-  const allowed = new Set(['none', 'check_availability', 'prepare_confirmation', 'create_appointment', 'handoff']);
+  const allowed = new Set(['none', 'check_availability', 'find_next_available_date', 'prepare_confirmation', 'create_appointment', 'handoff']);
   return {
     reply: typeof plan.reply === 'string' ? plan.reply.trim() : '',
     state_patch: plan.state_patch && typeof plan.state_patch === 'object' ? plan.state_patch : {},
@@ -113,6 +114,7 @@ function contextMessage(knowledge, state, userText, detected, toolResult = null)
       appointment_id: state.appointment_id,
     },
     CURRENT_USER_MESSAGE: userText,
+    BOOKING_OBJECTIVE: ObjectivePlanner.objectiveContext(state),
     TOOL_RESULT: toolResult,
   });
 }
@@ -482,6 +484,7 @@ function updatedConfirmationReply(args, knowledge) {
 
 async function runAgent(q, ctx, incoming, userText, knowledge) {
   const state = Memory.initialState(incoming);
+  ObjectivePlanner.ensureGoal(state);
   const previousCollected = { ...(state.collected || {}) };
   const previousPending = state.pending_booking
     ? { ...state.pending_booking }
@@ -529,6 +532,8 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
     plan.reason =
       'Datos modificados antes de confirmar; volver a validar disponibilidad.';
   }
+
+  plan = ObjectivePlanner.applyObjectiveOverride({ state, userText, plan });
 
   // La IA redacta libremente, pero no decide si debe volver a preguntar datos ya conocidos.
   // Si el paciente está intentando agendar y ya tenemos sucursal, servicio y fecha,
@@ -631,9 +636,16 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
       // Guardar el horario ofrecido aunque el modelo no lo incluya en state_patch.
       if (selected) {
         state.collected.start_time = String(selected.start_time).slice(0, 5);
+        state.collected.doctor_id = selected.doctor_id || state.collected.doctor_id || null;
+        state.collected.doctor_name = selected.doctor_name || state.collected.doctor_name || null;
+        state.collected.selected_slot = {
+          ...selected,
+          date: selected.date || state.collected.date,
+        };
         if (selected.end_time) {
           state.collected.end_time = String(selected.end_time).slice(0, 5);
         }
+        ObjectivePlanner.markSlotValidated(state, state.collected.selected_slot);
       }
 
       // El modelo no puede volver a pedir sucursal, servicio o fecha después de una consulta exitosa.
@@ -655,10 +667,13 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
           `el ${state.collected.date} a las ${String(selected.start_time).slice(0, 5)}. ` +
           `¿Te funciona ese horario?`;
       } else if (!selected) {
+        ObjectivePlanner.markUnavailable(state, {
+          date: state.collected.date,
+          reason: 'La clínica está cerrada o no tiene disponibilidad en esa fecha.',
+        });
         plan.reply =
-          `No encontré horarios disponibles para el ${state.collected.date}` +
-          `${state.collected.after_time ? ` después de las ${state.collected.after_time}` : ''}. ` +
-          `Puedo buscar otro día u otro rango de horario.`;
+          `No tenemos disponibilidad para el ${state.booking_goal.last_invalid_date}. ` +
+          `Puedo buscarte automáticamente la siguiente fecha disponible. ¿Deseas que lo haga?`;
       }
 
       if (bookingModification.changed) {
@@ -714,6 +729,93 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
         }
       } else {
         used = 'check_availability';
+      }
+    }
+  }
+
+
+  if (plan.action.type === 'find_next_available_date') {
+    const args = { ...state.collected, ...(plan.action.args || {}) };
+
+    if (!args.branch_key || !args.service_id) {
+      plan.reply = !args.branch_key
+        ? '¿En cuál sucursal deseas atenderte?'
+        : '¿Qué servicio necesitas?';
+      plan.action = { type: 'none', args: {} };
+      used = 'alternative_missing_data';
+    } else {
+      const baseDate = String(
+        args.after_date ||
+        state.booking_goal?.last_invalid_date ||
+        args.date ||
+        new Date().toISOString().slice(0, 10)
+      ).slice(0, 10);
+
+      let found = null;
+
+      for (let offset = 1; offset <= 14; offset += 1) {
+        const candidate = new Date(`${baseDate}T12:00:00Z`);
+        candidate.setUTCDate(candidate.getUTCDate() + offset);
+        const candidateDate = candidate.toISOString().slice(0, 10);
+
+        if (state.booking_goal.blocked_dates.includes(candidateDate)) continue;
+
+        const result = await Appointment.checkAvailability(q, ctx, {
+          ...args,
+          date: candidateDate,
+          start_time: null,
+          exact_time: null,
+        });
+
+        const slots = (Array.isArray(result.slots) ? result.slots : [])
+          .filter(slot =>
+            !state.rejected_slots.includes(String(slot.start_time || '').slice(0, 5))
+          );
+
+        if (slots.length) {
+          found = {
+            ...slots[0],
+            date: slots[0].date || candidateDate,
+          };
+          break;
+        }
+
+        ObjectivePlanner.markUnavailable(state, {
+          date: candidateDate,
+          reason: 'Sin disponibilidad.',
+        });
+      }
+
+      if (!found) {
+        plan.reply =
+          'No encontré disponibilidad durante los próximos 14 días. ' +
+          'Puedo ayudarte a probar otro horario o comunicarte con la clínica.';
+        plan.action = { type: 'none', args: {} };
+        used = 'no_alternative_dates';
+      } else {
+        state.collected.date = found.date;
+        state.collected.start_time = String(found.start_time).slice(0, 5);
+        state.collected.exact_time = String(found.start_time).slice(0, 5);
+        state.collected.doctor_id = found.doctor_id || null;
+        state.collected.doctor_name = found.doctor_name || null;
+        state.collected.selected_slot = found;
+
+        ObjectivePlanner.markSlotValidated(state, found);
+
+        const branch = knowledge.branches.find(
+          item => item.branch_key === state.collected.branch_key
+        );
+        const service = knowledge.services.find(
+          item => String(item.id) === String(state.collected.service_id)
+        );
+
+        plan.reply =
+          `La siguiente disponibilidad para ${service?.name || 'el servicio'} ` +
+          `en ${branch?.name || state.collected.branch_name || 'la sucursal seleccionada'} ` +
+          `es el ${found.date} a las ${String(found.start_time).slice(0, 5)}. ` +
+          `¿Te funciona ese horario?`;
+        plan.action = { type: 'none', args: {} };
+        used = 'alternative_date_offered';
       }
     }
   }
@@ -849,7 +951,7 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
     used = `${used}_guarded`;
   }
 
-  Memory.recordTurn(state, userText, plan.reply, { used });
+  Memory.recordTurn(state, userText, plan.reply, { used, objective: ObjectivePlanner.nextObjective(state) });
 
   return { reply: plan.reply, state, used, engine_version: 'v5' };
 }
