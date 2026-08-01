@@ -1,27 +1,4 @@
-'use strict';
-
-const v3 = require('./ai-orchestrator');
-const v4 = require('./receptionist-v4');
-
-function csvSet(value) {
-  return new Set(String(value || '').split(',').map(x => x.trim()).filter(Boolean));
-}
-
-function versionFor(ctx) {
-  const forced = String(process.env.RECEPTIONIST_VERSION || 'v3').toLowerCase();
-  const tenant = String(ctx?.tenant_id || ctx?.clinic_id || '');
-  const v4Tenants = csvSet(process.env.RECEPTIONIST_V4_TENANTS);
-  const v3Tenants = csvSet(process.env.RECEPTIONIST_V3_TENANTS);
-  if (v3Tenants.has(tenant)) return 'v3';
-  if (v4Tenants.has(tenant)) return 'v4';
-  return forced === 'v4' ? 'v4' : 'v3';
-}
-
-async function orchestrate(q, ctx, state, text) {
-  const version = versionFor(ctx);
-  const engine = version === 'v4' ? v4 : v3;
-  const out = await engine.orchestrate(q, ctx, state, text);
-  return { ...out, engine_version: version };
-}
-
-module.exports = { orchestrate, versionFor };
+'use strict';const v4=require('./receptionist-v4'),v5=require('./receptionist-v5');
+function selectedVersion(ctx){const configured=String(process.env.RECEPTIONIST_ENGINE_VERSION||'v5').trim().toLowerCase(),allow=String(process.env.RECEPTIONIST_V5_TENANTS||'').split(',').map(x=>x.trim()).filter(Boolean),deny=String(process.env.RECEPTIONIST_V5_DISABLED_TENANTS||'').split(',').map(x=>x.trim()).filter(Boolean),tenant=String(ctx?.tenant_id||ctx?.clinic_id||'');if(deny.includes(tenant))return'v4';if(allow.length)return allow.includes(tenant)?'v5':'v4';return configured==='v4'?'v4':'v5'}
+async function orchestrate(q,ctx,state,text){const version=selectedVersion(ctx);if(version==='v4')return{...(await v4.orchestrate(q,ctx,state,text)),engine_version:'v4'};try{return{...(await v5.orchestrate(q,ctx,state,text)),engine_version:'v5'}}catch(e){console.error('❌ Recepcionista V5 falló:',e);if(String(process.env.RECEPTIONIST_V5_FALLBACK_TO_V4||'true').toLowerCase()!=='false')return{...(await v4.orchestrate(q,ctx,state,text)),engine_version:'v4-fallback',v5_error:e.message};throw e}}
+module.exports={orchestrate,selectedVersion};
