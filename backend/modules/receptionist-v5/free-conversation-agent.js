@@ -40,10 +40,27 @@ function parseJson(text) {
   try { return JSON.parse(match[0]); } catch { return null; }
 }
 
-function explicitConfirmation(text) {
+function explicitConfirmation(text, state = null) {
   const value = Grounding.normalize(text);
-  if (/\b(no|cancelar|cancela|espera|dejame|todavia no|no confirmo)\b/.test(value)) return false;
-  return /\b(si\s*,?\s*(confirma|confirmala|agendala|agenda)|confirmo|todo correcto.*(confirma|agenda)|adelante.*(confirma|agenda)|agenda esa cita|confirma la cita)\b/.test(value);
+
+  if (/\b(no|cancelar|cancela|espera|dejame|todavia no|no confirmo|cambiar|corregir)\b/.test(value)) {
+    return false;
+  }
+
+  const explicit = /\b(si\s*,?\s*(confirma|confirmala|agendala|agenda)|confirmo|todo correcto.*(confirma|agenda)|adelante.*(confirma|agenda)|agenda esa cita|confirma la cita)\b/.test(value);
+  if (explicit) return true;
+
+  // Una respuesta breve sólo confirma cuando existe un resumen formal pendiente
+  // y el turno anterior pidió expresamente confirmar esa cita.
+  const shortAffirmative = /^(si|sí|ok|okay|correcto|esta bien|está bien|perfecto|de acuerdo|adelante)$/.test(value);
+  if (!shortAffirmative || !state?.pending_booking) return false;
+
+  const lastReply = String(state?.recent_turns?.slice(-1)?.[0]?.reply || '');
+  const confirmationWasRequested =
+    /confirm(a|as|ación)|deseas crear esta cita|responde.*confirma la cita/i.test(lastReply) ||
+    Boolean(state.pending_booking?.presented_at);
+
+  return confirmationWasRequested;
 }
 
 function safePlan(raw) {
@@ -111,6 +128,44 @@ function confirmationSummary(args, knowledge) {
     `Fecha: ${args.date}`,
     `Hora: ${String(args.start_time || '').slice(0, 5)}`,
   ].join('\n');
+}
+
+function normalizedPendingBooking(state, knowledge) {
+  const pending = state?.pending_booking;
+  if (!pending || typeof pending !== 'object') return null;
+
+  const data = {
+    ...state.collected,
+    ...pending,
+  };
+
+  const required = [
+    'patient',
+    'phone',
+    'branch_key',
+    'service_id',
+    'date',
+    'start_time',
+  ];
+
+  const missing = required.filter(key => !data[key]);
+  if (missing.length) return { data, missing, complete: false };
+
+  const summary = confirmationSummary(data, knowledge);
+  const booking_key = data.booking_key || Appointment.bookingKey(data);
+
+  state.pending_booking = {
+    ...data,
+    booking_key,
+    summary,
+    presented_at: data.presented_at || new Date().toISOString(),
+  };
+
+  return {
+    data: state.pending_booking,
+    missing: [],
+    complete: true,
+  };
 }
 
 function mergeActionArgs(plan, collected) {
@@ -325,19 +380,32 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
         summary: confirmationSummary(args, knowledge),
         presented_at: new Date().toISOString(),
       };
-      if (!plan.reply.includes('Paciente:')) {
-        plan.reply = `Perfecto. Antes de agendar, confirma estos datos:\n\n${state.pending_booking.summary}\n\n¿Confirmas que deseas crear esta cita?`;
-      }
+
+      // Siempre mostrar el resumen controlado por el backend.
+      // No confiar en una respuesta del modelo que pueda omitir datos.
+      plan.reply =
+        `Perfecto. Antes de agendar, confirma estos datos:\n\n` +
+        `${state.pending_booking.summary}\n\n` +
+        `¿Confirmas que deseas crear esta cita?`;
     }
     used = 'prepare_confirmation';
   }
 
   if (plan.action.type === 'create_appointment') {
-    const pending = state.pending_booking;
-    if (!pending || !explicitConfirmation(userText)) {
-      plan.reply = pending
-        ? `Antes de crearla necesito una confirmación clara de este resumen:\n\n${pending.summary}\n\nResponde “sí, confirma la cita” cuando estés lista.`
-        : 'Antes de crear la cita necesito reunir los datos, mostrarte el resumen y recibir tu confirmación explícita.';
+    const normalized = normalizedPendingBooking(state, knowledge);
+    const pending = normalized?.complete ? normalized.data : null;
+
+    if (!pending) {
+      const missing = normalized?.missing || [];
+      plan.reply = missing.length
+        ? `Antes de confirmar todavía necesito completar: ${missing.join(', ')}.`
+        : 'Antes de crear la cita necesito reunir los datos, mostrarte el resumen y recibir tu confirmación.';
+      used = 'confirmation_missing_data';
+    } else if (!explicitConfirmation(userText, state)) {
+      plan.reply =
+        `Antes de crearla necesito confirmar este resumen:\n\n` +
+        `${pending.summary}\n\n` +
+        `Puedes responder “sí, confirma la cita” o simplemente “Ok”.`;
       used = 'confirmation_blocked';
     } else if (state.completed_booking_keys.includes(pending.booking_key)) {
       plan.reply = 'Esa cita ya fue registrada anteriormente; no crearé un duplicado.';
@@ -410,4 +478,5 @@ module.exports = {
   safePlan,
   SYSTEM_RULES,
   deterministicInformation,
+  normalizedPendingBooking,
 };
