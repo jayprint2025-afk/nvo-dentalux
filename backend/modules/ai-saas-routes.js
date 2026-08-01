@@ -3,6 +3,31 @@
 const { safeJson, saveState, logEvent } = require('./conversation-state');
 const { orchestrate } = require('./receptionist-selector');
 
+
+// Serializa los turnos de una misma conversación dentro de la instancia.
+// Evita que dos webhooks lean el mismo estado y después se sobrescriban entre sí.
+const conversationQueues = new Map();
+
+async function withConversationLock(key, task) {
+  const queueKey = String(key);
+  const previous = conversationQueues.get(queueKey) || Promise.resolve();
+
+  let releaseCurrent;
+  const currentGate = new Promise(resolve => { releaseCurrent = resolve; });
+  const queued = previous.catch(() => {}).then(() => currentGate);
+  conversationQueues.set(queueKey, queued);
+
+  await previous.catch(() => {});
+  try {
+    return await task();
+  } finally {
+    releaseCurrent();
+    if (conversationQueues.get(queueKey) === queued) {
+      conversationQueues.delete(queueKey);
+    }
+  }
+}
+
 function tenantFromAuth(req) {
   const tenantId = req?.auth?.tenantId;
   if (!tenantId) {
@@ -128,95 +153,127 @@ function setupAiSaasRoutes(app, q) {
       }
       if (!userText) return res.status(400).json({ error: 'message vacío' });
 
-      const conv = await loadTenantConversation(q, tenantId, conversationId);
-      if (!conv) {
-        // No revelar si el ID existe en otra empresa.
-        return res.status(404).json({ error: 'Conversación no encontrada' });
-      }
+      return await withConversationLock(`${tenantId}:${conversationId}`, async () => {
+        // Cargar el estado dentro del lock para obtener siempre la versión más reciente.
+        const conv = await loadTenantConversation(q, tenantId, conversationId);
+        if (!conv) {
+          return res.status(404).json({ error: 'Conversación no encontrada' });
+        }
 
-      // La ruta no debe imponer una versión del motor.
-      // El selector y cada recepcionista son responsables de interpretar o migrar su estado.
-      const storedState = safeJson(conv.state, {});
-      const state = storedState && typeof storedState === 'object'
-        ? { ...storedState }
-        : {};
+        const storedState = safeJson(conv.state, {});
+        const state = storedState && typeof storedState === 'object'
+          ? { ...storedState }
+          : {};
 
-      const authenticatedPhone = String(req.body?.phone || state.phone || state.wa_phone || '').trim() || null;
-      const requestedBranch = String(req.body?.sucursal_id || '').trim();
-      if (authenticatedPhone) {
-        state.phone = authenticatedPhone;
-        state.wa_phone = authenticatedPhone;
-      }
-      if (requestedBranch && !state.branch_key) state.branch_key = requestedBranch;
+        const authenticatedPhone = String(
+          req.body?.phone ||
+          state.phone ||
+          state.wa_phone ||
+          state.collected?.phone ||
+          ''
+        ).trim() || null;
+        const requestedBranch = String(req.body?.sucursal_id || '').trim();
 
-      const ctx = {
-        tenant_id: tenantId,
-        clinic_id: tenantId, // compatibilidad con booking-engine; nunca proviene del frontend
-        channel: conv.channel || 'whatsapp',
-        external_id: conv.external_id || conv.phone_number_id || null,
-        conversationId,
-        phone: authenticatedPhone,
-      };
+        if (authenticatedPhone) {
+          state.phone = authenticatedPhone;
+          state.wa_phone = authenticatedPhone;
+          state.collected = {
+            ...(state.collected || {}),
+            phone: state.collected?.phone || authenticatedPhone
+          };
+        }
+        if (requestedBranch && !state.branch_key && !state.collected?.branch_key) {
+          state.branch_key = requestedBranch;
+          state.collected = {
+            ...(state.collected || {}),
+            branch_key: requestedBranch
+          };
+        }
 
-      await q(
-        `INSERT INTO ai_messages(tenant_id, conversation_id, role, content, meta)
-         VALUES ($1::uuid, $2, 'user', $3, $4::jsonb)`,
-        [tenantId, conversationId, userText, JSON.stringify({ tenant_id: tenantId, channel: ctx.channel })]
-      );
-
-      const out = await orchestrate(q, ctx, state, userText);
-      if (!out || typeof out.reply !== 'string' || !out.state || typeof out.state !== 'object') {
-        const error = new Error('La IA produjo una respuesta inválida');
-        error.statusCode = 502;
-        throw error;
-      }
-
-      const engineVersion = String(
-        out.engine_version ||
-        out.engineVersion ||
-        out.state?.version ||
-        'desconocida'
-      ).trim();
-
-      await q(
-        `INSERT INTO ai_messages(tenant_id, conversation_id, role, content, meta)
-         VALUES ($1::uuid, $2, 'assistant', $3, $4::jsonb)`,
-        [
-          tenantId,
+        console.log('🧠 STATE BEFORE', {
           conversationId,
-          out.reply,
-          JSON.stringify({
-            used: out.used || 'saas',
-            tenant_id: tenantId,
-            engine_version: engineVersion
-          })
-        ]
-      );
+          version: state.version || null,
+          collected: state.collected || {},
+          turn_count: state.turn_count || 0
+        });
 
-      // Guardar exactamente el estado producido por el motor seleccionado.
-      await saveState(q, conversationId, out.state);
-
-      try {
-        await logEvent(q, {
+        const ctx = {
           tenant_id: tenantId,
           clinic_id: tenantId,
-          conversation_id: conversationId,
-          event: 'chat_turn',
-          payload: {
-            used: out.used || 'saas',
-            text_len: userText.length,
-            engine_version: engineVersion
-          }
-        });
-      } catch (logError) {
-        console.warn('⚠️ ai_logs falló sin cancelar la respuesta:', logError.message);
-      }
+          channel: conv.channel || 'whatsapp',
+          external_id: conv.external_id || conv.phone_number_id || null,
+          conversationId,
+          phone: authenticatedPhone,
+        };
 
-      return res.json({
-        conversationId,
-        reply: out.reply,
-        used: out.used || 'saas',
-        engineVersion
+        await q(
+          `INSERT INTO ai_messages(tenant_id, conversation_id, role, content, meta)
+           VALUES ($1::uuid, $2, 'user', $3, $4::jsonb)`,
+          [tenantId, conversationId, userText, JSON.stringify({ tenant_id: tenantId, channel: ctx.channel })]
+        );
+
+        const out = await orchestrate(q, ctx, state, userText);
+        if (!out || typeof out.reply !== 'string' || !out.state || typeof out.state !== 'object') {
+          const error = new Error('La IA produjo una respuesta inválida');
+          error.statusCode = 502;
+          throw error;
+        }
+
+        const engineVersion = String(
+          out.engine_version ||
+          out.engineVersion ||
+          out.state?.version ||
+          'desconocida'
+        ).trim();
+
+        await q(
+          `INSERT INTO ai_messages(tenant_id, conversation_id, role, content, meta)
+           VALUES ($1::uuid, $2, 'assistant', $3, $4::jsonb)`,
+          [
+            tenantId,
+            conversationId,
+            out.reply,
+            JSON.stringify({
+              used: out.used || 'saas',
+              tenant_id: tenantId,
+              engine_version: engineVersion
+            })
+          ]
+        );
+
+        await saveState(q, conversationId, out.state);
+
+        console.log('🧠 STATE AFTER', {
+          conversationId,
+          version: out.state?.version || null,
+          collected: out.state?.collected || {},
+          turn_count: out.state?.turn_count || 0,
+          used: out.used || 'saas'
+        });
+
+        try {
+          await logEvent(q, {
+            tenant_id: tenantId,
+            clinic_id: tenantId,
+            conversation_id: conversationId,
+            event: 'chat_turn',
+            payload: {
+              used: out.used || 'saas',
+              text_len: userText.length,
+              engine_version: engineVersion,
+              collected_keys: Object.keys(out.state?.collected || {})
+            }
+          });
+        } catch (logError) {
+          console.warn('⚠️ ai_logs falló sin cancelar la respuesta:', logError.message);
+        }
+
+        return res.json({
+          conversationId,
+          reply: out.reply,
+          used: out.used || 'saas',
+          engineVersion
+        });
       });
     } catch (error) {
       console.error('❌ ERROR /api/ai/chat:', error);

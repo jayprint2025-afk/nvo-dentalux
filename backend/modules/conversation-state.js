@@ -22,15 +22,33 @@ async function loadConversation(q, conversationId) {
 }
 
 async function saveState(q, conversationId, state) {
-  console.log('💾 SAVING STATE:', { conversationId, last_info_provided: state?.last_info_provided, stage: state?.stage });
-  await q(
+  const payload = state && typeof state === 'object' ? state : {};
+  console.log('💾 SAVING STATE:', {
+    conversationId,
+    version: payload.version || null,
+    collected: payload.collected || {},
+    turn_count: payload.turn_count || 0
+  });
+
+  const result = await q(
     `UPDATE ai_conversations
         SET state = $2::jsonb,
             updated_at = NOW()
-      WHERE id = $1`,
-    [Number(conversationId), JSON.stringify(state || {})]
+      WHERE id = $1
+      RETURNING id, updated_at`,
+    [Number(conversationId), JSON.stringify(payload)]
   );
-  console.log('✅ STATE SAVED');
+
+  if (!result.rows?.length) {
+    const error = new Error(`No se pudo guardar el estado de la conversación ${conversationId}`);
+    error.code = 'CONVERSATION_STATE_NOT_SAVED';
+    throw error;
+  }
+
+  console.log('✅ STATE SAVED', {
+    conversationId,
+    updated_at: result.rows[0].updated_at
+  });
 }
 
 function ensureStateDefaults(state) {

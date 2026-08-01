@@ -4218,6 +4218,53 @@ async function callAiChatFromServer({ phone, message, channel, extra = {} }, req
   return j;
 }
 
+// Deduplicación persistente de eventos Messenger.
+// Meta puede reenviar el mismo MID; responder dos veces rompe el ritmo y puede pisar el estado.
+const messengerMidInFlight = new Set();
+
+async function claimMessengerMessageOnce(pageId, senderId, mid) {
+  const messageId = String(mid || '').trim();
+  if (!messageId) return true;
+
+  if (messengerMidInFlight.has(messageId)) return false;
+  messengerMidInFlight.add(messageId);
+
+  try {
+    await poolDB1.query(`
+      CREATE TABLE IF NOT EXISTS messenger_processed_messages (
+        mid TEXT PRIMARY KEY,
+        page_id TEXT,
+        sender_id TEXT,
+        processed_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+
+    const result = await poolDB1.query(
+      `INSERT INTO messenger_processed_messages(mid, page_id, sender_id)
+       VALUES ($1,$2,$3)
+       ON CONFLICT (mid) DO NOTHING
+       RETURNING mid`,
+      [messageId, String(pageId || ''), String(senderId || '')]
+    );
+
+    // Limpieza defensiva para que la tabla no crezca sin límite.
+    if (Math.random() < 0.01) {
+      poolDB1.query(
+        `DELETE FROM messenger_processed_messages
+          WHERE processed_at < NOW() - INTERVAL '30 days'`
+      ).catch(() => {});
+    }
+
+    return Boolean(result.rows?.length);
+  } catch (error) {
+    console.warn('⚠️ No se pudo verificar MID de Messenger:', error.message);
+    // Si falla la tabla, el Set en memoria todavía evita duplicados simultáneos.
+    return true;
+  } finally {
+    setTimeout(() => messengerMidInFlight.delete(messageId), 5 * 60 * 1000).unref?.();
+  }
+}
+
 // Verificación del webhook (Meta/FB)
 
 // =============================
@@ -4520,7 +4567,7 @@ async function getOrCreateAiConversationIdForMessenger(pageId, psid, dbKey, tena
         await client.query(
           `UPDATE ai_conversations
               SET state = CASE
-                    WHEN COALESCE(state->>'version','') IN ('v4', 'v5') THEN state
+                    WHEN COALESCE(state->>'version','') = 'v4' OR COALESCE(state->>'version','') LIKE 'v5%' THEN state
                     ELSE jsonb_build_object(
                       'version',$3::text,
                       'active',FALSE,
@@ -4748,6 +4795,17 @@ app.post('/api/messenger/webhook', async (req, res) => {
         // Ignora eco (mensajes que enviamos nosotros)
         if (event?.message?.is_echo) continue;
         if (!senderId || !msgText) continue;
+
+        const messageMid = event?.message?.mid || event?.postback?.mid || null;
+        const claimed = await claimMessengerMessageOnce(entry?.id, senderId, messageMid);
+        if (!claimed) {
+          console.log('♻️ Messenger MID duplicado ignorado', {
+            mid: messageMid,
+            pageId: entry?.id,
+            senderId
+          });
+          continue;
+        }
 
         const ai = await callAiChatForMessenger(senderId, entry?.id, String(msgText).trim(), req);
 
