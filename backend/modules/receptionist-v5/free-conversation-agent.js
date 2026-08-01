@@ -351,10 +351,160 @@ async function repairPlan({ messages, plan, violations, knowledge, state, userTe
   return mergeActionArgs(repair, state.collected);
 }
 
+
+function extractLastExplicitTime(text) {
+  const normalized = Grounding.normalize(text);
+  const matches = [
+    ...normalized.matchAll(
+      /\b(?:a las?|mejor a las?|cambial[ao]? a las?|pon(?:la|lo)? a las?)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/g
+    ),
+  ];
+
+  if (!matches.length) return null;
+
+  const match = matches[matches.length - 1];
+  let hour = Number(match[1]);
+  const minute = Number(match[2] || 0);
+  const meridiem = String(match[3] || '');
+
+  if (meridiem === 'pm' && hour < 12) hour += 12;
+  if (meridiem === 'am' && hour === 12) hour = 0;
+  if (!meridiem && /\btarde|noche\b/.test(normalized) && hour < 12) hour += 12;
+
+  if (hour > 23 || minute > 59) return null;
+
+  return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+}
+
+function detectBookingModification({
+  userText,
+  previousCollected,
+  previousPending,
+  grounding,
+}) {
+  if (!previousPending) {
+    return { changed: false, fields: {}, changed_fields: [] };
+  }
+
+  const fields = {};
+  const changedFields = [];
+  const before = {
+    ...previousCollected,
+    ...previousPending,
+  };
+
+  const explicitTime = extractLastExplicitTime(userText);
+  const detectedDate = grounding?.detected?.date || null;
+  const detectedBranch = grounding?.detected?.branch || null;
+  const detectedService = grounding?.detected?.service || null;
+
+  if (
+    explicitTime &&
+    String(explicitTime).slice(0, 5) !==
+      String(before.start_time || before.exact_time || '').slice(0, 5)
+  ) {
+    fields.start_time = explicitTime;
+    fields.exact_time = explicitTime;
+    changedFields.push('time');
+  }
+
+  if (detectedDate && detectedDate !== before.date) {
+    fields.date = detectedDate;
+    changedFields.push('date');
+  }
+
+  if (
+    detectedBranch?.branch_key &&
+    detectedBranch.branch_key !== before.branch_key
+  ) {
+    fields.branch_key = detectedBranch.branch_key;
+    fields.branch_name = detectedBranch.name || null;
+    changedFields.push('branch');
+  }
+
+  if (
+    detectedService?.id &&
+    String(detectedService.id) !== String(before.service_id || '')
+  ) {
+    fields.service_id = detectedService.id;
+    fields.service_name = detectedService.name || null;
+    changedFields.push('service');
+  }
+
+  return {
+    changed: changedFields.length > 0,
+    fields,
+    changed_fields: changedFields,
+  };
+}
+
+function invalidateSelectedSlot(state, changes) {
+  const keep = {
+    patient:
+      state.collected.patient ||
+      state.collected.patient_name ||
+      state.pending_booking?.patient ||
+      null,
+    patient_name:
+      state.collected.patient_name ||
+      state.pending_booking?.patient ||
+      null,
+    phone:
+      state.collected.phone ||
+      state.pending_booking?.phone ||
+      null,
+  };
+
+  state.pending_booking = null;
+  state.appointment_id = null;
+  state.last_tool_result = null;
+
+  delete state.collected.doctor_id;
+  delete state.collected.doctor_name;
+  delete state.collected.selected_slot;
+  delete state.collected.current_slot;
+  delete state.collected.end_time;
+
+  state.collected = {
+    ...state.collected,
+    ...keep,
+    ...changes,
+  };
+}
+
+function updatedConfirmationReply(args, knowledge) {
+  return (
+    `Actualicé tu solicitud. Antes de agendar, confirma estos datos:\n\n` +
+    `${confirmationSummary(args, knowledge)}\n\n` +
+    `¿Confirmas que deseas crear esta cita con los datos actualizados?`
+  );
+}
+
 async function runAgent(q, ctx, incoming, userText, knowledge) {
   const state = Memory.initialState(incoming);
+  const previousCollected = { ...(state.collected || {}) };
+  const previousPending = state.pending_booking
+    ? { ...state.pending_booking }
+    : null;
+
   const grounding = Grounding.deriveFacts(userText, knowledge, state);
   state.collected = grounding.collected;
+
+  const bookingModification = detectBookingModification({
+    userText,
+    previousCollected,
+    previousPending,
+    grounding,
+  });
+
+  if (bookingModification.changed) {
+    invalidateSelectedSlot(state, bookingModification.fields);
+
+    console.log('♻️ CAMBIO ANTES DE CONFIRMAR', {
+      changed_fields: bookingModification.changed_fields,
+      changes: bookingModification.fields,
+    });
+  }
 
   if (grounding.detected.negative && state.last_tool_result?.selected_time) {
     state.rejected_slots.push(state.last_tool_result.selected_time);
@@ -369,6 +519,16 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
   let plan = mergeActionArgs(await callModel(messages), state.collected);
   Memory.mergeState(state, plan.state_patch);
   state.collected = { ...state.collected, ...grounding.collected };
+
+  // Si el paciente cambia datos después del resumen, la confirmación anterior deja de ser válida.
+  if (bookingModification.changed) {
+    plan.action = {
+      type: 'check_availability',
+      args: { ...state.collected },
+    };
+    plan.reason =
+      'Datos modificados antes de confirmar; volver a validar disponibilidad.';
+  }
 
   // La IA redacta libremente, pero no decide si debe volver a preguntar datos ya conocidos.
   // Si el paciente está intentando agendar y ya tenemos sucursal, servicio y fecha,
@@ -403,7 +563,11 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
     }
   }
 
-  if (plan.action.type === 'none' && explicitConfirmation(userText, state)) {
+  if (
+    !bookingModification.changed &&
+    plan.action.type === 'none' &&
+    explicitConfirmation(userText, state)
+  ) {
     const recovered = state.pending_booking
       ? normalizedPendingBooking(state, knowledge)
       : ensurePendingBookingFromCollected(state, knowledge);
@@ -426,7 +590,22 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
       let slots = Array.isArray(toolResult.slots) ? toolResult.slots : [];
       slots = slots.filter(slot => !state.rejected_slots.includes(String(slot.start_time).slice(0, 5)));
 
-      const selected = slots[0] || null;
+      const requestedTime = String(
+        state.collected.exact_time ||
+        state.collected.start_time ||
+        ''
+      ).slice(0, 5);
+
+      const selected =
+        (
+          requestedTime &&
+          slots.find(
+            slot =>
+              String(slot.start_time || '').slice(0, 5) === requestedTime
+          )
+        ) ||
+        slots[0] ||
+        null;
       state.last_tool_result = {
         type: 'check_availability',
         result: { ...toolResult, slots },
@@ -482,7 +661,60 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
           `Puedo buscar otro día u otro rango de horario.`;
       }
 
-      used = 'check_availability';
+      if (bookingModification.changed) {
+        if (selected) {
+          const updatedArgs = resolveServiceIdentity(
+            canonicalBookingData({
+              collected: {
+                ...state.collected,
+                start_time: String(selected.start_time).slice(0, 5),
+                end_time: selected.end_time
+                  ? String(selected.end_time).slice(0, 5)
+                  : state.collected.end_time,
+                doctor_id: selected.doctor_id || null,
+                doctor_name: selected.doctor_name || null,
+                selected_slot: selected,
+              },
+            }),
+            knowledge
+          );
+
+          const required = [
+            'patient',
+            'phone',
+            'branch_key',
+            'service_id',
+            'date',
+            'start_time',
+          ];
+          const missing = required.filter(key => !updatedArgs[key]);
+
+          if (!missing.length) {
+            state.collected = {
+              ...state.collected,
+              ...updatedArgs,
+            };
+
+            state.pending_booking = {
+              ...updatedArgs,
+              booking_key: Appointment.bookingKey(updatedArgs),
+              summary: confirmationSummary(updatedArgs, knowledge),
+              presented_at: new Date().toISOString(),
+              updated_after_change: true,
+            };
+
+            plan.reply = updatedConfirmationReply(updatedArgs, knowledge);
+            plan.action = { type: 'none', args: {} };
+            used = 'booking_change_reconfirmed';
+          }
+        } else {
+          state.pending_booking = null;
+          plan.action = { type: 'none', args: {} };
+          used = 'booking_change_unavailable';
+        }
+      } else {
+        used = 'check_availability';
+      }
     }
   }
 
@@ -632,4 +864,8 @@ module.exports = {
   canonicalBookingData,
   ensurePendingBookingFromCollected,
   resolveServiceIdentity,
+  extractLastExplicitTime,
+  detectBookingModification,
+  invalidateSelectedSlot,
+  updatedConfirmationReply,
 };
