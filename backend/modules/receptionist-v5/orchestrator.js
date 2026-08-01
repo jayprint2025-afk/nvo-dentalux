@@ -1,2 +1,8 @@
-'use strict';const S=require('./dialogue-state'),T=require('./tool-registry');const {interpretTurn}=require('./turn-interpreter');const {manageTurn}=require('./dialogue-manager');
-async function orchestrate(q,ctx,incoming,text){const state=S.initialState(incoming);if(!S.value(state,'phone')&&ctx.phone)S.setSlot(state,'phone',ctx.phone,{status:'known',confidence:1});const branches=await T.loadBranches(q,ctx).catch(()=>[]),bk=S.value(state,'branch');const context={branches,services:await T.loadServices(q,bk).catch(()=>[]),timeZone:process.env.CLINIC_TIMEZONE||'America/Phoenix'};const interpretation=await interpretTurn(text,state,context),bc=interpretation.commands.find(c=>c.type==='set_slot'&&c.slot==='branch');if(bc?.value&&bc.value!==bk)context.services=await T.loadServices(q,bc.value).catch(()=>[]);return manageTurn(q,ctx,state,text,interpretation,context)}module.exports={orchestrate};
+'use strict';
+const { loadClinicKnowledge } = require('./clinic-knowledge');
+const { runAgent } = require('./free-conversation-agent');
+async function orchestrate(q,ctx,state,text) {
+  const knowledge=await loadClinicKnowledge(q,ctx);
+  return runAgent(q,ctx,state,text,knowledge);
+}
+module.exports={orchestrate};
