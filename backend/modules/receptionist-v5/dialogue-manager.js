@@ -53,7 +53,7 @@ async function manageTurn(q, ctx, incoming, userText, interpretation, context) {
       }
     }
 
-    results.answers = answers;
+    results.answers = answers.filter(answer => typeof answer === 'string' && answer.trim());
 
     if (unresolved.length) {
       const missing = unresolved[0].missing;
@@ -71,6 +71,10 @@ async function manageTurn(q, ctx, incoming, userText, interpretation, context) {
 
       if (!State.hasGoal(state, G.BOOKING)) {
         results.answers.push('¿Deseas que también te ayude a agendar una cita?');
+      } else {
+        // La información fue resuelta y el mismo mensaje también inició/agregó datos de cita.
+        // Recalcular la siguiente acción evita pedir nuevamente una fecha ya extraída.
+        action = Policy.nextPolicy(state);
       }
     }
   }
