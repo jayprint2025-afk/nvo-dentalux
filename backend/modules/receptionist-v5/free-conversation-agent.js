@@ -130,14 +130,30 @@ function confirmationSummary(args, knowledge) {
   ].join('\n');
 }
 
+function canonicalBookingData(state, pending = null) {
+  const source = {
+    ...(state?.collected || {}),
+    ...(pending && typeof pending === 'object' ? pending : {}),
+  };
+
+  return {
+    ...source,
+    patient: source.patient || source.patient_name || source.name || source.full_name || source.nombre || null,
+    phone: source.phone || source.wa_phone || source.telephone || source.telefono || source.contact_phone || null,
+    branch_key: source.branch_key || source.sucursal_id || source.branch || null,
+    service_id: source.service_id || source.service?.id || null,
+    service_name: source.service_name || source.service?.name || null,
+    date: source.date || source.appointment_date || null,
+    start_time: source.start_time || source.selected_time || source.selected_slot?.start_time || source.current_slot?.start_time || null,
+    end_time: source.end_time || source.selected_slot?.end_time || source.current_slot?.end_time || null,
+  };
+}
+
 function normalizedPendingBooking(state, knowledge) {
   const pending = state?.pending_booking;
   if (!pending || typeof pending !== 'object') return null;
 
-  const data = {
-    ...state.collected,
-    ...pending,
-  };
+  const data = canonicalBookingData(state, pending);
 
   const required = [
     'patient',
@@ -166,6 +182,37 @@ function normalizedPendingBooking(state, knowledge) {
     missing: [],
     complete: true,
   };
+}
+
+function ensurePendingBookingFromCollected(state, knowledge) {
+  if (state?.pending_booking) return normalizedPendingBooking(state, knowledge);
+
+  const data = canonicalBookingData(state);
+  const required = ['patient', 'phone', 'branch_key', 'service_id', 'date', 'start_time'];
+  const missing = required.filter(key => !data[key]);
+  if (missing.length) return { data, missing, complete: false };
+
+  const lastReply = String(state?.recent_turns?.slice(-1)?.[0]?.reply || '');
+  const summaryWasPresented =
+    /antes de (crear|agendar)|confirma estos datos|confirmar.*resumen|responde.*confirma la cita/i.test(lastReply) ||
+    (
+      lastReply.includes(String(data.patient)) &&
+      lastReply.includes(String(data.phone)) &&
+      lastReply.includes(String(data.date)) &&
+      lastReply.includes(String(data.start_time).slice(0, 5))
+    );
+
+  if (!summaryWasPresented) return { data, missing: [], complete: false };
+
+  state.pending_booking = {
+    ...data,
+    booking_key: Appointment.bookingKey(data),
+    summary: confirmationSummary(data, knowledge),
+    presented_at: new Date().toISOString(),
+    recovered_from_history: true,
+  };
+
+  return { data: state.pending_booking, missing: [], complete: true };
 }
 
 function mergeActionArgs(plan, collected) {
@@ -293,6 +340,17 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
     }
   }
 
+  if (plan.action.type === 'none' && explicitConfirmation(userText, state)) {
+    const recovered = state.pending_booking
+      ? normalizedPendingBooking(state, knowledge)
+      : ensurePendingBookingFromCollected(state, knowledge);
+
+    if (recovered?.complete) {
+      plan.action = { type: 'create_appointment', args: { ...recovered.data } };
+      plan.reason = 'Confirmación explícita con resumen completo pendiente.';
+    }
+  }
+
   let used = plan.action.type || 'none';
 
   if (plan.action.type === 'check_availability') {
@@ -366,7 +424,7 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
   }
 
   if (plan.action.type === 'prepare_confirmation') {
-    const args = { ...state.collected, ...plan.action.args };
+    const args = canonicalBookingData({ collected: { ...state.collected, ...plan.action.args } });
     const required = ['patient', 'phone', 'branch_key', 'service_id', 'date', 'start_time'];
     const missing = required.filter(key => !args[key]);
 
@@ -392,7 +450,9 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
   }
 
   if (plan.action.type === 'create_appointment') {
-    const normalized = normalizedPendingBooking(state, knowledge);
+    const normalized = state.pending_booking
+      ? normalizedPendingBooking(state, knowledge)
+      : ensurePendingBookingFromCollected(state, knowledge);
     const pending = normalized?.complete ? normalized.data : null;
 
     if (!pending) {
@@ -479,4 +539,6 @@ module.exports = {
   SYSTEM_RULES,
   deterministicInformation,
   normalizedPendingBooking,
+  canonicalBookingData,
+  ensurePendingBookingFromCollected,
 };
