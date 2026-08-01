@@ -1,3 +1,4 @@
+
 'use strict';
 
 function cleanText(value) {
@@ -12,15 +13,12 @@ function initialState(input) {
     conversation_summary: cleanText(source.conversation_summary),
     recent_turns: Array.isArray(source.recent_turns) ? source.recent_turns.slice(-12) : [],
     recent_replies: Array.isArray(source.recent_replies) ? source.recent_replies.slice(-6) : [],
-    pending_booking: source.pending_booking && typeof source.pending_booking === 'object'
-      ? { ...source.pending_booking }
-      : null,
+    pending_booking: source.pending_booking && typeof source.pending_booking === 'object' ? { ...source.pending_booking } : null,
     last_tool_result: source.last_tool_result || null,
+    rejected_slots: Array.isArray(source.rejected_slots) ? source.rejected_slots.slice(-10) : [],
     handoff_requested: Boolean(source.handoff_requested),
     appointment_id: source.appointment_id || null,
-    completed_booking_keys: Array.isArray(source.completed_booking_keys)
-      ? source.completed_booking_keys.slice(-20)
-      : [],
+    completed_booking_keys: Array.isArray(source.completed_booking_keys) ? source.completed_booking_keys.slice(-20) : [],
     turn_count: Number(source.turn_count || 0),
   };
 }
@@ -29,15 +27,18 @@ function mergeState(state, patch) {
   if (!patch || typeof patch !== 'object') return state;
   if (patch.collected && typeof patch.collected === 'object') {
     for (const [key, value] of Object.entries(patch.collected)) {
-      if (value !== undefined) state.collected[key] = value;
+      if (value !== undefined && value !== null && value !== '') state.collected[key] = value;
     }
   }
   if (typeof patch.conversation_summary === 'string') {
-    state.conversation_summary = cleanText(patch.conversation_summary).slice(0, 2000);
+    state.conversation_summary = cleanText(patch.conversation_summary).slice(0, 3000);
   }
   if (patch.pending_booking === null) state.pending_booking = null;
   else if (patch.pending_booking && typeof patch.pending_booking === 'object') {
     state.pending_booking = { ...(state.pending_booking || {}), ...patch.pending_booking };
+  }
+  if (Array.isArray(patch.rejected_slots)) {
+    state.rejected_slots = [...new Set([...state.rejected_slots, ...patch.rejected_slots])].slice(-10);
   }
   if (typeof patch.handoff_requested === 'boolean') state.handoff_requested = patch.handoff_requested;
   return state;
@@ -53,14 +54,22 @@ function recordTurn(state, user, reply, meta = {}) {
 
 function normalizedReply(text) {
   return cleanText(text)
-    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase().replace(/[^a-z0-9 ]/g, '');
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]/g, '');
 }
 
 function isRepeatedReply(state, reply) {
   const candidate = normalizedReply(reply);
   if (!candidate) return true;
-  return state.recent_replies.slice(-2).some(item => normalizedReply(item) === candidate);
+  return state.recent_replies.slice(-3).some(item => normalizedReply(item) === candidate);
 }
 
-module.exports={initialState,mergeState,recordTurn,isRepeatedReply,cleanText};
+module.exports = {
+  initialState,
+  mergeState,
+  recordTurn,
+  isRepeatedReply,
+  cleanText,
+};
