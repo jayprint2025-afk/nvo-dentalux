@@ -26,6 +26,10 @@ function initialState(input = {}) {
     final_confirmation_pending: Boolean(s.final_confirmation_pending),
     appointment_id: s.appointment_id || null,
     handoff_requested: Boolean(s.handoff_requested),
+    pending_information_requests: Array.isArray(s.pending_information_requests)
+      ? s.pending_information_requests
+      : [],
+    information_branch_key: s.information_branch_key || null,
     turn_count: Number(s.turn_count || 0),
     no_progress_count: Number(s.no_progress_count || 0),
     last_signature: s.last_signature || null,
@@ -41,6 +45,8 @@ function signature(s) {
     s.time_preference, s.proposed_slot?.start_time,
     s.selected_slot?.start_time, s.patient, s.phone,
     s.awaiting, s.final_confirmation_pending, s.appointment_id,
+    s.information_branch_key,
+    (s.pending_information_requests || []).map(x => x.type).join(','),
   ]);
 }
 

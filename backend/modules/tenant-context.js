@@ -74,10 +74,13 @@ function getBranchDisplayName(branch_key) {
   return branch_key;
 }
 
-// Get clinic branch information from database
+// Get clinic branch information from the best available source.
 async function getClinicBranch(q, phoneNumberId, branchKey) {
   if (!branchKey) return null;
-  
+
+  const key = String(branchKey);
+  const externalId = phoneNumberId ? String(phoneNumberId) : null;
+
   try {
     const { rows } = await q(
       `SELECT clinic_name, phone, whatsapp, address, city, state, country,
@@ -87,14 +90,80 @@ async function getClinicBranch(q, phoneNumberId, branchKey) {
           AND branch_key = $2
           AND is_active = TRUE
         LIMIT 1`,
-      [phoneNumberId ? String(phoneNumberId) : null, String(branchKey)]
+      [externalId, key]
     );
-    return rows?.[0] || null;
+    if (rows?.[0]) return rows[0];
   } catch (e) {
-    // Table might not exist yet, return null
-    console.warn('clinic_branches table access failed:', e.message);
-    return null;
+    if (!/relation "clinic_branches" does not exist/i.test(String(e.message))) {
+      console.warn('clinic_branches access failed:', e.message);
+    }
   }
+
+  try {
+    const { rows } = await q(
+      `SELECT
+          name AS clinic_name,
+          phone,
+          phone AS whatsapp,
+          address,
+          NULL::text AS city,
+          NULL::text AS state,
+          NULL::text AS country,
+          NULL::text AS google_maps_url,
+          NULL::text AS business_hours,
+          NULL::text AS notes
+         FROM branches
+        WHERE branch_key = $1
+          AND COALESCE(active, TRUE) = TRUE
+        ORDER BY updated_at DESC NULLS LAST, id DESC
+        LIMIT 1`,
+      [key]
+    );
+    if (rows?.[0]) return rows[0];
+  } catch (e) {
+    console.warn('branches table access failed:', e.message);
+  }
+
+  try {
+    const { rows } = await q(
+      `SELECT
+          COALESCE(config->>'clinic_name', metadata->>'clinic_name', name, clinic_name) AS clinic_name,
+          COALESCE(config->>'phone', metadata->>'phone') AS phone,
+          COALESCE(config->>'whatsapp', metadata->>'whatsapp') AS whatsapp,
+          COALESCE(config->>'address', metadata->>'address') AS address,
+          COALESCE(config->>'city', metadata->>'city') AS city,
+          COALESCE(config->>'state', metadata->>'state') AS state,
+          COALESCE(config->>'country', metadata->>'country') AS country,
+          COALESCE(config->>'google_maps_url', metadata->>'google_maps_url') AS google_maps_url,
+          COALESCE(config->>'business_hours', metadata->>'business_hours') AS business_hours,
+          COALESCE(config->>'notes', metadata->>'notes') AS notes
+         FROM clinic_channels
+        WHERE ($1::text IS NULL OR external_id = $1 OR phone_number_id = $1)
+          AND (
+            branch_key = $2
+            OR sucursal_id = $2
+            OR config->>'branch_key' = $2
+            OR metadata->>'branch_key' = $2
+          )
+          AND COALESCE(active, TRUE) = TRUE
+        ORDER BY updated_at DESC NULLS LAST, id DESC
+        LIMIT 1`,
+      [externalId, key]
+    );
+    if (rows?.[0]) return rows[0];
+  } catch (e) {
+    console.warn('clinic_channels branch fallback failed:', e.message);
+  }
+
+  try {
+    const configured = JSON.parse(process.env.CLINIC_BRANCHES_JSON || '{}');
+    const row = configured?.[key] || null;
+    if (row && typeof row === 'object') return row;
+  } catch (e) {
+    console.warn('CLINIC_BRANCHES_JSON inválido:', e.message);
+  }
+
+  return null;
 }
 
 module.exports = {

@@ -68,8 +68,18 @@ async function orchestrate(q, ctx, incomingState, userText) {
     state.intent = INTENTS.BOOKING;
   }
 
-  // Branch first because services may be branch-specific.
-  if (extraction.updates.branch_key) {
+  const isInformationBranchClarification =
+    Boolean(state.pending_information_requests?.length) &&
+    Boolean(extraction.updates.branch_key) &&
+    (
+      state.awaiting === 'information_branch' ||
+      extraction.primary_intent === INTENTS.INFORMATION ||
+      !extraction.booking_intent
+    );
+
+  if (isInformationBranchClarification) {
+    state.information_branch_key = extraction.updates.branch_key;
+  } else if (extraction.updates.branch_key) {
     State.applyUpdates(state, { branch_key: extraction.updates.branch_key });
     serviceList = await Tools.services(q, state.branch_key).catch(() => []);
   }
@@ -98,7 +108,7 @@ async function orchestrate(q, ctx, incomingState, userText) {
 
   const correctionFields = new Set(extraction.correction_fields || []);
   const changesSlotContext =
-    correctionFields.has('branch') ||
+    (!isInformationBranchClarification && correctionFields.has('branch')) ||
     correctionFields.has('service') ||
     correctionFields.has('date') ||
     correctionFields.has('time');
@@ -116,8 +126,43 @@ async function orchestrate(q, ctx, incomingState, userText) {
 
   // Informational interruptions never discard booking data.
   let infoAnswers = [];
-  if (extraction.information_requests.length) {
-    infoAnswers = await Tools.answerInformation(q, ctx, state, extraction.information_requests, serviceList);
+
+  const requestsToAnswer = state.pending_information_requests?.length
+    ? state.pending_information_requests
+    : extraction.information_requests;
+
+  if (requestsToAnswer.length) {
+    const infoResult = await Tools.answerInformation(
+      q,
+      ctx,
+      state,
+      requestsToAnswer,
+      serviceList,
+      { branchKey: state.information_branch_key || state.branch_key || null }
+    );
+
+    infoAnswers = infoResult.answers || [];
+
+    if (infoResult.unresolved?.length) {
+      state.pending_information_requests = infoResult.unresolved;
+      state.awaiting = 'information_branch';
+      state.information_branch_key = null;
+
+      const prefix = infoAnswers.length ? `${infoAnswers.join('\n')}\n\n` : '';
+      return finish(
+        state,
+        userText,
+        `${prefix}¿De cuál sucursal deseas esa información: Victoria o Condesa?`,
+        'ask_information_branch'
+      );
+    }
+
+    state.pending_information_requests = [];
+    state.information_branch_key = null;
+
+    if (isInformationBranchClarification) {
+      state.awaiting = null;
+    }
   }
 
   if (!state.active) {
@@ -134,7 +179,12 @@ async function orchestrate(q, ctx, incomingState, userText) {
 
   if (infoAnswers.length) {
     const continuation = continuationPrompt(missing, state, serviceList);
-    return finish(state, userText, `${infoAnswers.join('\n')}${continuation ? `\n\n${continuation}` : ''}`, 'information_interrupt');
+    return finish(
+      state,
+      userText,
+      `${infoAnswers.join('\n')}${continuation ? `\n\n${continuation}` : ''}`,
+      isInformationBranchClarification ? 'information_branch_answer' : 'information_interrupt'
+    );
   }
 
   if (missing === 'branch') {

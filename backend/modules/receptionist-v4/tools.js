@@ -89,8 +89,11 @@ async function servicePrice(q, serviceId) {
   return value === null || value === undefined ? null : Number(value);
 }
 
-async function answerInformation(q, ctx, state, requests, serviceList) {
+async function answerInformation(q, ctx, state, requests, serviceList, options = {}) {
   const answers = [];
+  const unresolved = [];
+  const infoBranchKey = options.branchKey || state.information_branch_key || state.branch_key || null;
+
   for (const req of requests || []) {
     if (req.type === 'price') {
       const match = state.service_id
@@ -104,23 +107,57 @@ async function answerInformation(q, ctx, state, requests, serviceList) {
       const names = serviceList.slice(0,8).map(s => s.name).filter(Boolean);
       answers.push(names.length ? `Manejamos servicios como ${names.join(', ')}.` : 'Puedo ayudarte con consultas, limpiezas y otros tratamientos dentales.');
     } else if (['location','business_hours','contact'].includes(req.type)) {
-      const branch = await getClinicBranch(q, ctx.external_id, state.branch_key).catch(() => null);
-      if (req.type === 'location') answers.push(branch?.address ? `La sucursal ${getBranchDisplayName(state.branch_key)} está en ${branch.address}.` : 'Dime qué sucursal te interesa para darte la ubicación correcta.');
-      if (req.type === 'business_hours') answers.push(branch?.business_hours ? `El horario es ${branch.business_hours}.` : 'El horario puede variar por sucursal; dime cuál te interesa.');
-      if (req.type === 'contact') answers.push(branch?.phone || branch?.whatsapp ? `Puedes comunicarte al ${branch.phone || branch.whatsapp}.` : 'Puedes continuar por este mismo medio y con gusto te ayudamos.');
+      if (!infoBranchKey) {
+        unresolved.push(req);
+        continue;
+      }
+
+      const branch = await getClinicBranch(q, ctx.external_id, infoBranchKey).catch(() => null);
+      const branchName = getBranchDisplayName(infoBranchKey);
+
+      if (req.type === 'location') {
+        answers.push(
+          branch?.address
+            ? `La sucursal ${branchName} está en ${branch.address}.`
+            : `No tengo registrada la dirección de la sucursal ${branchName} en este momento.`
+        );
+      }
+
+      if (req.type === 'business_hours') {
+        answers.push(
+          branch?.business_hours
+            ? `El horario de la sucursal ${branchName} es ${branch.business_hours}.`
+            : `No tengo confirmado el horario de la sucursal ${branchName} en este momento.`
+        );
+      }
+
+      if (req.type === 'contact') {
+        const contact = branch?.phone || branch?.whatsapp;
+        answers.push(
+          contact
+            ? `Puedes comunicarte con la sucursal ${branchName} al ${contact}.`
+            : `Puedes continuar por este mismo medio para comunicarte con la sucursal ${branchName}.`
+        );
+      }
     } else if (req.type === 'payment_methods') {
       answers.push('Normalmente se aceptan efectivo, tarjeta y transferencia; la disponibilidad exacta puede variar por sucursal.');
     } else if (req.type === 'insurance') {
       answers.push('La aceptación de seguro depende del plan y de la sucursal; necesito que el equipo confirme tu cobertura.');
     } else if (req.type === 'promotion') {
-      answers.push('Las promociones pueden cambiar; puedo ayudarte a revisar la promoción vigente para el tratamiento que necesitas.');
+      const branchName = infoBranchKey ? getBranchDisplayName(infoBranchKey) : null;
+      answers.push(
+        branchName
+          ? `No tengo una promoción confirmada para la sucursal ${branchName} en este momento; prefiero no inventarte una.`
+          : 'No tengo una promoción confirmada en este momento; prefiero no inventarte una.'
+      );
     } else if (req.type === 'duration') {
       answers.push('La duración depende del tratamiento y de la valoración clínica; al agendar puedo reservar el tiempo correspondiente.');
     } else {
       answers.push('Con gusto reviso esa información para ti.');
     }
   }
-  return answers;
+
+  return { answers, unresolved };
 }
 
 module.exports = { services, matchService, availability, book, answerInformation };
