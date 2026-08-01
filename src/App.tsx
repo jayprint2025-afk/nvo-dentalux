@@ -4,7 +4,7 @@ import {
   Calendar, DollarSign, BarChart3, Plus, X, Check, Edit, Trash2,
   AlertTriangle, Filter, RefreshCw, Wifi, WifiOff, CreditCard,
   MessageCircle, MessageSquare, Send, Search, Settings, TestTube,
-  ArrowUpRight, ArrowDownLeft, Package, User, FileText, Building2  // <- Agregar FileText aquí
+  ArrowUpRight, ArrowDownLeft, Package, User, FileText, Building2, Bot, MapPin, Clock  // <- Agregar FileText aquí
 } from "lucide-react";
 import FacturacionModule from './FacturacionModule';
 import {
@@ -1236,6 +1236,40 @@ type EmpresaChannel = {
   hasAccessToken: boolean;
 };
 
+type EmpresaBranchAI = {
+  id?: string;
+  tenantId: string;
+  branchKey: 'sucursal_1' | 'sucursal_2';
+  name: string;
+  phone: string;
+  whatsapp: string;
+  address: string;
+  businessHours: string;
+  googleMapsUrl: string;
+  directions: string;
+  paymentMethods: string;
+  parkingInfo: string;
+  welcomeMessage: string;
+  cancellationPolicy: string;
+  preparationNotes: string;
+  insuranceInformation: string;
+  extraInformation: string;
+  promotions: string;
+  aiEnabled: boolean;
+  bookingEnabled: boolean;
+  active: boolean;
+};
+
+const makeEmptyBranchAI = (tenantId: string, branchKey: 'sucursal_1' | 'sucursal_2'): EmpresaBranchAI => ({
+  tenantId,
+  branchKey,
+  name: branchKey === 'sucursal_1' ? 'Victoria' : 'Condesa',
+  phone: '', whatsapp: '', address: '', businessHours: '', googleMapsUrl: '',
+  directions: '', paymentMethods: '', parkingInfo: '', welcomeMessage: '',
+  cancellationPolicy: '', preparationNotes: '', insuranceInformation: '',
+  extraInformation: '', promotions: '', aiEnabled: true, bookingEnabled: true, active: true
+});
+
 const emptyEmpresaForm = {
   name: '', ownerName: '', email: '', password: '', branchName: '',
   phone: '', address: ''
@@ -1262,6 +1296,11 @@ function EmpresasModule() {
   const [channelsLoading, setChannelsLoading] = React.useState(false);
   const [channelForm, setChannelForm] = React.useState(emptyChannelForm);
   const [channelMessage, setChannelMessage] = React.useState('');
+
+  const [aiCompany, setAiCompany] = React.useState<Empresa | null>(null);
+  const [aiBranches, setAiBranches] = React.useState<EmpresaBranchAI[]>([]);
+  const [aiLoading, setAiLoading] = React.useState(false);
+  const [aiMessage, setAiMessage] = React.useState('');
 
   const load = React.useCallback(async () => {
     setLoading(true);
@@ -1423,6 +1462,52 @@ function EmpresasModule() {
     setChannelMessage('Editando canal. Deja el token vacío para conservar el actual.');
   };
 
+  const openAIConfig = async (empresa: Empresa) => {
+    setAiCompany(empresa);
+    setAiLoading(true);
+    setAiMessage('');
+    try {
+      const data = await api(`/companies/${empresa.id}/branches/ai-config`);
+      const received = Array.isArray(data) ? data : [];
+      const byKey = new Map(received.map((item: EmpresaBranchAI) => [item.branchKey, item]));
+      setAiBranches([
+        byKey.get('sucursal_1') || makeEmptyBranchAI(empresa.id, 'sucursal_1'),
+        byKey.get('sucursal_2') || makeEmptyBranchAI(empresa.id, 'sucursal_2')
+      ]);
+    } catch (e: any) {
+      setAiMessage(`Error: ${e?.message || 'No se pudo cargar la configuración de IA'}`);
+      setAiBranches([
+        makeEmptyBranchAI(empresa.id, 'sucursal_1'),
+        makeEmptyBranchAI(empresa.id, 'sucursal_2')
+      ]);
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
+  const updateAiBranch = (branchKey: string, patch: Partial<EmpresaBranchAI>) => {
+    setAiBranches(items => items.map(item => item.branchKey === branchKey ? {...item, ...patch} : item));
+  };
+
+  const saveAIConfig = async () => {
+    if (!aiCompany) return;
+    setAiLoading(true);
+    setAiMessage('');
+    try {
+      const saved = await api(`/companies/${aiCompany.id}/branches/ai-config`, {
+        method: 'PUT',
+        body: JSON.stringify({ branches: aiBranches })
+      });
+      setAiBranches(Array.isArray(saved) ? saved : aiBranches);
+      setAiMessage('Configuración de sucursales e IA guardada correctamente.');
+      await load();
+    } catch (e: any) {
+      setAiMessage(`Error: ${e?.message || 'No se pudo guardar la configuración'}`);
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -1470,6 +1555,7 @@ function EmpresasModule() {
                   <div className="flex flex-wrap gap-2">
                     <button onClick={() => openEdit(empresa)} className="px-3 py-1.5 border rounded flex items-center gap-1"><Edit className="w-3 h-3" /> Editar</button>
                     <button onClick={() => openChannels(empresa)} className="px-3 py-1.5 border border-blue-300 text-blue-700 bg-blue-50 rounded flex items-center gap-1"><MessageCircle className="w-3 h-3" /> Canales</button>
+                    <button onClick={() => openAIConfig(empresa)} className="px-3 py-1.5 border border-violet-300 text-violet-700 bg-violet-50 rounded flex items-center gap-1"><Bot className="w-3 h-3" /> IA y sucursales</button>
                     {empresa.status === 'active'
                       ? <button onClick={() => changeStatus(empresa,'suspend')} className="px-3 py-1.5 border border-red-300 text-red-600 rounded">Suspender</button>
                       : <button onClick={() => changeStatus(empresa,'activate')} className="px-3 py-1.5 border border-green-300 text-green-700 rounded">Activar</button>}
@@ -1482,6 +1568,77 @@ function EmpresasModule() {
           </tbody>
         </table>
       </div>
+
+      {aiCompany && (
+        <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-6xl max-h-[94vh] overflow-y-auto rounded-2xl bg-white shadow-2xl">
+            <div className="sticky top-0 z-10 flex items-center justify-between border-b bg-white px-6 py-4">
+              <div>
+                <h3 className="text-xl font-bold text-gray-900 flex items-center gap-2"><Bot className="w-5 h-5 text-violet-600" /> IA y sucursales · {aiCompany.name}</h3>
+                <p className="text-sm text-gray-500">Esta es la información real que la recepcionista utilizará para responder y agendar.</p>
+              </div>
+              <button type="button" onClick={() => setAiCompany(null)} className="rounded-lg p-2 hover:bg-gray-100"><X className="w-5 h-5" /></button>
+            </div>
+
+            <div className="space-y-5 p-6">
+              {aiMessage && <div className={`p-3 rounded-lg border text-sm ${aiMessage.startsWith('Error') ? 'bg-red-50 border-red-200 text-red-700' : 'bg-green-50 border-green-200 text-green-700'}`}>{aiMessage}</div>}
+
+              <div className="rounded-xl border border-violet-200 bg-violet-50 p-4 text-sm text-violet-900">
+                Cada empresa conserva sus propios datos. <strong>sucursal_1</strong> y <strong>sucursal_2</strong> son claves internas; el paciente sólo verá los nombres configurados aquí.
+              </div>
+
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
+                {aiBranches.map(branch => (
+                  <div key={branch.branchKey} className="rounded-2xl border bg-white p-5 shadow-sm space-y-4">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b pb-4">
+                      <div>
+                        <div className="text-xs font-mono text-gray-400">{branch.branchKey}</div>
+                        <h4 className="text-lg font-bold text-gray-900">{branch.name || (branch.branchKey === 'sucursal_1' ? 'Victoria' : 'Condesa')}</h4>
+                      </div>
+                      <div className="flex flex-wrap gap-3 text-sm">
+                        <label className="flex items-center gap-2"><input type="checkbox" checked={branch.active} onChange={e => updateAiBranch(branch.branchKey,{active:e.target.checked})} /> Activa</label>
+                        <label className="flex items-center gap-2"><input type="checkbox" checked={branch.aiEnabled} onChange={e => updateAiBranch(branch.branchKey,{aiEnabled:e.target.checked})} /> IA informa</label>
+                        <label className="flex items-center gap-2"><input type="checkbox" checked={branch.bookingEnabled} onChange={e => updateAiBranch(branch.branchKey,{bookingEnabled:e.target.checked})} /> IA agenda</label>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <label><span className="block text-sm font-medium mb-1">Nombre visible</span><input value={branch.name} onChange={e => updateAiBranch(branch.branchKey,{name:e.target.value})} className="w-full border rounded-lg px-3 py-2" /></label>
+                      <label><span className="block text-sm font-medium mb-1">Teléfono</span><input value={branch.phone} onChange={e => updateAiBranch(branch.branchKey,{phone:e.target.value})} className="w-full border rounded-lg px-3 py-2" /></label>
+                      <label><span className="block text-sm font-medium mb-1">WhatsApp</span><input value={branch.whatsapp} onChange={e => updateAiBranch(branch.branchKey,{whatsapp:e.target.value})} className="w-full border rounded-lg px-3 py-2" /></label>
+                      <label><span className="block text-sm font-medium mb-1 flex items-center gap-1"><Clock className="w-4 h-4" /> Horario</span><input value={branch.businessHours} onChange={e => updateAiBranch(branch.branchKey,{businessHours:e.target.value})} placeholder="L-V 9:00 a 18:00; Sáb 9:00 a 14:00" className="w-full border rounded-lg px-3 py-2" /></label>
+                      <label className="md:col-span-2"><span className="block text-sm font-medium mb-1 flex items-center gap-1"><MapPin className="w-4 h-4" /> Dirección completa</span><input value={branch.address} onChange={e => updateAiBranch(branch.branchKey,{address:e.target.value})} className="w-full border rounded-lg px-3 py-2" /></label>
+                      <label className="md:col-span-2"><span className="block text-sm font-medium mb-1">Enlace Google Maps</span><input value={branch.googleMapsUrl} onChange={e => updateAiBranch(branch.branchKey,{googleMapsUrl:e.target.value})} placeholder="https://maps.google.com/..." className="w-full border rounded-lg px-3 py-2" /></label>
+                    </div>
+
+                    {[
+                      ['directions','Indicaciones para llegar','Ej. Estamos frente a..., suba al segundo piso...'],
+                      ['paymentMethods','Formas de pago','Efectivo, tarjeta, transferencia...'],
+                      ['parkingInfo','Estacionamiento','Información para estacionarse'],
+                      ['welcomeMessage','Mensaje de bienvenida','Mensaje opcional de la recepcionista'],
+                      ['cancellationPolicy','Política de cancelación','Condiciones para cancelar o cambiar citas'],
+                      ['preparationNotes','Preparación para la cita','Indicaciones previas para el paciente'],
+                      ['insuranceInformation','Seguros o convenios','Seguros aceptados o información de convenios'],
+                      ['promotions','Promociones vigentes','Una promoción por línea. Incluye precio y condiciones.'],
+                      ['extraInformation','Información adicional','Cualquier información pública que la IA pueda responder']
+                    ].map(([key,label,placeholder]) => (
+                      <label key={key} className="block">
+                        <span className="block text-sm font-medium mb-1">{label}</span>
+                        <textarea rows={key === 'extraInformation' || key === 'promotions' ? 4 : 2} value={(branch as any)[key]} onChange={e => updateAiBranch(branch.branchKey,{[key]:e.target.value} as any)} placeholder={placeholder} className="w-full border rounded-lg px-3 py-2 resize-y" />
+                      </label>
+                    ))}
+                  </div>
+                ))}
+              </div>
+
+              <div className="sticky bottom-0 flex justify-end gap-2 border-t bg-white py-4">
+                <button type="button" onClick={() => setAiCompany(null)} className="px-4 py-2 border rounded-lg">Cerrar</button>
+                <button type="button" disabled={aiLoading} onClick={saveAIConfig} className="px-5 py-2 bg-violet-600 hover:bg-violet-700 text-white rounded-lg disabled:opacity-60">{aiLoading ? 'Guardando...' : 'Guardar configuración'}</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {channelsCompany && (
         <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/50 p-4">

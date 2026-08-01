@@ -290,104 +290,8 @@ async function ensureAiSaasCompatibilityTables() {
     await adminQ(`CREATE INDEX IF NOT EXISTS idx_clinic_channels_suc ON clinic_channels(sucursal_id)`);
     await adminQ(`CREATE INDEX IF NOT EXISTS idx_clinic_channels_tenant ON clinic_channels(tenant_id)`);
 
-    const ids = String([
-      process.env.WHATSAPP_PHONE_NUMBER_ID,
-      process.env.AI_DEFAULT_PHONE_NUMBER_ID,
-      process.env.AI_DEFAULT_WABA_ID,
-      process.env.WHATSAPP_WABA_ID,
-      process.env.WABA_ID,
-      process.env.WA_ALLOWED_PHONE_NUMBER_IDS,
-      '903268306212311',
-      '704780742729954'
-    ].filter(Boolean).join(','))
-      .split(',')
-      .map(s => String(s).trim())
-      .filter(Boolean)
-      .filter((v, i, a) => a.indexOf(v) === i);
-
-    const branches = [
-      { key: 'sucursal_1', name: 'Dentalux Victoria', phone: '6863112623', address: 'Anillo Periferico 424 A, Victoria Residencial' },
-      { key: 'sucursal_2', name: 'Dentalux Condesa', phone: '6673434222', address: 'Calle Babel #1300, Residencial Condesa' }
-    ];
-
-    const ownerEmail = String(process.env.BOOTSTRAP_OWNER_EMAIL || 'nhaelvaldez26@hotmail.com').trim().toLowerCase();
-    let defaultTenantId = null;
-
-    // Resolver el tenant real del propietario usando el esquema actual:
-    // users <- tenant_users -> tenants. Comprobamos las tablas antes de consultar
-    // para no abortar la transacción de PostgreSQL por una relación inexistente.
-    const relationCheck = await adminQ(`
-      SELECT
-        to_regclass('public.tenants') AS tenants,
-        to_regclass('public.users') AS users,
-        to_regclass('public.tenant_users') AS tenant_users
-    `);
-    const relations = relationCheck.rows?.[0] || {};
-
-    if (relations.tenants && relations.users && relations.tenant_users) {
-      const tenantResult = await adminQ(`
-        SELECT t.id AS tenant_id
-          FROM tenants t
-          JOIN tenant_users tu
-            ON tu.tenant_id = t.id
-          JOIN users u
-            ON u.id = tu.user_id
-         WHERE LOWER(u.email) = $1
-           AND COALESCE(u.active, TRUE) = TRUE
-           AND COALESCE(tu.active, TRUE) = TRUE
-           AND COALESCE(t.status, 'active') = 'active'
-         ORDER BY
-           CASE WHEN COALESCE(tu.role, '') = 'owner' THEN 0 ELSE 1 END,
-           tu.created_at ASC
-         LIMIT 1
-      `, [ownerEmail]);
-      defaultTenantId = tenantResult.rows?.[0]?.tenant_id || null;
-    } else {
-      console.warn('⚠️ No se pudo resolver tenant para clinic_channels: faltan tenants/users/tenant_users');
-    }
-
-    // Fallback seguro por slug, útil cuando el correo propietario cambió.
-    if (!defaultTenantId && relations.tenants) {
-      const tenantSlug = String(
-        process.env.MESSENGER_TENANT_SLUG ||
-        process.env.BOOTSTRAP_TENANT_SLUG ||
-        'dentalux'
-      ).trim().toLowerCase();
-
-      const slugResult = await adminQ(`
-        SELECT id AS tenant_id
-          FROM tenants
-         WHERE LOWER(slug) = $1
-           AND COALESCE(status, 'active') = 'active'
-         LIMIT 1
-      `, [tenantSlug]);
-      defaultTenantId = slugResult.rows?.[0]?.tenant_id || null;
-    }
-
-    if (!defaultTenantId) {
-      console.warn('⚠️ clinic_channels se crearán sin tenant_id hasta configurar el tenant de Messenger');
-    }
-
-    for (const id of ids) {
-      for (const b of branches) {
-        await adminQ(`
-          INSERT INTO clinic_channels
-            (tenant_id, phone_number_id, channel, name, clinic_name, branch_key,
-             sucursal_id, db_key, active, is_active, config, metadata)
-          SELECT $1::uuid, $2, 'whatsapp', $3, $3, $4,
-                 $4, $5, TRUE, TRUE,
-                 jsonb_build_object('phone', $6::text, 'address', $7::text),
-                 jsonb_build_object('source', 'auto_migration')
-          WHERE NOT EXISTS (
-            SELECT 1
-              FROM clinic_channels
-             WHERE phone_number_id = $2
-               AND COALESCE(sucursal_id, branch_key) = $4
-               AND tenant_id IS NOT DISTINCT FROM $1::uuid
-          )
-        `, [defaultTenantId, id, b.name, b.key, process.env.WA_FORCE_DB || 'db1', b.phone, b.address]);
-      }
-    }
+    // Los canales y la información pública de cada sucursal se administran
+    // desde Configuración > Empresas. No insertar datos fijos globales aquí.
 
     await client.query('COMMIT');
   } catch (error) {
@@ -3972,6 +3876,22 @@ async function ensureMultiTenantSchema() {
     );
   `);
 
+  // Información pública y configuración que consume la Recepcionista V4.
+  await q(`ALTER TABLE branches ADD COLUMN IF NOT EXISTS whatsapp TEXT`);
+  await q(`ALTER TABLE branches ADD COLUMN IF NOT EXISTS business_hours TEXT`);
+  await q(`ALTER TABLE branches ADD COLUMN IF NOT EXISTS google_maps_url TEXT`);
+  await q(`ALTER TABLE branches ADD COLUMN IF NOT EXISTS directions TEXT`);
+  await q(`ALTER TABLE branches ADD COLUMN IF NOT EXISTS payment_methods TEXT`);
+  await q(`ALTER TABLE branches ADD COLUMN IF NOT EXISTS parking_info TEXT`);
+  await q(`ALTER TABLE branches ADD COLUMN IF NOT EXISTS welcome_message TEXT`);
+  await q(`ALTER TABLE branches ADD COLUMN IF NOT EXISTS cancellation_policy TEXT`);
+  await q(`ALTER TABLE branches ADD COLUMN IF NOT EXISTS preparation_notes TEXT`);
+  await q(`ALTER TABLE branches ADD COLUMN IF NOT EXISTS insurance_information TEXT`);
+  await q(`ALTER TABLE branches ADD COLUMN IF NOT EXISTS extra_information TEXT`);
+  await q(`ALTER TABLE branches ADD COLUMN IF NOT EXISTS promotions TEXT`);
+  await q(`ALTER TABLE branches ADD COLUMN IF NOT EXISTS ai_enabled BOOLEAN NOT NULL DEFAULT TRUE`);
+  await q(`ALTER TABLE branches ADD COLUMN IF NOT EXISTS booking_enabled BOOLEAN NOT NULL DEFAULT TRUE`);
+
   // Índices
   await q(`
     CREATE INDEX IF NOT EXISTS idx_tenant_users_tenant_id
@@ -5162,6 +5082,117 @@ app.get('/api/companies', authRequired, companiesSuperAdminOnly, ah(async (_req,
   res.json(rows.map(mapCompany));
 }));
 
+
+function mapBranchAI(row) {
+  return {
+    id: row.id,
+    tenantId: row.tenant_id,
+    branchKey: row.branch_key,
+    name: row.name || '',
+    phone: row.phone || '',
+    whatsapp: row.whatsapp || '',
+    address: row.address || '',
+    businessHours: row.business_hours || '',
+    googleMapsUrl: row.google_maps_url || '',
+    directions: row.directions || '',
+    paymentMethods: row.payment_methods || '',
+    parkingInfo: row.parking_info || '',
+    welcomeMessage: row.welcome_message || '',
+    cancellationPolicy: row.cancellation_policy || '',
+    preparationNotes: row.preparation_notes || '',
+    insuranceInformation: row.insurance_information || '',
+    extraInformation: row.extra_information || '',
+    promotions: row.promotions || '',
+    aiEnabled: row.ai_enabled !== false,
+    bookingEnabled: row.booking_enabled !== false,
+    active: row.active !== false
+  };
+}
+
+const branchAiSelect = `
+  SELECT id, tenant_id, branch_key, name, phone, whatsapp, address,
+         business_hours, google_maps_url, directions, payment_methods,
+         parking_info, welcome_message, cancellation_policy, preparation_notes,
+         insurance_information, extra_information, promotions,
+         ai_enabled, booking_enabled, active
+    FROM branches
+   WHERE tenant_id = $1::uuid
+   ORDER BY CASE branch_key WHEN 'sucursal_1' THEN 1 WHEN 'sucursal_2' THEN 2 ELSE 3 END,
+            created_at ASC`;
+
+app.get('/api/companies/:id/branches/ai-config', authRequired, companiesSuperAdminOnly, ah(async (req, res) => {
+  const { rows: tenantRows } = await poolDB1.query('SELECT id FROM tenants WHERE id=$1::uuid LIMIT 1', [req.params.id]);
+  if (!tenantRows[0]) return res.status(404).json({ error: 'Empresa no encontrada' });
+  const { rows } = await poolDB1.query(branchAiSelect, [req.params.id]);
+  res.json(rows.map(mapBranchAI));
+}));
+
+app.put('/api/companies/:id/branches/ai-config', authRequired, companiesSuperAdminOnly, ah(async (req, res) => {
+  const tenantId = req.params.id;
+  const branches = Array.isArray(req.body?.branches) ? req.body.branches : [];
+  const allowedKeys = new Set(['sucursal_1', 'sucursal_2']);
+  if (!branches.length) return res.status(400).json({ error: 'Envía la configuración de las sucursales' });
+
+  const client = await poolDB1.connect();
+  try {
+    await client.query('BEGIN');
+    const tenant = await client.query('SELECT id FROM tenants WHERE id=$1::uuid LIMIT 1', [tenantId]);
+    if (!tenant.rows[0]) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Empresa no encontrada' });
+    }
+
+    for (const item of branches) {
+      const branchKey = String(item?.branchKey || '').trim();
+      if (!allowedKeys.has(branchKey)) continue;
+      const defaultName = branchKey === 'sucursal_1' ? 'Victoria' : 'Condesa';
+      await client.query(`
+        INSERT INTO branches (
+          tenant_id, branch_key, name, phone, whatsapp, address,
+          business_hours, google_maps_url, directions, payment_methods,
+          parking_info, welcome_message, cancellation_policy, preparation_notes,
+          insurance_information, extra_information, promotions,
+          ai_enabled, booking_enabled, active, updated_at
+        ) VALUES (
+          $1::uuid,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,NOW()
+        )
+        ON CONFLICT (tenant_id, branch_key) DO UPDATE SET
+          name=EXCLUDED.name, phone=EXCLUDED.phone, whatsapp=EXCLUDED.whatsapp,
+          address=EXCLUDED.address, business_hours=EXCLUDED.business_hours,
+          google_maps_url=EXCLUDED.google_maps_url, directions=EXCLUDED.directions,
+          payment_methods=EXCLUDED.payment_methods, parking_info=EXCLUDED.parking_info,
+          welcome_message=EXCLUDED.welcome_message,
+          cancellation_policy=EXCLUDED.cancellation_policy,
+          preparation_notes=EXCLUDED.preparation_notes,
+          insurance_information=EXCLUDED.insurance_information,
+          extra_information=EXCLUDED.extra_information,
+          promotions=EXCLUDED.promotions, ai_enabled=EXCLUDED.ai_enabled,
+          booking_enabled=EXCLUDED.booking_enabled, active=EXCLUDED.active,
+          updated_at=NOW()
+      `, [
+        tenantId, branchKey, String(item?.name || defaultName).trim() || defaultName,
+        String(item?.phone || '').trim(), String(item?.whatsapp || '').trim(),
+        String(item?.address || '').trim(), String(item?.businessHours || '').trim(),
+        String(item?.googleMapsUrl || '').trim(), String(item?.directions || '').trim(),
+        String(item?.paymentMethods || '').trim(), String(item?.parkingInfo || '').trim(),
+        String(item?.welcomeMessage || '').trim(), String(item?.cancellationPolicy || '').trim(),
+        String(item?.preparationNotes || '').trim(), String(item?.insuranceInformation || '').trim(),
+        String(item?.extraInformation || '').trim(), String(item?.promotions || '').trim(),
+        item?.aiEnabled !== false, item?.bookingEnabled !== false, item?.active !== false
+      ]);
+    }
+
+    await client.query('COMMIT');
+    const { rows } = await poolDB1.query(branchAiSelect, [tenantId]);
+    res.json(rows.map(mapBranchAI));
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+}));
+
 app.post('/api/companies', authRequired, companiesSuperAdminOnly, ah(async (req, res) => {
   const name = String(req.body?.name || '').trim();
   const ownerName = String(req.body?.ownerName || '').trim();
@@ -5180,7 +5211,13 @@ app.post('/api/companies', authRequired, companiesSuperAdminOnly, ah(async (req,
     const hash = await bcrypt.hash(password, 12);
     const user = (await client.query('INSERT INTO users(name,email,password_hash,active) VALUES($1,$2,$3,TRUE) RETURNING id', [ownerName,email,hash])).rows[0];
     await client.query("INSERT INTO tenant_users(tenant_id,user_id,role,active) VALUES($1,$2,'owner',TRUE)", [tenant.id,user.id]);
-    await client.query("INSERT INTO branches(tenant_id,name,branch_key,phone,address,active) VALUES($1,$2,'sucursal_1',$3,$4,TRUE)", [tenant.id,branchName,phone,address]);
+    await client.query(`
+      INSERT INTO branches(tenant_id,name,branch_key,phone,address,active)
+      VALUES
+        ($1,$2,'sucursal_1',$3,$4,TRUE),
+        ($1,'Condesa','sucursal_2','','',TRUE)
+      ON CONFLICT (tenant_id,branch_key) DO NOTHING
+    `, [tenant.id,branchName,phone,address]);
     await client.query('COMMIT');
     const { rows } = await poolDB1.query(`${companySelectSql} WHERE t.id=$1`, [tenant.id]);
     res.status(201).json(mapCompany(rows[0]));
@@ -5215,9 +5252,13 @@ app.put('/api/companies/:id', authRequired, companiesSuperAdminOnly, ah(async (r
         await client.query('UPDATE users SET name=$1,email=$2,password_hash=$3,updated_at=NOW() WHERE id=$4', [ownerName,email,await bcrypt.hash(password,12),owner.id]);
       } else await client.query('UPDATE users SET name=$1,email=$2,updated_at=NOW() WHERE id=$3', [ownerName,email,owner.id]);
     }
-    const branch = (await client.query('SELECT id FROM branches WHERE tenant_id=$1 ORDER BY created_at ASC LIMIT 1',[id])).rows[0];
-    if (branch) await client.query('UPDATE branches SET name=$1,phone=$2,address=$3,updated_at=NOW() WHERE id=$4',[branchName,phone,address,branch.id]);
-    else await client.query("INSERT INTO branches(tenant_id,name,branch_key,phone,address,active) VALUES($1,$2,'sucursal_1',$3,$4,TRUE)",[id,branchName,phone,address]);
+    await client.query(`
+      INSERT INTO branches(tenant_id,name,branch_key,phone,address,active)
+      VALUES($1,$2,'sucursal_1',$3,$4,TRUE)
+      ON CONFLICT (tenant_id,branch_key) DO UPDATE SET
+        name=EXCLUDED.name, phone=EXCLUDED.phone, address=EXCLUDED.address,
+        active=TRUE, updated_at=NOW()
+    `,[id,branchName,phone,address]);
     await client.query('COMMIT');
     const { rows } = await poolDB1.query(`${companySelectSql} WHERE t.id=$1`, [id]);
     res.json(mapCompany(rows[0]));
@@ -5341,17 +5382,9 @@ async function ensureBootstrapDentaluxAdmin() {
     await client.query(`
       INSERT INTO branches (tenant_id, name, branch_key, phone, address, active)
       VALUES
-        ($1, 'Victoria', 'sucursal_1', '6863112623',
-         'Anillo Periférico 424 A, Victoria Residencial', TRUE),
-        ($1, 'Condesa', 'sucursal_2', '6673434222',
-         'Calle Babel #1300, Residencial Condesa', TRUE)
-      ON CONFLICT (tenant_id, branch_key)
-      DO UPDATE SET
-        name = EXCLUDED.name,
-        phone = EXCLUDED.phone,
-        address = EXCLUDED.address,
-        active = TRUE,
-        updated_at = NOW()
+        ($1, 'Victoria', 'sucursal_1', '', '', TRUE),
+        ($1, 'Condesa', 'sucursal_2', '', '', TRUE)
+      ON CONFLICT (tenant_id, branch_key) DO NOTHING
     `, [tenantId]);
 
     await client.query('COMMIT');
