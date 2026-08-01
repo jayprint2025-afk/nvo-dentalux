@@ -4522,7 +4522,7 @@ async function getOrCreateAiConversationIdForMessenger(pageId, psid, dbKey, tena
               SET state = CASE
                     WHEN COALESCE(state->>'version','') IN ('v4', 'v5') THEN state
                     ELSE jsonb_build_object(
-                      'version',$3,
+                      'version',$3::text,
                       'active',FALSE,
                       'phone',COALESCE(state->>'phone', state->>'wa_phone'),
                       'branch_key',state->>'branch_key',
@@ -4560,8 +4560,8 @@ async function getOrCreateAiConversationIdForMessenger(pageId, psid, dbKey, tena
          (tenant_id, title, clinic_id, channel, external_id,
           sucursal_id, phone_number_id, state)
        VALUES
-         ($1::uuid, $2, $1::text, 'messenger', $3,
-          NULL, $3, $4::jsonb)
+         ($1::uuid, $2::text, $1::text, 'messenger', $3::text,
+          NULL, $3::text, $4::jsonb)
        RETURNING id`,
       [
         tid,
