@@ -1,7 +1,7 @@
 // modules/ai-saas-routes.js
 // CliniqOne SaaS: aislamiento estricto por tenant_id obtenido exclusivamente del JWT.
 const { safeJson, saveState, logEvent } = require('./conversation-state');
-const { orchestrate } = require('./receptionist-selector');
+const { orchestrate } = require('./receptionist-v4');
 
 function tenantFromAuth(req) {
   const tenantId = req?.auth?.tenantId;
@@ -134,7 +134,28 @@ function setupAiSaasRoutes(app, q) {
         return res.status(404).json({ error: 'Conversación no encontrada' });
       }
 
-      const state = safeJson(conv.state, {});
+      const storedState = safeJson(conv.state, {});
+      const isV4State = String(storedState?.version || '').toLowerCase() === 'v4';
+
+      // V4 is now the only clinical receptionist. Legacy V2/V3 state is discarded
+      // once, while preserving the patient's known phone and requested branch.
+      const state = isV4State
+        ? storedState
+        : {
+            version: 'v4',
+            phone: storedState?.phone || storedState?.wa_phone || null,
+            branch_key: storedState?.branch_key || null,
+            migrated_from: storedState?.version || storedState?.stage || 'legacy',
+            migrated_at: new Date().toISOString()
+          };
+
+      if (!isV4State) {
+        console.log('♻️ Estado clínico migrado automáticamente a Recepcionista V4', {
+          conversationId,
+          previous: storedState?.version || storedState?.stage || 'legacy'
+        });
+      }
+
       const authenticatedPhone = String(req.body?.phone || state.phone || state.wa_phone || '').trim() || null;
       const requestedBranch = String(req.body?.sucursal_id || '').trim();
       if (authenticatedPhone) {
@@ -166,7 +187,7 @@ function setupAiSaasRoutes(app, q) {
       await q(
         `INSERT INTO ai_messages(tenant_id, conversation_id, role, content, meta)
          VALUES ($1::uuid, $2, 'assistant', $3, $4::jsonb)`,
-        [tenantId, conversationId, out.reply, JSON.stringify({ used: out.used || 'saas', tenant_id: tenantId, engine_version: out.engine_version || 'v3' })]
+        [tenantId, conversationId, out.reply, JSON.stringify({ used: out.used || 'saas', tenant_id: tenantId, engine_version: 'v4' })]
       );
 
       // saveState es seguro por RLS; reforzamos además que la conversación ya fue validada por tenant.
@@ -178,13 +199,13 @@ function setupAiSaasRoutes(app, q) {
           clinic_id: tenantId,
           conversation_id: conversationId,
           event: 'chat_turn',
-          payload: { used: out.used, text_len: userText.length }
+          payload: { used: out.used, text_len: userText.length, engine_version: 'v4' }
         });
       } catch (logError) {
         console.warn('⚠️ ai_logs falló sin cancelar la respuesta:', logError.message);
       }
 
-      return res.json({ conversationId, reply: out.reply, used: out.used, engineVersion: out.engine_version || 'v3' });
+      return res.json({ conversationId, reply: out.reply, used: out.used, engineVersion: 'v4' });
     } catch (error) {
       console.error('❌ ERROR /api/ai/chat:', error);
       return res.status(error.statusCode || 500).json({ error: error.message || String(error) });

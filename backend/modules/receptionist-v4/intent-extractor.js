@@ -43,6 +43,15 @@ function fallbackExtract(text, state = {}) {
   if (affirmative(text)) result.confirmation = CONFIRMATIONS.YES;
   else if (negative(text)) result.confirmation = CONFIRMATIONS.NO;
 
+  const hasBookingSignal =
+    /\b(cita|agendar|reservar|programar|disponibilidad|quiero|necesito|quisiera)\b/.test(n)
+    || Boolean(result.updates.service_text)
+    || Boolean(result.updates.date)
+    || Boolean(result.updates.preferred_time)
+    || Boolean(state.active);
+
+  result.booking_intent = hasBookingSignal;
+
   if (/\b(hablar con|persona|humano|asesor|operador)\b/.test(n)) {
     result.primary_intent = INTENTS.HUMAN;
     result.needs_human = true;
@@ -53,10 +62,10 @@ function fallbackExtract(text, state = {}) {
   } else if (/^(gracias|muchas gracias|ok gracias)$/.test(n)) {
     result.primary_intent = INTENTS.GRATITUDE;
   } else if (result.information_requests.length) {
+    // Information and booking may coexist in the same message.
     result.primary_intent = INTENTS.INFORMATION;
-  } else if (/\b(cita|agendar|reservar|programar|disponibilidad|quiero|necesito|quisiera)\b/.test(n) || result.updates.service_text || state.active) {
+  } else if (hasBookingSignal) {
     result.primary_intent = INTENTS.BOOKING;
-    result.booking_intent = true;
   } else if (/^(hola|buenos dias|buenas tardes|buenas noches|hello)$/.test(n)) {
     result.primary_intent = INTENTS.GREETING;
   }

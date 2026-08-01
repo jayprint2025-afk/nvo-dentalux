@@ -232,7 +232,7 @@ try {
 // ================================
 // No cargar ./ai-conversations-module.js porque choca con:
 // ./modules/ai-saas-routes + ./modules/ai-orchestrator
-console.log('ℹ️ IA legacy desactivada. Usando solo AI SaaS routes + Orchestrator v2.0');
+console.log('ℹ️ IA clínica legacy desactivada. Usando Recepcionista Virtual V4.');
 let aiModule = null;
 
 // ================================
@@ -274,7 +274,6 @@ async function ensureAiSaasCompatibilityTables() {
 
     await adminQ(`ALTER TABLE clinic_channels ADD COLUMN IF NOT EXISTS tenant_id UUID`);
     await adminQ(`ALTER TABLE clinic_channels ADD COLUMN IF NOT EXISTS phone_number_id TEXT`);
-    await adminQ(`ALTER TABLE clinic_channels ADD COLUMN IF NOT EXISTS external_id TEXT`);
     await adminQ(`ALTER TABLE clinic_channels ADD COLUMN IF NOT EXISTS channel TEXT DEFAULT 'whatsapp'`);
     await adminQ(`ALTER TABLE clinic_channels ADD COLUMN IF NOT EXISTS name TEXT`);
     await adminQ(`ALTER TABLE clinic_channels ADD COLUMN IF NOT EXISTS clinic_name TEXT`);
@@ -288,12 +287,6 @@ async function ensureAiSaasCompatibilityTables() {
     await adminQ(`ALTER TABLE clinic_channels ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW()`);
     await adminQ(`ALTER TABLE clinic_channels ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()`);
     await adminQ(`CREATE INDEX IF NOT EXISTS idx_clinic_channels_phone ON clinic_channels(phone_number_id)`);
-    await adminQ(`CREATE INDEX IF NOT EXISTS idx_clinic_channels_external ON clinic_channels(channel, external_id)`);
-    await adminQ(`
-      CREATE UNIQUE INDEX IF NOT EXISTS uq_clinic_channels_channel_external
-      ON clinic_channels(channel, external_id)
-      WHERE external_id IS NOT NULL
-    `);
     await adminQ(`CREATE INDEX IF NOT EXISTS idx_clinic_channels_suc ON clinic_channels(sucursal_id)`);
     await adminQ(`CREATE INDEX IF NOT EXISTS idx_clinic_channels_tenant ON clinic_channels(tenant_id)`);
 
@@ -434,8 +427,8 @@ try {
   if (aiSaasModule && typeof aiSaasModule.setupAiSaasRoutes === 'function') {
     aiSaasModule.setupAiSaasRoutes(app, q);
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-    console.log('✅ AI SaaS ROUTES ACTIVAS (ORCHESTRATOR v2.0)');
-    console.log('   📍 /api/ai/chat - Orchestrator con knowledge base');
+    console.log('✅ AI SaaS ROUTES ACTIVAS (RECEPCIONISTA V4)');
+    console.log('   📍 /api/ai/chat - Recepcionista comercial V4');
     console.log('   📍 /api/ai/conversations - Gestión de conversaciones');
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
   } else {
@@ -3926,13 +3919,10 @@ async function ensureMultiTenantSchema() {
       plan TEXT NOT NULL DEFAULT 'basic',
       logo_url TEXT,
       primary_color TEXT,
-      whatsapp_enabled BOOLEAN NOT NULL DEFAULT TRUE,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
   `);
-
-  await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS whatsapp_enabled BOOLEAN NOT NULL DEFAULT TRUE`);
 
   // Usuarios que iniciarán sesión
   await q(`
@@ -4204,38 +4194,8 @@ const FB_PAGE_TOKENS_JSON = process.env.FB_PAGE_TOKENS_JSON || '';
 // (Compatibilidad) Token único - evita usarlo si manejas varias páginas
 const FB_PAGE_ACCESS_TOKEN = process.env.FB_PAGE_ACCESS_TOKEN || '';
 
-async function getFbPageToken(pageId) {
+function getFbPageToken(pageId) {
   const pid = String(pageId || '').trim();
-
-  // Fuente principal: token guardado por empresa en clinic_channels.
-  if (pid) {
-    const client = await poolDB1.connect();
-    try {
-      await client.query('BEGIN');
-      await client.query(`SELECT set_config('app.tenant_bypass', 'on', true)`);
-      const { rows } = await client.query(`
-        SELECT config->>'access_token' AS access_token
-          FROM clinic_channels
-         WHERE LOWER(COALESCE(channel,'')) = 'messenger'
-           AND (external_id = $1 OR phone_number_id = $1)
-           AND COALESCE(active, TRUE) = TRUE
-           AND COALESCE(is_active, TRUE) = TRUE
-           AND tenant_id IS NOT NULL
-         ORDER BY updated_at DESC NULLS LAST, id DESC
-         LIMIT 1
-      `, [pid]);
-      await client.query('COMMIT');
-      const dbToken = String(rows?.[0]?.access_token || '').trim();
-      if (dbToken) return dbToken;
-    } catch (error) {
-      await client.query('ROLLBACK').catch(() => {});
-      console.warn('⚠️ No se pudo leer el token Messenger desde clinic_channels:', error.message);
-    } finally {
-      client.release();
-    }
-  }
-
-  // Respaldo para instalaciones existentes.
   if (FB_PAGE_TOKENS_JSON) {
     try {
       const map = JSON.parse(FB_PAGE_TOKENS_JSON);
@@ -4264,7 +4224,7 @@ function getPublicBaseUrl(req) {
 }
 
 async function fbSendText(psid, text, pageId) {
-  const token = await getFbPageToken(pageId);
+  const token = getFbPageToken(pageId);
   if (!token) {
     console.warn('⚠️ No hay token para responder Messenger (FB_PAGE_TOKENS_JSON/FB_PAGE_ACCESS_TOKEN). pageId=', String(pageId||''));
     return;
@@ -4498,8 +4458,50 @@ function _poolForDbKey(dbKey) {
 
 async function resolveMessengerTenantId(pageId, pool) {
   const pid = String(pageId || '').trim();
+  if (!pid) throw new Error('Page ID ausente para resolver tenant de Messenger');
 
-  // 1) Mapeo explícito por Page ID (recomendado para varias empresas):
+  // 1) Fuente principal: canal registrado desde Configuración > Empresa > Canales.
+  // Se consulta con bypass controlado porque todavía no conocemos el tenant.
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(`SELECT set_config('app.tenant_bypass', 'on', true)`);
+
+    const { rows: channelRows } = await client.query(
+      `SELECT tenant_id
+         FROM clinic_channels
+        WHERE channel = 'messenger'
+          AND COALESCE(active, TRUE) = TRUE
+          AND COALESCE(is_active, TRUE) = TRUE
+          AND (
+            external_id = $1
+            OR phone_number_id = $1
+            OR metadata->>'page_id' = $1
+          )
+          AND tenant_id IS NOT NULL
+        ORDER BY updated_at DESC NULLS LAST, id DESC
+        LIMIT 1`,
+      [pid]
+    );
+
+    await client.query('COMMIT');
+
+    const channelTenantId = String(channelRows?.[0]?.tenant_id || '').trim();
+    if (channelTenantId) {
+      console.log('🏢 Messenger tenant resuelto desde clinic_channels', {
+        pageId: pid,
+        tenantId: channelTenantId
+      });
+      return channelTenantId;
+    }
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.warn('⚠️ No se pudo resolver Messenger desde clinic_channels:', error.message);
+  } finally {
+    client.release();
+  }
+
+  // 2) Compatibilidad temporal: mapeo explícito por variable de entorno.
   // MESSENGER_PAGE_TENANTS_JSON={"114659410337690":"uuid-del-tenant"}
   const rawMap = String(process.env.MESSENGER_PAGE_TENANTS_JSON || '').trim();
   if (rawMap) {
@@ -4512,11 +4514,11 @@ async function resolveMessengerTenantId(pageId, pool) {
     }
   }
 
-  // 2) Tenant único para todas las páginas de consultorio.
+  // 3) Compatibilidad temporal: tenant único para páginas antiguas.
   const directTenant = String(process.env.MESSENGER_TENANT_ID || '').trim();
   if (directTenant) return directTenant;
 
-  // 3) Fallback seguro al tenant principal existente.
+  // 4) Último fallback para instalaciones antiguas sin canal registrado.
   const slug = String(
     process.env.MESSENGER_TENANT_SLUG ||
     process.env.BOOTSTRAP_TENANT_SLUG ||
@@ -4589,6 +4591,23 @@ async function getOrCreateAiConversationIdForMessenger(pageId, psid, dbKey, tena
       );
 
       if (chk.rows?.length) {
+        await client.query(
+          `UPDATE ai_conversations
+              SET state = CASE
+                    WHEN COALESCE(state->>'version','') = 'v4' THEN state
+                    ELSE jsonb_build_object(
+                      'version','v4',
+                      'active',FALSE,
+                      'phone',COALESCE(state->>'phone', state->>'wa_phone'),
+                      'branch_key',state->>'branch_key',
+                      'migrated_from',COALESCE(state->>'version', state->>'stage', 'legacy'),
+                      'migrated_at',NOW()
+                    )
+                  END,
+                  updated_at = NOW()
+            WHERE id=$1 AND tenant_id=$2::uuid`,
+          [existingConvId, tid]
+        );
         await client.query('COMMIT');
         return existingConvId;
       }
@@ -4615,6 +4634,8 @@ async function getOrCreateAiConversationIdForMessenger(pageId, psid, dbKey, tena
         title,
         pid,
         JSON.stringify({
+          version: 'v4',
+          active: false,
           channel: 'messenger',
           external_key: `ms:${pid}:${sid}`,
           page_id: pid,
@@ -4730,44 +4751,20 @@ async function callClinicAiForMessenger(senderId, pageId, msgText, req) {
     };
   }
 
+  console.log('🤖 Messenger atendido por Recepcionista V4', {
+    pageId: String(pageId || ''),
+    tenantId,
+    conversationId,
+    engineVersion: data?.engineVersion || 'v4',
+    used: data?.used || null
+  });
+
   return data;
-}
-
-
-async function isRegisteredMessengerClinicPage(pageId) {
-  const pid = String(pageId || '').trim();
-  if (!pid) return false;
-
-  const client = await poolDB1.connect();
-  try {
-    await client.query('BEGIN');
-    await client.query(`SELECT set_config('app.tenant_bypass', 'on', true)`);
-    const { rows } = await client.query(`
-      SELECT 1
-        FROM clinic_channels
-       WHERE LOWER(COALESCE(channel,'')) = 'messenger'
-         AND (external_id = $1 OR phone_number_id = $1)
-         AND COALESCE(active, TRUE) = TRUE
-         AND COALESCE(is_active, TRUE) = TRUE
-         AND tenant_id IS NOT NULL
-       LIMIT 1
-    `, [pid]);
-    await client.query('COMMIT');
-    return Boolean(rows?.length);
-  } catch (error) {
-    await client.query('ROLLBACK').catch(() => {});
-    console.warn('⚠️ No se pudo clasificar la página Messenger desde clinic_channels:', error.message);
-    return false;
-  } finally {
-    client.release();
-  }
 }
 
 async function callAiChatForMessenger(senderId, pageId, msgText, req) {
   const pid = String(pageId || '').trim();
-  const isClinic =
-    await isRegisteredMessengerClinicPage(pid) ||
-    MESSENGER_CONSULTORIO_PAGE_IDS.includes(pid);
+  const isClinic = MESSENGER_CONSULTORIO_PAGE_IDS.includes(pid);
   if (isClinic) return await callClinicAiForMessenger(senderId, pid, msgText, req);
 
   const isDetalles = MESSENGER_DETALLES_PAGE_IDS.includes(pid);
@@ -5139,7 +5136,6 @@ async function uniqueCompanySlug(client, name, excludeId = null) {
 
 const companySelectSql = `
   SELECT t.id, t.name, t.slug, t.plan, t.status,
-         COALESCE(t.whatsapp_enabled, TRUE) AS whatsapp_enabled,
          COALESCE(owner_u.name, '') AS owner_name,
          COALESCE(owner_u.email, '') AS owner_email,
          COALESCE(first_b.name, '') AS branch_name,
@@ -5157,7 +5153,6 @@ const companySelectSql = `
 
 function mapCompany(row) {
   return { id: row.id, name: row.name, slug: row.slug, plan: row.plan, status: row.status,
-    whatsappEnabled: row.whatsapp_enabled !== false,
     ownerName: row.owner_name, ownerEmail: row.owner_email, branchName: row.branch_name,
     phone: row.phone, address: row.address };
 }
@@ -5231,220 +5226,6 @@ app.put('/api/companies/:id', authRequired, companiesSuperAdminOnly, ah(async (r
     if (error.code === '23505') return res.status(409).json({ error: 'El correo ya está registrado' });
     throw error;
   } finally { client.release(); }
-}));
-
-
-
-app.patch('/api/companies/:id/services/whatsapp', authRequired, companiesSuperAdminOnly, ah(async (req, res) => {
-  const tenantId = String(req.params.id || '').trim();
-  const enabled = req.body?.enabled;
-
-  if (typeof enabled !== 'boolean') {
-    return res.status(400).json({ error: 'El campo enabled debe ser true o false' });
-  }
-
-  const { rows } = await poolDB1.query(`
-    UPDATE tenants
-       SET whatsapp_enabled=$1,
-           updated_at=NOW()
-     WHERE id=$2::uuid
-     RETURNING id, name, status, whatsapp_enabled
-  `, [enabled, tenantId]);
-
-  if (!rows[0]) {
-    return res.status(404).json({ error: 'Empresa no encontrada' });
-  }
-
-  res.json({
-    ok: true,
-    tenantId: rows[0].id,
-    company: rows[0].name,
-    companyStatus: rows[0].status,
-    whatsappEnabled: rows[0].whatsapp_enabled !== false
-  });
-}));
-
-function mapCompanyChannel(row) {
-  const config = row?.config && typeof row.config === 'object' ? row.config : {};
-  return {
-    id: Number(row.id),
-    tenantId: row.tenant_id,
-    channel: row.channel,
-    externalId: row.external_id || row.phone_number_id || '',
-    name: row.name || '',
-    active: row.active !== false && row.is_active !== false,
-    hasAccessToken: Boolean(config.access_token),
-    createdAt: row.created_at,
-    updatedAt: row.updated_at
-  };
-}
-
-app.get('/api/companies/:id/channels', authRequired, companiesSuperAdminOnly, ah(async (req, res) => {
-  const tenantId = String(req.params.id || '').trim();
-  const client = await poolDB1.connect();
-  try {
-    await client.query('BEGIN');
-    await client.query(`SELECT set_config('app.tenant_bypass', 'on', true)`);
-    const exists = await client.query('SELECT 1 FROM tenants WHERE id=$1::uuid LIMIT 1', [tenantId]);
-    if (!exists.rows[0]) {
-      await client.query('ROLLBACK');
-      return res.status(404).json({ error: 'Empresa no encontrada' });
-    }
-    const { rows } = await client.query(`
-      SELECT id, tenant_id, channel, external_id, phone_number_id, name,
-             active, is_active, config, created_at, updated_at
-        FROM clinic_channels
-       WHERE tenant_id=$1::uuid
-       ORDER BY channel, name, id
-    `, [tenantId]);
-    await client.query('COMMIT');
-    res.json(rows.map(mapCompanyChannel));
-  } catch (error) {
-    await client.query('ROLLBACK').catch(() => {});
-    throw error;
-  } finally {
-    client.release();
-  }
-}));
-
-app.post('/api/companies/:id/channels', authRequired, companiesSuperAdminOnly, ah(async (req, res) => {
-  const tenantId = String(req.params.id || '').trim();
-  const channel = String(req.body?.channel || '').trim().toLowerCase();
-  const externalId = String(req.body?.externalId || '').trim();
-  const name = String(req.body?.name || '').trim();
-  const accessToken = String(req.body?.accessToken || '').trim();
-  const active = req.body?.active !== false;
-
-  if (!['messenger', 'whatsapp'].includes(channel)) {
-    return res.status(400).json({ error: 'Canal inválido. Usa messenger o whatsapp.' });
-  }
-  if (!externalId) {
-    return res.status(400).json({ error: channel === 'messenger' ? 'El Page ID es obligatorio' : 'El Phone Number ID es obligatorio' });
-  }
-
-  const client = await poolDB1.connect();
-  try {
-    await client.query('BEGIN');
-    await client.query(`SELECT set_config('app.tenant_bypass', 'on', true)`);
-
-    const tenantResult = await client.query('SELECT id, name FROM tenants WHERE id=$1::uuid LIMIT 1', [tenantId]);
-    if (!tenantResult.rows[0]) {
-      await client.query('ROLLBACK');
-      return res.status(404).json({ error: 'Empresa no encontrada' });
-    }
-
-    // Un identificador externo sólo puede pertenecer a una empresa activa.
-    const conflict = await client.query(`
-      SELECT tenant_id
-        FROM clinic_channels
-       WHERE LOWER(COALESCE(channel,''))=$1
-         AND external_id=$2
-         AND tenant_id<>$3::uuid
-       LIMIT 1
-    `, [channel, externalId, tenantId]);
-    if (conflict.rows[0]) {
-      await client.query('ROLLBACK');
-      return res.status(409).json({ error: 'Ese identificador ya está ligado a otra empresa' });
-    }
-
-    const existing = await client.query(`
-      SELECT id, config
-        FROM clinic_channels
-       WHERE tenant_id=$1::uuid
-         AND LOWER(COALESCE(channel,''))=$2
-         AND external_id=$3
-       ORDER BY id DESC
-       LIMIT 1
-    `, [tenantId, channel, externalId]);
-
-    let row;
-    if (existing.rows[0]) {
-      const config = existing.rows[0].config || {};
-      if (accessToken) config.access_token = accessToken;
-      const updated = await client.query(`
-        UPDATE clinic_channels
-           SET phone_number_id=$1,
-               name=$2,
-               clinic_name=$3,
-               active=$4,
-               is_active=$4,
-               config=$5::jsonb,
-               metadata=COALESCE(metadata,'{}'::jsonb) || jsonb_build_object('source','company_channels_ui'),
-               updated_at=NOW()
-         WHERE id=$6
-         RETURNING *
-      `, [
-        externalId,
-        name || `${channel === 'messenger' ? 'Facebook Messenger' : 'WhatsApp'} ${tenantResult.rows[0].name}`,
-        tenantResult.rows[0].name,
-        active,
-        JSON.stringify(config),
-        existing.rows[0].id
-      ]);
-      row = updated.rows[0];
-    } else {
-      const config = accessToken ? { access_token: accessToken } : {};
-      const inserted = await client.query(`
-        INSERT INTO clinic_channels
-          (tenant_id, channel, external_id, phone_number_id, name, clinic_name,
-           db_key, active, is_active, config, metadata)
-        VALUES
-          ($1::uuid,$2,$3,$3,$4,$5,'db1',$6,$6,$7::jsonb,
-           jsonb_build_object('source','company_channels_ui'))
-        RETURNING *
-      `, [
-        tenantId,
-        channel,
-        externalId,
-        name || `${channel === 'messenger' ? 'Facebook Messenger' : 'WhatsApp'} ${tenantResult.rows[0].name}`,
-        tenantResult.rows[0].name,
-        active,
-        JSON.stringify(config)
-      ]);
-      row = inserted.rows[0];
-    }
-
-    await client.query('COMMIT');
-    res.status(existing.rows[0] ? 200 : 201).json(mapCompanyChannel(row));
-  } catch (error) {
-    await client.query('ROLLBACK').catch(() => {});
-    if (error.code === '23505') {
-      return res.status(409).json({ error: 'Ese canal o identificador ya está registrado' });
-    }
-    throw error;
-  } finally {
-    client.release();
-  }
-}));
-
-app.delete('/api/companies/:id/channels/:channelId', authRequired, companiesSuperAdminOnly, ah(async (req, res) => {
-  const tenantId = String(req.params.id || '').trim();
-  const channelId = Number(req.params.channelId);
-  if (!Number.isSafeInteger(channelId) || channelId <= 0) {
-    return res.status(400).json({ error: 'Canal inválido' });
-  }
-
-  const client = await poolDB1.connect();
-  try {
-    await client.query('BEGIN');
-    await client.query(`SELECT set_config('app.tenant_bypass', 'on', true)`);
-    const { rows } = await client.query(`
-      DELETE FROM clinic_channels
-       WHERE id=$1 AND tenant_id=$2::uuid
-       RETURNING id
-    `, [channelId, tenantId]);
-    if (!rows[0]) {
-      await client.query('ROLLBACK');
-      return res.status(404).json({ error: 'Canal no encontrado' });
-    }
-    await client.query('COMMIT');
-    res.json({ ok: true, deleted: channelId });
-  } catch (error) {
-    await client.query('ROLLBACK').catch(() => {});
-    throw error;
-  } finally {
-    client.release();
-  }
 }));
 
 app.patch('/api/companies/:id/activate', authRequired, companiesSuperAdminOnly, ah(async (req, res) => {
@@ -5659,167 +5440,12 @@ ensureWhatsAppTenantIsolationSchema().catch((e) => {
   console.error('❌ No se pudo activar aislamiento WhatsApp/IA:', e);
   process.exitCode = 1;
 });
-
-// Cron global de confirmaciones.
-// No usa una sesión de usuario: exige WA_BROADCAST_SECRET y genera JWT internos
-// de corta duración para ejecutar el mismo flujo protegido de cada empresa.
-app.post('/api/whatsapp/cron/confirmations', ah(async (req, res) => {
-  const configuredSecret = String(process.env.WA_BROADCAST_SECRET || '').trim();
-  const providedSecret = String(
-    req.query?.secret ||
-    req.headers['x-wa-secret'] ||
-    req.headers['x-wa-broadcast-secret'] ||
-    ''
-  ).trim();
-
-  if (!configuredSecret) {
-    return res.status(503).json({
-      ok: false,
-      error: 'WA_BROADCAST_SECRET no está configurado en Render'
-    });
-  }
-
-  const crypto = require('crypto');
-  const expected = Buffer.from(configuredSecret);
-  const received = Buffer.from(providedSecret);
-  const validSecret =
-    expected.length === received.length &&
-    crypto.timingSafeEqual(expected, received);
-
-  if (!validSecret) {
-    return res.status(401).json({ ok: false, error: 'unauthorized' });
-  }
-
-  const when = String(req.query?.when || 'today').trim();
-  const limit = Math.max(1, Math.min(Number(req.query?.limit || 500), 1000));
-  const useTemplate = String(req.query?.use_template || 'true').toLowerCase() !== 'false';
-  const results = [];
-
-  // Sólo procesa empresas activas con el servicio WhatsApp habilitado.
-  const { rows: companies } = await poolDB1.query(`
-    SELECT id, name
-      FROM tenants
-     WHERE COALESCE(status, 'active') = 'active'
-       AND COALESCE(whatsapp_enabled, TRUE) = TRUE
-     ORDER BY name
-  `);
-
-  for (const company of companies) {
-    const { rows: branchRows } = await poolDB1.query(`
-      SELECT branch_key
-        FROM branches
-       WHERE tenant_id=$1::uuid
-         AND COALESCE(active, TRUE)=TRUE
-       ORDER BY created_at, branch_key
-    `, [company.id]);
-
-    // Si el broadcast ignora sucursales, debe ejecutarse una sola vez por empresa.
-    // De lo contrario, la misma cita se procesaría una vez por cada sucursal
-    // y el paciente recibiría recordatorios duplicados.
-    const ignoreSucursal =
-      String(process.env.APPT_IGNORE_SUCURSAL || 'false').toLowerCase() === 'true';
-
-    const branches = ignoreSucursal
-      ? ['sucursal_1']
-      : branchRows.length
-        ? [...new Set(branchRows.map(row => String(row.branch_key || 'sucursal_1')))]
-        : ['sucursal_1'];
-
-    for (const sucursalId of branches) {
-      try {
-        const internalToken = jwt.sign(
-          {
-            sub: 'cron-whatsapp-confirmations',
-            tenantId: company.id,
-            role: 'system',
-            source: 'cron'
-          },
-          requireJwtSecret(),
-          { expiresIn: '5m' }
-        );
-
-        const params = new URLSearchParams({
-          when,
-          sucursal_id: sucursalId,
-          limit: String(limit),
-          buttons: 'false',
-          use_template: String(useTemplate)
-        });
-
-        const localUrl =
-          `http://127.0.0.1:${PORT}/api/whatsapp/broadcast/confirmations?${params.toString()}`;
-
-        const response = await fetch(localUrl, {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${internalToken}`,
-            'Content-Type': 'application/json'
-          },
-          body: '{}'
-        });
-
-        const body = await response.json().catch(() => ({}));
-
-        results.push({
-          tenantId: company.id,
-          company: company.name,
-          sucursalId,
-          status: response.status,
-          ok: response.ok,
-          targeted: Number(body?.targeted || 0),
-          sent: Number(body?.sent || 0),
-          skipped: Boolean(body?.skipped),
-          code: body?.code || null,
-          error: body?.error || null
-        });
-      } catch (error) {
-        results.push({
-          tenantId: company.id,
-          company: company.name,
-          sucursalId,
-          status: 500,
-          ok: false,
-          targeted: 0,
-          sent: 0,
-          skipped: false,
-          code: 'CRON_INTERNAL_ERROR',
-          error: String(error?.message || error)
-        });
-      }
-    }
-  }
-
-  const summary = results.reduce(
-    (acc, item) => {
-      acc.executions += 1;
-      acc.targeted += item.targeted || 0;
-      acc.sent += item.sent || 0;
-      if (!item.ok) acc.errors += 1;
-      if (item.skipped) acc.skipped += 1;
-      return acc;
-    },
-    { executions: 0, targeted: 0, sent: 0, errors: 0, skipped: 0 }
-  );
-
-  console.log('⏰ Cron WhatsApp completado', {
-    ...summary,
-    ignoreSucursal: String(process.env.APPT_IGNORE_SUCURSAL || 'false').toLowerCase() === 'true'
-  });
-
-  res.json({
-    ok: summary.errors === 0,
-    when,
-    summary,
-    results
-  });
-}));
-
 app.use('/api/whatsapp', (req, res, next) => {
   const isWebhook = req.path === '/webhook';
   if (isWebhook) return next();
   return authRequired(req, res, next);
 }, whatsappRoutes);
-console.log('✅ Rutas de WhatsApp montadas con JWT; cron protegido por WA_BROADCAST_SECRET');
+console.log('✅ Rutas de WhatsApp montadas con JWT obligatorio (excepto webhook Meta)');
 // ===============================================================================
 
 
