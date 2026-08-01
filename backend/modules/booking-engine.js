@@ -231,14 +231,62 @@ async function computeAvailability(q, { clinic_id, branch_key, date, duration_ho
 }
 
 // ====== INSERT transaccional (SaaS-safe + legacy compatible) ======
-async function createAppointmentTransactional(q, { tenant_id, clinic_id, branch_key, patient, phone, service_id, slot }) {
+async function createAppointmentTransactional(q, {
+  tenant_id,
+  clinic_id,
+  branch_key,
+  patient,
+  phone,
+  service_id,
+  date,
+  appointment_date,
+  start_time,
+  exact_time,
+  selected_time,
+  duration_hours,
+  slot,
+}) {
   const cols = await getAppointmentsColumns(q);
   const resolvedTenantId = String(tenant_id || clinic_id || '').trim();
 
   if (!resolvedTenantId) throw new Error('tenant_id ausente al crear la cita');
   if (!branch_key) throw new Error('sucursal ausente al crear la cita');
   if (!service_id) throw new Error('servicio ausente al crear la cita');
-  if (!slot?.doctor_id || !slot?.date || !slot?.start_time) {
+
+  // Corrección puntual: durante una modificación antes de confirmar,
+  // el slot conserva doctor y hora, mientras la fecha permanece en el
+  // objeto principal de la reserva. Unificamos ambos sin alterar el flujo.
+  const resolvedSlot = {
+    ...(slot && typeof slot === 'object' ? slot : {}),
+    date:
+      slot?.date ||
+      date ||
+      appointment_date ||
+      null,
+    start_time: String(
+      slot?.start_time ||
+      start_time ||
+      exact_time ||
+      selected_time ||
+      ''
+    ).slice(0, 5),
+    duration_hours: Number(
+      slot?.duration_hours ||
+      duration_hours ||
+      1
+    ),
+  };
+
+  if (
+    !resolvedSlot.doctor_id ||
+    !resolvedSlot.date ||
+    !resolvedSlot.start_time
+  ) {
+    console.error('❌ SLOT INCOMPLETO AL CREAR CITA', {
+      doctor_id: resolvedSlot.doctor_id || null,
+      date: resolvedSlot.date || null,
+      start_time: resolvedSlot.start_time || null,
+    });
     throw new Error('horario incompleto al crear la cita');
   }
 
@@ -261,11 +309,11 @@ async function createAppointmentTransactional(q, { tenant_id, clinic_id, branch_
       lockParams.push(String(clinic_id));
       lockWhere.push(`clinic_id=$${lockParams.length}`);
     }
-    lockParams.push(String(slot.doctor_id));
+    lockParams.push(String(resolvedSlot.doctor_id));
     lockWhere.push(`doctor_id=$${lockParams.length}`);
-    lockParams.push(slot.date);
+    lockParams.push(resolvedSlot.date);
     lockWhere.push(`date=$${lockParams.length}`);
-    lockParams.push(slot.start_time);
+    lockParams.push(resolvedSlot.start_time);
     lockWhere.push(`start_time=$${lockParams.length}`);
 
     if (cols.hasStatus) lockWhere.push(`UPPER(COALESCE(status,'')) NOT IN ('CANCELADA','CANCELADO','CANCELED','CANCELLED')`);
@@ -288,11 +336,11 @@ async function createAppointmentTransactional(q, { tenant_id, clinic_id, branch_
         duplicateWhere.push(`clinic_id = $${duplicateParams.length}`);
       }
 
-      duplicateParams.push(String(slot.doctor_id));
+      duplicateParams.push(String(resolvedSlot.doctor_id));
       duplicateWhere.push(`doctor_id = $${duplicateParams.length}`);
-      duplicateParams.push(slot.date);
+      duplicateParams.push(resolvedSlot.date);
       duplicateWhere.push(`date = $${duplicateParams.length}`);
-      duplicateParams.push(slot.start_time);
+      duplicateParams.push(resolvedSlot.start_time);
       duplicateWhere.push(`start_time = $${duplicateParams.length}`);
       duplicateParams.push(phone ? String(phone) : null);
       duplicateWhere.push(`COALESCE(phone,'') = COALESCE($${duplicateParams.length},'')`);
@@ -343,10 +391,10 @@ async function createAppointmentTransactional(q, { tenant_id, clinic_id, branch_
 
     add(patientCol, p);
     add('phone', phone ? String(phone) : null);
-    add('doctor_id', String(slot.doctor_id));
-    add('date', slot.date);
-    add('start_time', slot.start_time);
-    add('duration_hours', Number(slot.duration_hours || 1));
+    add('doctor_id', String(resolvedSlot.doctor_id));
+    add('date', resolvedSlot.date);
+    add('start_time', resolvedSlot.start_time);
+    add('duration_hours', Number(resolvedSlot.duration_hours || 1));
     add('service_id', String(service_id));
 
     if (cols.hasStatus) add('status', 'Pendiente');
