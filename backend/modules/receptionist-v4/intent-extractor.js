@@ -30,6 +30,56 @@ function servicePhrase(text) {
   return known.find(k => n.includes(k)) || null;
 }
 
+
+function extractPatientName(text, state = {}) {
+  const raw = String(text || '').trim();
+
+  const patterns = [
+    /\b(?:la\s+cita|el\s+paciente|la\s+paciente)\s+(?:realmente\s+)?(?:es|sera|va)\s+para\s+([a-záéíóúñü .'-]{2,80}?)(?:\s*,?\s*(?:no|y\s+no)\s+para\b|[.!?]|$)/i,
+    /\b(?:la\s+cita|el\s+paciente|la\s+paciente)\s+(?:es|sera)\s+(?:a\s+nombre\s+de\s+)?([a-záéíóúñü .'-]{2,80}?)(?:\s*,?\s*(?:no|y\s+no)\s+(?:es\s+)?(?:para\s+)?\b|[.!?]|$)/i,
+    /\b(?:es|seria|sera)\s+para\s+([a-záéíóúñü .'-]{2,80}?)(?:\s*,?\s*(?:no|y\s+no)\s+para\b|[.!?]|$)/i,
+    /\b(?:a\s+nombre\s+de|me\s+llamo|mi\s+nombre\s+es|soy)\s+([a-záéíóúñü .'-]{2,80}?)(?:[,.!?]|$)/i,
+    /\b(?:mi\s+hija|mi\s+hijo|la\s+niña|el\s+niño)\s+(?:se\s+llama|es)\s+([a-záéíóúñü .'-]{2,80}?)(?:[,.!?]|$)/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = raw.match(pattern);
+    const candidate = String(match?.[1] || '').trim().replace(/\s+/g, ' ');
+    if (
+      candidate &&
+      candidate.length >= 2 &&
+      candidate.length <= 80 &&
+      !/\b(cita|consulta|limpieza|sucursal|lunes|martes|miercoles|jueves|viernes|sabado|domingo|telefono|numero)\b/i.test(candidate)
+    ) {
+      return candidate;
+    }
+  }
+
+  if (
+    state.awaiting === 'patient' &&
+    /^[a-záéíóúñü .'-]{2,80}$/i.test(raw) &&
+    !/\b(si|no|gracias|consulta|limpieza|cita)\b/i.test(raw)
+  ) {
+    return raw.replace(/\s+/g, ' ');
+  }
+
+  return null;
+}
+
+function correctionFieldsFromText(text, result) {
+  const n = normalize(text);
+  const fields = new Set(result.correction_fields || []);
+
+  if (result.updates.branch_key || /\b(sucursal|victoria|condesa)\b/.test(n)) fields.add('branch');
+  if (result.updates.service_text || /\b(servicio|tratamiento)\b/.test(n)) fields.add('service');
+  if (result.updates.date || /\b(fecha|dia|lunes|martes|miercoles|jueves|viernes|sabado|domingo|manana)\b/.test(n)) fields.add('date');
+  if (result.updates.preferred_time || /\b(hora|horario|temprano|tarde|noche)\b/.test(n)) fields.add('time');
+  if (result.updates.patient || /\b(nombre|paciente|cita.*para|realmente.*para)\b/.test(n)) fields.add('patient');
+  if (result.updates.phone || /\b(telefono|numero|celular)\b/.test(n)) fields.add('phone');
+
+  result.correction_fields = [...fields];
+}
+
 function fallbackExtract(text, state = {}) {
   const result = emptyExtraction();
   const n = normalize(text);
@@ -40,8 +90,8 @@ function fallbackExtract(text, state = {}) {
   result.updates.service_text = servicePhrase(text);
   result.information_requests = infoRequests(text);
 
-  if (affirmative(text)) result.confirmation = CONFIRMATIONS.YES;
-  else if (negative(text)) result.confirmation = CONFIRMATIONS.NO;
+  if (negative(text)) result.confirmation = CONFIRMATIONS.NO;
+  else if (affirmative(text)) result.confirmation = CONFIRMATIONS.YES;
 
   const hasBookingSignal =
     /\b(cita|agendar|reservar|programar|disponibilidad|quiero|necesito|quisiera)\b/.test(n)
@@ -70,20 +120,17 @@ function fallbackExtract(text, state = {}) {
     result.primary_intent = INTENTS.GREETING;
   }
 
-  if (/\b(me llamo|soy|a nombre de)\b/.test(n)) {
-    const name = String(text).replace(/.*?\b(me llamo|soy|a nombre de)\b/i, '').trim();
-    if (/^[a-záéíóúñü .'-]{2,80}$/i.test(name)) result.updates.patient = name;
-  } else if (state.awaiting === 'patient' && /^[a-záéíóúñü .'-]{2,80}$/i.test(String(text).trim())) {
-    result.updates.patient = String(text).trim();
+  result.updates.patient = extractPatientName(text, state);
+
+  const hasCorrectionLanguage =
+    /\b(cambiar|cambiala|cambialo|cambio|mejor|no pero|prefiero|realmente|en realidad|corregir|correccion|no para|sino para)\b/.test(n)
+    || Boolean(result.updates.patient && state.patient && result.updates.patient !== state.patient);
+
+  if (hasCorrectionLanguage && result.confirmation !== CONFIRMATIONS.NO) {
+    result.confirmation = CONFIRMATIONS.CHANGE;
   }
 
-  if (/\b(cambiar|mejor|no pero|prefiero)\b/.test(n)) {
-    result.confirmation = CONFIRMATIONS.CHANGE;
-    if (result.updates.branch_key) result.correction_fields.push('branch');
-    if (result.updates.service_text) result.correction_fields.push('service');
-    if (result.updates.date) result.correction_fields.push('date');
-    if (result.updates.preferred_time) result.correction_fields.push('time');
-  }
+  correctionFieldsFromText(text, result);
   result.confidence = 0.65;
   return result;
 }
@@ -118,7 +165,15 @@ function normalizeModelResult(raw, text, state) {
 }
 
 async function aiExtract(text, state, services) {
-  const key = process.env.OPENAI_API_KEY || process.env.AI_API_KEY || '';
+  const keySource = process.env.RECEPTIONIST_V4_API_KEY
+    ? 'RECEPTIONIST_V4_API_KEY'
+    : process.env.OPENAI_API_KEY
+      ? 'OPENAI_API_KEY'
+      : process.env.AI_API_KEY
+        ? 'AI_API_KEY'
+        : null;
+  const key = process.env.RECEPTIONIST_V4_API_KEY || process.env.OPENAI_API_KEY || process.env.AI_API_KEY || '';
+
   if (!key || String(process.env.RECEPTIONIST_V4_USE_AI || 'true').toLowerCase() === 'false') return null;
   const endpoint = process.env.OPENAI_CHAT_URL || 'https://api.openai.com/v1/chat/completions';
   const model = process.env.RECEPTIONIST_V4_MODEL || process.env.OPENAI_MODEL || 'gpt-4.1-mini';
@@ -166,7 +221,22 @@ async function aiExtract(text, state, services) {
       ],
     }),
   });
-  if (!response.ok) throw new Error(`Extractor IA ${response.status}`);
+  if (!response.ok) {
+    const errorPayload = await response.json().catch(() => ({}));
+    const providerCode = errorPayload?.error?.code || errorPayload?.code || null;
+    const providerType = errorPayload?.error?.type || errorPayload?.type || null;
+
+    const error = new Error(
+      `Extractor IA ${response.status}` +
+      `${keySource ? ` usando ${keySource}` : ''}` +
+      `${providerCode ? ` (${providerCode})` : ''}`
+    );
+    error.status = response.status;
+    error.keySource = keySource;
+    error.providerCode = providerCode;
+    error.providerType = providerType;
+    throw error;
+  }
   const payload = await response.json();
   return cleanJson(payload?.choices?.[0]?.message?.content);
 }
@@ -181,4 +251,4 @@ async function extractIntent(text, state, services=[]) {
   }
 }
 
-module.exports = { extractIntent, fallbackExtract, infoRequests, servicePhrase };
+module.exports = { extractIntent, fallbackExtract, infoRequests, servicePhrase, extractPatientName };
