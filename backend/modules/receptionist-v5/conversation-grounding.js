@@ -257,7 +257,13 @@ function replyViolations(reply, state, userText) {
   const n = normalize(reply);
   const violations = [];
 
-  if (state.collected.branch_key && /\b(cual|que)\s+sucursal|en que sucursal|prefieres.*sucursal/.test(n)) {
+  if (
+    state.collected.branch_key &&
+    (
+      /\b(cual|que)\s+sucursal|en que sucursal|prefieres.*sucursal/.test(n) ||
+      /\bprefieres\b.{0,80}\bo\b/.test(n)
+    )
+  ) {
     violations.push('pregunta_sucursal_conocida');
   }
   if (state.collected.service_id && /\bque servicio|cual servicio|que tratamiento|que deseas realizar/.test(n)) {
@@ -265,6 +271,12 @@ function replyViolations(reply, state, userText) {
   }
   if (state.collected.date && /\bque dia|cual dia|cuando te gustaria/.test(n)) {
     violations.push('pregunta_fecha_conocida');
+  }
+  if (
+    (state.collected.after_time || state.collected.before_time || state.collected.exact_time) &&
+    /\bque horario|a que hora|que hora|cual horario|horario te conviene/.test(n)
+  ) {
+    violations.push('pregunta_horario_conocido');
   }
   if (state.collected.patient && /\ba nombre de quien|como se llama el paciente|nombre del paciente/.test(n)) {
     violations.push('pregunta_paciente_conocido');
@@ -284,6 +296,41 @@ function replyViolations(reply, state, userText) {
   return violations;
 }
 
+
+function bookingIntent(text) {
+  const n = normalize(text);
+  return /\b(agendar|agenda|agendame|ajendame|cita|consulta|limpieza|valoracion|revision|tratamiento|puedo|disponible)\b/.test(n) &&
+    (
+      /\b(hoy|manana|lunes|martes|miercoles|jueves|viernes|sabado|domingo)\b/.test(n) ||
+      /\b(a las?|despues de las?|antes de las?|por la manana|por la tarde)\b/.test(n) ||
+      /\b(quiero|necesito|me gustaria|para una|para un)\b/.test(n)
+    );
+}
+
+function availabilityReady(collected = {}) {
+  return Boolean(
+    collected.branch_key &&
+    collected.service_id &&
+    collected.date
+  );
+}
+
+function missingBookingFields(collected = {}) {
+  const fields = [];
+  if (!collected.branch_key) fields.push('branch_key');
+  if (!collected.service_id) fields.push('service_id');
+  if (!collected.date) fields.push('date');
+  return fields;
+}
+
+function nextNaturalQuestion(collected = {}) {
+  const missing = missingBookingFields(collected);
+  if (missing[0] === 'branch_key') return '¿En cuál sucursal te gustaría atenderte?';
+  if (missing[0] === 'service_id') return '¿Qué servicio necesitas?';
+  if (missing[0] === 'date') return '¿Qué día te gustaría asistir?';
+  return null;
+}
+
 module.exports = {
   normalize,
   findBranch,
@@ -298,4 +345,8 @@ module.exports = {
   replyViolations,
   similarity,
   isNegative,
+  bookingIntent,
+  availabilityReady,
+  missingBookingFields,
+  nextNaturalQuestion,
 };

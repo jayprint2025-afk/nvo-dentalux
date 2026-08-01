@@ -204,6 +204,40 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
   let plan = mergeActionArgs(await callModel(messages), state.collected);
   Memory.mergeState(state, plan.state_patch);
   state.collected = { ...state.collected, ...grounding.collected };
+
+  // La IA redacta libremente, pero no decide si debe volver a preguntar datos ya conocidos.
+  // Si el paciente está intentando agendar y ya tenemos sucursal, servicio y fecha,
+  // la consulta de disponibilidad es obligatoria.
+  const wantsBooking = Grounding.bookingIntent(userText);
+  const availabilityReady = Grounding.availabilityReady(state.collected);
+
+  if (
+    wantsBooking &&
+    availabilityReady &&
+    !state.pending_booking &&
+    !state.appointment_id &&
+    plan.action.type === 'none'
+  ) {
+    plan.action = {
+      type: 'check_availability',
+      args: { ...state.collected },
+    };
+    plan.reason = 'Datos mínimos completos; consultar disponibilidad sin repetir preguntas.';
+  }
+
+  // Si intenta agendar pero falta un dato, sólo puede preguntar el siguiente dato faltante.
+  if (
+    wantsBooking &&
+    !availabilityReady &&
+    plan.action.type === 'none'
+  ) {
+    const requiredQuestion = Grounding.nextNaturalQuestion(state.collected);
+    if (requiredQuestion) {
+      plan.reply = requiredQuestion;
+      plan.reason = 'Solicitar únicamente el siguiente dato faltante.';
+    }
+  }
+
   let used = plan.action.type || 'none';
 
   if (plan.action.type === 'check_availability') {
@@ -238,6 +272,40 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
       ]), state.collected);
 
       Memory.mergeState(state, plan.state_patch);
+
+      // Guardar el horario ofrecido aunque el modelo no lo incluya en state_patch.
+      if (selected) {
+        state.collected.start_time = String(selected.start_time).slice(0, 5);
+        if (selected.end_time) {
+          state.collected.end_time = String(selected.end_time).slice(0, 5);
+        }
+      }
+
+      // El modelo no puede volver a pedir sucursal, servicio o fecha después de una consulta exitosa.
+      const availabilityViolations = Grounding.replyViolations(plan.reply, state, userText);
+      if (selected && (
+        !plan.reply ||
+        availabilityViolations.length ||
+        !String(plan.reply).includes(String(selected.start_time).slice(0, 5))
+      )) {
+        const branch = knowledge.branches.find(
+          item => item.branch_key === state.collected.branch_key
+        );
+        const service = knowledge.services.find(
+          item => String(item.id) === String(state.collected.service_id)
+        );
+        plan.reply =
+          `Tengo disponible ${service?.name || 'ese servicio'} en ` +
+          `${branch?.name || state.collected.branch_name || 'la sucursal seleccionada'} ` +
+          `el ${state.collected.date} a las ${String(selected.start_time).slice(0, 5)}. ` +
+          `¿Te funciona ese horario?`;
+      } else if (!selected) {
+        plan.reply =
+          `No encontré horarios disponibles para el ${state.collected.date}` +
+          `${state.collected.after_time ? ` después de las ${state.collected.after_time}` : ''}. ` +
+          `Puedo buscar otro día u otro rango de horario.`;
+      }
+
       used = 'check_availability';
     }
   }
