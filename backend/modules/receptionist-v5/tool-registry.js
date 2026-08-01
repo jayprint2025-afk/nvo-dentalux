@@ -229,9 +229,16 @@ async function answerQuestion(q, ctx, state, question, context) {
       };
 
     case 'insurance':
-      return {
-        answer: 'La cobertura depende del plan; el equipo debe confirmarla.',
-      };
+      return { answer: 'La cobertura depende del plan; el equipo debe confirmarla.' };
+
+    case 'preparation':
+      return { answer: 'Las indicaciones previas dependen del procedimiento. Para una valoración general no inventaré requisitos; el equipo confirmará si necesitas alguna preparación especial.' };
+
+    case 'policies':
+      return { answer: 'No tengo confirmadas las políticas específicas de cancelación o tolerancia para esa sucursal. El equipo puede confirmarlas antes de agendar.' };
+
+    case 'specialists':
+      return { answer: 'La disponibilidad de especialistas depende del servicio y del día. Puedo revisar la agenda cuando me indiques la sucursal y el servicio.' };
 
     default:
       return {
@@ -259,10 +266,21 @@ async function availability(q, ctx, state) {
   let slots = Array.isArray(result.slots) ? result.slots : [];
   const preference = State.value(state, 'time_preference');
 
+  state.availability_note = null;
+
   if (preference?.kind === 'exact') {
-    slots = slots.filter(slot =>
+    const exact = slots.filter(slot =>
       String(slot.start_time).slice(0, 5) === String(preference.value).slice(0, 5)
     );
+    if (exact.length) {
+      slots = exact;
+    } else {
+      const target = Number(preference.min);
+      const later = slots.filter(slot => minutes(slot.start_time) > target);
+      const earlier = slots.filter(slot => minutes(slot.start_time) < target).reverse();
+      slots = [...later, ...earlier];
+      state.availability_note = `No está disponible exactamente a las ${preference.value}; te muestro la alternativa más cercana.`;
+    }
   } else if (preference?.kind === 'after') {
     slots = slots.filter(slot => minutes(slot.start_time) >= Number(preference.min));
   } else if (preference?.kind === 'before') {

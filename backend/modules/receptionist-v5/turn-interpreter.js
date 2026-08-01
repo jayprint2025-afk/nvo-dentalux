@@ -49,6 +49,16 @@ function isoDateInZoneOffset(days, timeZone = 'America/Phoenix', now = new Date(
 
 function parseRelativeDate(text, timeZone = 'America/Phoenix', now = new Date()) {
   const n = normalize(text);
+
+  const isoMatch = n.match(/\b(20\d{2})[-/](\d{1,2})[-/](\d{1,2})\b/);
+  if (isoMatch) {
+    return `${isoMatch[1]}-${String(isoMatch[2]).padStart(2, '0')}-${String(isoMatch[3]).padStart(2, '0')}`;
+  }
+
+  const slashMatch = n.match(/\b(\d{1,2})[/-](\d{1,2})[/-](20\d{2})\b/);
+  if (slashMatch) {
+    return `${slashMatch[3]}-${String(slashMatch[2]).padStart(2, '0')}-${String(slashMatch[1]).padStart(2, '0')}`;
+  }
   if (/\bpasado manana\b/.test(n)) return isoDateInZoneOffset(2, timeZone, now);
   if (/\bmanana\b/.test(n)) return isoDateInZoneOffset(1, timeZone, now);
   if (/\bhoy\b/.test(n)) return isoDateInZoneOffset(0, timeZone, now);
@@ -76,7 +86,9 @@ function parseClock(text) {
   if (!match) return null;
 
   let hour = Number(match[1]);
-  const minute = Number(match[2] || 0);
+  let minute = Number(match[2] || 0);
+  if (/\by media\b/.test(n)) minute = 30;
+  if (/\by cuarto\b/.test(n)) minute = 15;
   const meridiem = String(match[3] || '').replace(/\s/g, '');
 
   if (meridiem === 'pm' && hour < 12) hour += 12;

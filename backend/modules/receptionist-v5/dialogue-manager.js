@@ -37,6 +37,7 @@ async function manageTurn(q, ctx, incoming, userText, interpretation, context) {
 
   let action = Policy.nextPolicy(state);
   const results = {};
+  if (['frustration', 'medical_alert'].includes(state.repair?.type)) state.repair = null;
 
   if (action.type === 'answer_information') {
     const answers = [];
@@ -139,9 +140,19 @@ async function manageTurn(q, ctx, incoming, userText, interpretation, context) {
           action = { type: 'check_availability' };
           const slots = await Tools.availability(q, ctx, state);
           results.slot = slots[0] || null;
+          state.last_offer = results.slot
+            ? { slot: results.slot, alternatives: slots.slice(1, 8) }
+            : null;
+          state.last_system_question = results.slot
+            ? { type: 'slot_offer', goal: G.BOOKING }
+            : { type: 'slot_value', slot: 'date', goal: G.BOOKING };
         } else {
           console.error('Recepcionista V5 create appointment error:', error);
-          action = { type: 'general_help' };
+          state.last_error = {
+            message: error?.message || String(error),
+            at: new Date().toISOString(),
+          };
+          action = { type: 'technical_error' };
         }
       }
     }

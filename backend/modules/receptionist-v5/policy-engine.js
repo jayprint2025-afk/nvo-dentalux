@@ -1,3 +1,48 @@
-'use strict';const {GOAL_TYPES:G}=require('./command-schema');const S=require('./dialogue-state');
-function nextPolicy(s){if(s.repair?.type==='medical_alert')return{type:'medical_safety'};if(S.hasGoal(s,G.HUMAN))return{type:'handoff'};if(s.repair?.type==='frustration')return{type:'repair_frustration'};const i=S.hasGoal(s,G.INFORMATION),b=S.hasGoal(s,G.BOOKING);if(i&&s.pending_questions.length)return{type:'answer_information',questions:s.pending_questions};if(b){const m=S.bookingMissing(s);if(m.length){const n=m[0];if(n==='selected_slot'&&S.value(s,'branch')&&S.value(s,'service')&&S.value(s,'date'))return{type:'check_availability'};return{type:'ask_slot',slot:n}}if(!s.commitments.booking_confirmed)return{type:'request_booking_confirmation'};return{type:'create_appointment'}}if(i)return{type:'close_information'};return{type:'general_help'}}
-module.exports={nextPolicy};
+'use strict';
+
+const { GOAL_TYPES: G } = require('./command-schema');
+const State = require('./dialogue-state');
+
+function nextPolicy(state) {
+  if (state.transient_act === 'already_booked') return { type: 'already_booked' };
+  if (state.transient_act === 'greeting' && !state.active_goals.length) return { type: 'greeting' };
+  if (state.transient_act === 'gratitude' && !state.active_goals.length) return { type: 'gratitude' };
+  if (state.transient_act === 'out_of_scope' && !state.active_goals.length) return { type: 'out_of_scope' };
+
+  if (state.repair?.type === 'medical_alert') return { type: 'medical_safety' };
+  if (State.hasGoal(state, G.HUMAN)) return { type: 'handoff' };
+  if (state.repair?.type === 'frustration') return { type: 'repair_frustration' };
+
+  const information = State.hasGoal(state, G.INFORMATION);
+  const booking = State.hasGoal(state, G.BOOKING);
+
+  if (information && state.pending_questions.length) {
+    return { type: 'answer_information', questions: state.pending_questions };
+  }
+
+  if (booking) {
+    const missing = State.bookingMissing(state);
+    if (missing.length) {
+      const next = missing[0];
+      if (
+        next === 'selected_slot' &&
+        State.value(state, 'branch') &&
+        State.value(state, 'service') &&
+        State.value(state, 'date')
+      ) {
+        return { type: 'check_availability' };
+      }
+      return { type: 'ask_slot', slot: next };
+    }
+
+    if (!state.commitments.booking_confirmed) {
+      return { type: 'request_booking_confirmation' };
+    }
+    return { type: 'create_appointment' };
+  }
+
+  if (information) return { type: 'close_information' };
+  return { type: 'general_help' };
+}
+
+module.exports = { nextPolicy };
