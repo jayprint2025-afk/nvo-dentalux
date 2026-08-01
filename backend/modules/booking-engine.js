@@ -278,7 +278,6 @@ async function createAppointmentTransactional(q, {
   };
 
   if (
-    !resolvedSlot.doctor_id ||
     !resolvedSlot.date ||
     !resolvedSlot.start_time
   ) {
@@ -288,6 +287,56 @@ async function createAppointmentTransactional(q, {
       start_time: resolvedSlot.start_time || null,
     });
     throw new Error('horario incompleto al crear la cita');
+  }
+
+  // Recuperación robusta: si entre la selección y la confirmación se perdió
+  // doctor_id, buscar nuevamente el mismo horario dentro del tenant y sucursal.
+  if (!resolvedSlot.doctor_id) {
+    const availability = await computeAvailability(q, {
+      clinic_id: resolvedTenantId,
+      branch_key,
+      date: resolvedSlot.date,
+      duration_hours: resolvedSlot.duration_hours || 1,
+      limit: 200,
+      min_start_mins: null,
+    });
+
+    const recovered = (availability.slots || []).find(candidate =>
+      String(candidate.start_time || '').slice(0, 5) ===
+      String(resolvedSlot.start_time || '').slice(0, 5)
+    );
+
+    if (!recovered?.doctor_id) {
+      console.error('❌ NO SE PUDO RECUPERAR DOCTOR', {
+        tenant_id: resolvedTenantId,
+        branch_key,
+        date: resolvedSlot.date,
+        start_time: resolvedSlot.start_time,
+        available_slots: (availability.slots || []).map(item => ({
+          doctor_id: item.doctor_id,
+          start_time: item.start_time,
+        })),
+      });
+      throw new Error('El horario seleccionado ya no está disponible');
+    }
+
+    resolvedSlot.doctor_id = recovered.doctor_id;
+    resolvedSlot.doctor_name = recovered.doctor_name || null;
+    resolvedSlot.end_time = recovered.end_time || resolvedSlot.end_time || null;
+    resolvedSlot.duration_hours = Number(
+      recovered.duration_hours ||
+      resolvedSlot.duration_hours ||
+      1
+    );
+
+    console.log('♻️ DOCTOR RECUPERADO PARA CITA', {
+      tenant_id: resolvedTenantId,
+      branch_key,
+      doctor_id: resolvedSlot.doctor_id,
+      doctor_name: resolvedSlot.doctor_name,
+      date: resolvedSlot.date,
+      start_time: resolvedSlot.start_time,
+    });
   }
 
   // nombre de columna de paciente (tu app legacy suele usar patient)
