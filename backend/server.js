@@ -232,7 +232,13 @@ try {
 // ================================
 // No cargar ./ai-conversations-module.js porque choca con:
 // ./modules/ai-saas-routes + ./modules/ai-orchestrator
-console.log('ℹ️ IA clínica legacy desactivada. Usando Recepcionista Virtual V4.');
+console.log(
+  `ℹ️ IA clínica legacy desactivada. Motor configurado: ${
+    process.env.RECEPTIONIST_ENGINE_VERSION ||
+    process.env.RECEPTIONIST_VERSION ||
+    'v5'
+  }.`
+);
 let aiModule = null;
 
 // ================================
@@ -331,8 +337,8 @@ try {
   if (aiSaasModule && typeof aiSaasModule.setupAiSaasRoutes === 'function') {
     aiSaasModule.setupAiSaasRoutes(app, q);
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-    console.log('✅ AI SaaS ROUTES ACTIVAS (RECEPCIONISTA V4)');
-    console.log('   📍 /api/ai/chat - Recepcionista comercial V4');
+    console.log('✅ AI SaaS ROUTES ACTIVAS (SELECTOR V4/V5)');
+    console.log('   📍 /api/ai/chat - Recepcionista seleccionada por tenant');
     console.log('   📍 /api/ai/conversations - Gestión de conversaciones');
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
   } else {
@@ -4514,9 +4520,9 @@ async function getOrCreateAiConversationIdForMessenger(pageId, psid, dbKey, tena
         await client.query(
           `UPDATE ai_conversations
               SET state = CASE
-                    WHEN COALESCE(state->>'version','') = 'v4' THEN state
+                    WHEN COALESCE(state->>'version','') IN ('v4', 'v5') THEN state
                     ELSE jsonb_build_object(
-                      'version','v4',
+                      'version',$3,
                       'active',FALSE,
                       'phone',COALESCE(state->>'phone', state->>'wa_phone'),
                       'branch_key',state->>'branch_key',
@@ -4526,7 +4532,15 @@ async function getOrCreateAiConversationIdForMessenger(pageId, psid, dbKey, tena
                   END,
                   updated_at = NOW()
             WHERE id=$1 AND tenant_id=$2::uuid`,
-          [existingConvId, tid]
+          [
+            existingConvId,
+            tid,
+            String(
+              process.env.RECEPTIONIST_ENGINE_VERSION ||
+              process.env.RECEPTIONIST_VERSION ||
+              'v5'
+            ).trim().toLowerCase()
+          ]
         );
         await client.query('COMMIT');
         return existingConvId;
@@ -4554,7 +4568,11 @@ async function getOrCreateAiConversationIdForMessenger(pageId, psid, dbKey, tena
         title,
         pid,
         JSON.stringify({
-          version: 'v4',
+          version: String(
+            process.env.RECEPTIONIST_ENGINE_VERSION ||
+            process.env.RECEPTIONIST_VERSION ||
+            'v5'
+          ).trim().toLowerCase(),
           active: false,
           channel: 'messenger',
           external_key: `ms:${pid}:${sid}`,
@@ -4671,11 +4689,11 @@ async function callClinicAiForMessenger(senderId, pageId, msgText, req) {
     };
   }
 
-  console.log('🤖 Messenger atendido por Recepcionista V4', {
+  console.log('🤖 Messenger atendido por Recepcionista', {
     pageId: String(pageId || ''),
     tenantId,
     conversationId,
-    engineVersion: data?.engineVersion || 'v4',
+    engineVersion: data?.engineVersion || 'desconocida',
     used: data?.used || null
   });
 
