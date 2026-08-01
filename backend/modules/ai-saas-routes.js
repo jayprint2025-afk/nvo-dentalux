@@ -1,7 +1,7 @@
 // modules/ai-saas-routes.js
 // CliniqOne SaaS: aislamiento estricto por tenant_id obtenido exclusivamente del JWT.
 const { safeJson, saveState, logEvent } = require('./conversation-state');
-const { orchestrate } = require('./receptionist-v4');
+const { orchestrate } = require('./receptionist-selector');
 
 function tenantFromAuth(req) {
   const tenantId = req?.auth?.tenantId;
