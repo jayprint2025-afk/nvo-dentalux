@@ -17,6 +17,9 @@ function initialState(input = {}) {
     offered_index: Number(s.offered_index || 0),
     proposed_slot: s.proposed_slot || null,
     selected_slot: s.selected_slot || null,
+    last_proposed_slot: s.last_proposed_slot || s.proposed_slot || s.selected_slot || null,
+    last_selected_slot: s.last_selected_slot || s.selected_slot || null,
+    slot_history: Array.isArray(s.slot_history) ? s.slot_history.slice(-10) : [],
     patient: s.patient || null,
     phone: normalizePhone(s.phone) || s.phone || null,
     awaiting: s.awaiting || null,
@@ -41,11 +44,20 @@ function signature(s) {
   ]);
 }
 
-function clearAvailability(s) {
+function clearAvailability(s, options = {}) {
+  if (s.proposed_slot) {
+    s.last_proposed_slot = s.proposed_slot;
+    s.slot_history = [...(s.slot_history || []), s.proposed_slot].slice(-10);
+  }
+  if (s.selected_slot) {
+    s.last_selected_slot = s.selected_slot;
+    s.slot_history = [...(s.slot_history || []), s.selected_slot].slice(-10);
+  }
+
   s.offered_slots = [];
   s.offered_index = 0;
   s.proposed_slot = null;
-  s.selected_slot = null;
+  if (!options.keepSelected) s.selected_slot = null;
   s.final_confirmation_pending = false;
 }
 
@@ -140,7 +152,42 @@ function trackProgress(s, userText, reply) {
   return s;
 }
 
+
+function rememberProposedSlot(s, slot) {
+  if (!slot) return;
+  s.proposed_slot = slot;
+  s.last_proposed_slot = slot;
+  s.slot_history = [...(s.slot_history || []), slot].slice(-10);
+}
+
+function selectProposedSlot(s) {
+  if (!s.proposed_slot) return null;
+  s.selected_slot = s.proposed_slot;
+  s.last_selected_slot = s.proposed_slot;
+  s.last_proposed_slot = s.proposed_slot;
+  s.slot_history = [...(s.slot_history || []), s.proposed_slot].slice(-10);
+  s.proposed_slot = null;
+  return s.selected_slot;
+}
+
+function restoreLastSlot(s) {
+  const slot =
+    s.last_selected_slot ||
+    s.last_proposed_slot ||
+    (s.slot_history || [])[s.slot_history.length - 1] ||
+    null;
+
+  if (!slot) return null;
+
+  s.date = slot.date || s.date;
+  s.selected_slot = slot;
+  s.last_selected_slot = slot;
+  s.proposed_slot = null;
+  return slot;
+}
+
 module.exports = {
   initialState, signature, clearAvailability, applyUpdates, missingField,
   reset, complete, trackProgress,
+  rememberProposedSlot, selectProposedSlot, restoreLastSlot,
 };

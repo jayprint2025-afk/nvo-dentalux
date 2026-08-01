@@ -114,6 +114,21 @@ function fallbackExtract(text, state = {}) {
   result.updates.service_text = servicePhrase(text);
   result.information_requests = infoRequests(text);
 
+  if (/\b(ya me dijiste|ya lo dijiste|me estas repitiendo|otra vez lo mismo|ya se|eso ya me lo dijiste)\b/.test(n)) {
+    result.meta_intent = 'already_told';
+  } else if (/\b(esa hora|ese horario|la hora que dijiste|la opcion anterior|esa opcion|ese dia)\b/.test(n)) {
+    result.meta_intent = 'reference_previous';
+  } else {
+    result.meta_intent = null;
+  }
+
+  if (
+    result.meta_intent === 'reference_previous' &&
+    /\b(agendame|agenda me|reservame|reserva me|confirmame|confirma me|dejala|dejalo|esa esta bien|ese esta bien)\b/.test(n)
+  ) {
+    result.confirmation = CONFIRMATIONS.YES;
+  }
+
   if (negative(text)) result.confirmation = CONFIRMATIONS.NO;
   else if (affirmative(text)) result.confirmation = CONFIRMATIONS.YES;
 
@@ -177,6 +192,7 @@ function normalizeModelResult(raw, text, state) {
   out.rejection = raw.rejection || fallback.rejection;
   out.correction_fields = Array.isArray(raw.correction_fields) ? raw.correction_fields : fallback.correction_fields;
   out.needs_human = Boolean(raw.needs_human || fallback.needs_human);
+  out.meta_intent = raw.meta_intent || fallback.meta_intent || null;
   out.confidence = Number(raw.confidence || 0.8);
   const u = raw.updates || {};
   out.updates.branch_key = branchFromText(u.branch_key || '') || fallback.updates.branch_key;
@@ -223,6 +239,7 @@ async function aiExtract(text, state, services) {
       rejection:'string|null',
       correction_fields:['branch|service|date|time|patient|phone'],
       needs_human:'boolean',
+      meta_intent:'already_told|reference_previous|null',
       confidence:'0..1',
     },
     rules:[

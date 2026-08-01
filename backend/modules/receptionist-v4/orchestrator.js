@@ -14,6 +14,30 @@ async function orchestrate(q, ctx, incomingState, userText) {
   let serviceList = await Tools.services(q, state.branch_key).catch(() => []);
   const extraction = await extractIntent(userText, state, serviceList);
 
+  if (extraction.meta_intent === 'already_told') {
+    const missing = State.missingField(state);
+    const continuation = continuationPrompt(missing, state, serviceList);
+    const reply = [
+      'Tienes razón, disculpa la repetición.',
+      state.selected_slot || state.proposed_slot
+        ? `El horario que tenemos es ${formatTime((state.selected_slot || state.proposed_slot).start_time)}.`
+        : null,
+      continuation || '¿Deseas que continúe con la reservación?'
+    ].filter(Boolean).join(' ');
+    return finish(state, userText, reply, 'acknowledge_repetition');
+  }
+
+  if (
+    extraction.meta_intent === 'reference_previous' &&
+    extraction.confirmation === CONFIRMATIONS.YES
+  ) {
+    const restored = State.restoreLastSlot(state);
+    if (restored) {
+      state.final_confirmation_pending = false;
+      state.awaiting = null;
+    }
+  }
+
   if (extraction.needs_human || extraction.primary_intent === INTENTS.HUMAN) {
     state.handoff_requested = true;
     state.awaiting = 'human';
@@ -72,6 +96,24 @@ async function orchestrate(q, ctx, incomingState, userText) {
     return finish(state, userText, 'Esa fecha ya pasó. ¿Qué día futuro te gustaría?', 'past_date');
   }
 
+  const correctionFields = new Set(extraction.correction_fields || []);
+  const changesSlotContext =
+    correctionFields.has('branch') ||
+    correctionFields.has('service') ||
+    correctionFields.has('date') ||
+    correctionFields.has('time');
+
+  const changesOnlyPersonalData =
+    correctionFields.size > 0 &&
+    !changesSlotContext &&
+    (correctionFields.has('patient') || correctionFields.has('phone'));
+
+  if (changesOnlyPersonalData && (state.selected_slot || state.proposed_slot)) {
+    if (!state.selected_slot && state.proposed_slot) State.selectProposedSlot(state);
+    state.final_confirmation_pending = false;
+    state.awaiting = null;
+  }
+
   // Informational interruptions never discard booking data.
   let infoAnswers = [];
   if (extraction.information_requests.length) {
@@ -110,23 +152,37 @@ async function orchestrate(q, ctx, incomingState, userText) {
 
   // A proposed slot is a yes/no decision.
   if (state.proposed_slot && !state.selected_slot) {
-    if (extraction.confirmation === CONFIRMATIONS.YES) {
-      state.selected_slot = state.proposed_slot;
-      state.proposed_slot = null;
+    if (changesOnlyPersonalData) {
+      State.selectProposedSlot(state);
       state.awaiting = null;
-    } else if ([CONFIRMATIONS.NO, CONFIRMATIONS.CHANGE].includes(extraction.confirmation)) {
+    } else if (extraction.confirmation === CONFIRMATIONS.YES) {
+      State.selectProposedSlot(state);
+      state.awaiting = null;
+    } else if (
+      extraction.confirmation === CONFIRMATIONS.NO ||
+      (extraction.confirmation === CONFIRMATIONS.CHANGE && changesSlotContext)
+    ) {
       const nextIndex = state.offered_index + 1;
       const next = state.offered_slots[nextIndex];
       if (next) {
         state.offered_index = nextIndex;
-        state.proposed_slot = next;
+        State.rememberProposedSlot(state, next);
         state.awaiting = 'slot_confirmation';
         return finish(state, userText, `Claro. También tengo a las ${formatTime(next.start_time)}. ¿Te funciona?`, 'offer_next_slot');
       }
-      state.date = null;
+      const previous = state.last_proposed_slot || state.last_selected_slot || state.proposed_slot;
       State.clearAvailability(state);
-      state.awaiting = 'date';
-      return finish(state, userText, 'No tengo otra opción ese día. ¿Qué otro día te gustaría?', 'no_more_slots');
+      state.proposed_slot = previous || null;
+      state.awaiting = previous ? 'slot_confirmation' : 'date';
+
+      return finish(
+        state,
+        userText,
+        previous
+          ? `No tengo una opción posterior disponible ese día. Puedo conservar las ${formatTime(previous.start_time)} o buscar otro día. ¿Qué prefieres?`
+          : 'No tengo otra opción ese día. ¿Qué otro día te gustaría?',
+        'no_more_slots'
+      );
     } else {
       state.awaiting = 'slot_confirmation';
       return finish(state, userText, `¿Confirmas el horario de las ${formatTime(state.proposed_slot.start_time)}? También puedes pedir otra hora.`, 'clarify_slot');
@@ -143,7 +199,7 @@ async function orchestrate(q, ctx, incomingState, userText) {
     }
     state.offered_slots = slots;
     state.offered_index = 0;
-    state.proposed_slot = slots[0];
+    State.rememberProposedSlot(state, slots[0]);
     state.awaiting = 'slot_confirmation';
     const exactUnavailable = state.time_preference?.kind === 'exact'
       && slots[0].start_time.slice(0,5) !== state.time_preference.value;
@@ -187,7 +243,16 @@ async function orchestrate(q, ctx, incomingState, userText) {
       }
     }
 
-    if ([CONFIRMATIONS.NO, CONFIRMATIONS.CHANGE].includes(extraction.confirmation)) {
+    if (extraction.confirmation === CONFIRMATIONS.CHANGE && changesOnlyPersonalData) {
+      state.final_confirmation_pending = true;
+      state.awaiting = 'final_confirmation';
+      return finish(state, userText, Reply.summary(state), 'final_summary_after_personal_change');
+    }
+
+    if (
+      extraction.confirmation === CONFIRMATIONS.NO ||
+      (extraction.confirmation === CONFIRMATIONS.CHANGE && changesSlotContext)
+    ) {
       state.final_confirmation_pending = false;
       state.awaiting = 'change';
       return finish(state, userText, 'Claro. ¿Qué deseas cambiar: sucursal, servicio, día, hora, nombre o teléfono?', 'ask_change');
