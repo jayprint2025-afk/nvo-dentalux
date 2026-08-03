@@ -5269,6 +5269,282 @@ app.put('/api/companies/:id/branches/ai-config', authRequired, companiesSuperAdm
   }
 }));
 
+
+// ===============================================================================
+// CANALES POR EMPRESA — WhatsApp y Facebook Messenger
+// ===============================================================================
+
+function mapCompanyChannel(row) {
+  const config = row.config && typeof row.config === 'object'
+    ? row.config
+    : {};
+
+  const metadata = row.metadata && typeof row.metadata === 'object'
+    ? row.metadata
+    : {};
+
+  return {
+    id: row.id,
+    tenantId: row.tenant_id,
+    channel: row.channel || 'whatsapp',
+    name: row.name || '',
+    clinicName: row.clinic_name || '',
+    phoneNumberId: row.phone_number_id || '',
+    branchKey: row.branch_key || '',
+    sucursalId: row.sucursal_id || '',
+    dbKey: row.db_key || 'db1',
+    active: row.active !== false && row.is_active !== false,
+
+    pageId:
+      config.pageId ||
+      config.page_id ||
+      metadata.pageId ||
+      metadata.page_id ||
+      '',
+
+    pageAccessToken:
+      config.pageAccessToken ||
+      config.page_access_token ||
+      metadata.pageAccessToken ||
+      metadata.page_access_token ||
+      '',
+
+    wabaId:
+      config.wabaId ||
+      config.waba_id ||
+      metadata.wabaId ||
+      metadata.waba_id ||
+      '',
+
+    accessToken:
+      config.accessToken ||
+      config.access_token ||
+      metadata.accessToken ||
+      metadata.access_token ||
+      '',
+
+    config,
+    metadata,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+app.get(
+  '/api/companies/:id/channels',
+  authRequired,
+  companiesSuperAdminOnly,
+  ah(async (req, res) => {
+    const tenantId = req.params.id;
+
+    const { rows: tenantRows } = await poolDB1.query(
+      `SELECT id
+         FROM tenants
+        WHERE id = $1::uuid
+        LIMIT 1`,
+      [tenantId]
+    );
+
+    if (!tenantRows[0]) {
+      return res.status(404).json({
+        error: 'Empresa no encontrada'
+      });
+    }
+
+    const { rows } = await poolDB1.query(
+      `SELECT
+         id,
+         tenant_id,
+         phone_number_id,
+         channel,
+         name,
+         clinic_name,
+         branch_key,
+         sucursal_id,
+         db_key,
+         active,
+         is_active,
+         config,
+         metadata,
+         created_at,
+         updated_at
+       FROM clinic_channels
+       WHERE tenant_id = $1::uuid
+       ORDER BY created_at ASC, id ASC`,
+      [tenantId]
+    );
+
+    res.json(rows.map(mapCompanyChannel));
+  })
+);
+
+app.put(
+  '/api/companies/:id/channels',
+  authRequired,
+  companiesSuperAdminOnly,
+  ah(async (req, res) => {
+    const tenantId = req.params.id;
+    const channels = Array.isArray(req.body?.channels)
+      ? req.body.channels
+      : [];
+
+    const { rows: tenantRows } = await poolDB1.query(
+      `SELECT id
+         FROM tenants
+        WHERE id = $1::uuid
+        LIMIT 1`,
+      [tenantId]
+    );
+
+    if (!tenantRows[0]) {
+      return res.status(404).json({
+        error: 'Empresa no encontrada'
+      });
+    }
+
+    const client = await poolDB1.connect();
+
+    try {
+      await client.query('BEGIN');
+      await client.query(
+        `SELECT set_config('app.tenant_bypass', 'on', true)`
+      );
+
+      for (const item of channels) {
+        const channel = String(item?.channel || '').trim().toLowerCase();
+
+        if (!['whatsapp', 'facebook', 'messenger'].includes(channel)) {
+          continue;
+        }
+
+        const normalizedChannel =
+          channel === 'messenger' ? 'facebook' : channel;
+
+        const active = item?.active !== false;
+
+        const config = {
+          ...(item?.config && typeof item.config === 'object'
+            ? item.config
+            : {})
+        };
+
+        const metadata = {
+          ...(item?.metadata && typeof item.metadata === 'object'
+            ? item.metadata
+            : {})
+        };
+
+        if (normalizedChannel === 'facebook') {
+          config.pageId = String(item?.pageId || '').trim();
+          config.pageAccessToken = String(
+            item?.pageAccessToken || ''
+          ).trim();
+        }
+
+        if (normalizedChannel === 'whatsapp') {
+          config.wabaId = String(item?.wabaId || '').trim();
+          config.accessToken = String(item?.accessToken || '').trim();
+        }
+
+        const existing = await client.query(
+          `SELECT id
+             FROM clinic_channels
+            WHERE tenant_id = $1::uuid
+              AND channel = $2
+            ORDER BY id ASC
+            LIMIT 1`,
+          [tenantId, normalizedChannel]
+        );
+
+        if (existing.rows[0]) {
+          await client.query(
+            `UPDATE clinic_channels
+                SET phone_number_id = $1,
+                    name = $2,
+                    clinic_name = $3,
+                    branch_key = $4,
+                    sucursal_id = $5,
+                    db_key = $6,
+                    active = $7,
+                    is_active = $7,
+                    config = $8::jsonb,
+                    metadata = $9::jsonb,
+                    updated_at = NOW()
+              WHERE id = $10
+                AND tenant_id = $11::uuid`,
+            [
+              String(item?.phoneNumberId || '').trim() || null,
+              String(item?.name || '').trim() || null,
+              String(item?.clinicName || '').trim() || null,
+              String(item?.branchKey || '').trim() || null,
+              String(item?.sucursalId || '').trim() || null,
+              String(item?.dbKey || 'db1').trim() || 'db1',
+              active,
+              JSON.stringify(config),
+              JSON.stringify(metadata),
+              existing.rows[0].id,
+              tenantId
+            ]
+          );
+        } else {
+          await client.query(
+            `INSERT INTO clinic_channels (
+               tenant_id,
+               phone_number_id,
+               channel,
+               name,
+               clinic_name,
+               branch_key,
+               sucursal_id,
+               db_key,
+               active,
+               is_active,
+               config,
+               metadata,
+               created_at,
+               updated_at
+             )
+             VALUES (
+               $1::uuid,$2,$3,$4,$5,$6,$7,$8,$9,$9,
+               $10::jsonb,$11::jsonb,NOW(),NOW()
+             )`,
+            [
+              tenantId,
+              String(item?.phoneNumberId || '').trim() || null,
+              normalizedChannel,
+              String(item?.name || '').trim() || null,
+              String(item?.clinicName || '').trim() || null,
+              String(item?.branchKey || '').trim() || null,
+              String(item?.sucursalId || '').trim() || null,
+              String(item?.dbKey || 'db1').trim() || 'db1',
+              active,
+              JSON.stringify(config),
+              JSON.stringify(metadata)
+            ]
+          );
+        }
+      }
+
+      await client.query('COMMIT');
+
+      const { rows } = await poolDB1.query(
+        `SELECT *
+           FROM clinic_channels
+          WHERE tenant_id = $1::uuid
+          ORDER BY created_at ASC, id ASC`,
+        [tenantId]
+      );
+
+      res.json(rows.map(mapCompanyChannel));
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+  })
+);
+
 app.post('/api/companies', authRequired, companiesSuperAdminOnly, ah(async (req, res) => {
   const name = String(req.body?.name || '').trim();
   const ownerName = String(req.body?.ownerName || '').trim();
