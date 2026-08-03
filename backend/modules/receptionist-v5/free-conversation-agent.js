@@ -986,7 +986,16 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
     used = 'prepare_confirmation';
   }
 
-  if (plan.action.type === 'create_appointment') {
+  console.log("======== CREATE APPOINTMENT ========");
+console.log({
+  action: plan.action.type,
+  reschedule_requested: state.reschedule_requested,
+  pending_booking: !!state.pending_booking,
+  appointment_id: state.appointment_id,
+  booking_key: state.pending_booking?.booking_key
+});
+
+if (plan.action.type === 'create_appointment') {
     const normalized = state.pending_booking
       ? normalizedPendingBooking(state, knowledge)
       : ensurePendingBookingFromCollected(state, knowledge);
@@ -1018,7 +1027,9 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
       plan.reply = 'Esa cita ya fue registrada anteriormente; no crearé un duplicado.';
       used = 'duplicate_blocked';
     } else {
-      if (state.reschedule_requested) {
+      console.log("RESCHEDULE FLAG =", state.reschedule_requested);
+
+if (state.reschedule_requested) {
         try {
           const result = await Appointment.rescheduleAppointment(q, ctx, pending);
           const updated = result.appointment;
