@@ -190,7 +190,7 @@ function setupF1Routes(app, q, deps) {
       const multipartBody = Buffer.concat([
         Buffer.from(
           `--${boundary}\r\n` +
-          `Content-Disposition: form-data; name=\"sdp\"; filename=\"offer.sdp\"\r\n` +
+          `Content-Disposition: form-data; name=\"sdp\"\r\n` +
           `Content-Type: application/sdp\r\n\r\n`,
           'utf8'
         ),
@@ -205,6 +205,13 @@ function setupF1Routes(app, q, deps) {
         ),
       ]);
 
+      console.log('🎙️ F1 Realtime: enviando oferta SDP', {
+        tenant_id: ctx.tenant_id,
+        branch_key: ctx.branch_key,
+        sdp_bytes: Buffer.byteLength(req.body, 'utf8'),
+        multipart_bytes: multipartBody.length,
+      });
+
       const upstream = await fetch('https://api.openai.com/v1/realtime/calls', {
         method: 'POST',
         headers: {
@@ -215,6 +222,12 @@ function setupF1Routes(app, q, deps) {
         body: multipartBody,
       });
       const body = await upstream.text();
+      console.log('🎙️ F1 Realtime: respuesta OpenAI', {
+        tenant_id: ctx.tenant_id,
+        branch_key: ctx.branch_key,
+        status: upstream.status,
+        ok: upstream.ok,
+      });
       if (!upstream.ok) return res.status(upstream.status).type('text/plain').send(body);
       const location = upstream.headers.get('location');
       if (location) res.setHeader('x-openai-call-location', location);
