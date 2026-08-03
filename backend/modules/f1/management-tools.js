@@ -7,6 +7,7 @@ const {
   createAppointmentTransactional,
 } = require('../booking-engine');
 const { buildOperationsReport } = require('./operations-director');
+const { f1EventBus } = require('./event-bus');
 
 function text(value) {
   return value == null ? '' : String(value).trim();
@@ -26,6 +27,35 @@ function localDate(timeZone = process.env.TZ || 'America/Tijuana', offsetDays = 
 
 function normalizeStatus(value) {
   return text(value).toLowerCase();
+}
+
+
+function emitAppointmentEvent(name, appointment, ctx, extra = {}) {
+  try {
+    return f1EventBus.emit(
+      name,
+      {
+        appointment_id: appointment?.id || null,
+        patient: appointment?.patient || null,
+        date: appointment?.date || null,
+        start_time: appointment?.start_time || null,
+        status: appointment?.status || null,
+        doctor_id: appointment?.doctor_id || null,
+        service_id: appointment?.service_id || null,
+        ...extra,
+      },
+      {
+        tenant_id: ctx.tenant_id,
+        branch_key: ctx.branch_key || appointment?.sucursal_id || 'sucursal_1',
+        user_id: ctx.user_id || null,
+        source: 'f1',
+      }
+    );
+  } catch (error) {
+    // El Event Bus nunca debe bloquear una operación clínica ya confirmada en BD.
+    console.warn('⚠️ F1 Event Bus: no se pudo publicar evento de agenda:', error.message);
+    return null;
+  }
 }
 
 async function todaySummary(q, ctx, args = {}) {
@@ -147,6 +177,13 @@ async function createAppointment(q, ctx, args = {}) {
   });
 
   const appointment = created || {};
+  emitAppointmentEvent('appointment.created', appointment, {
+    ...ctx,
+    branch_key: branchKey,
+  }, {
+    requested_patient: text(args.patient),
+  });
+
   const patient = text(appointment.patient || args.patient);
   const date = text(appointment.date || selectedSlot.date);
   const startTime = text(appointment.start_time || selectedSlot.start_time).slice(0, 5);
@@ -199,6 +236,7 @@ async function cancelAppointment(q, ctx, args = {}) {
      RETURNING id, patient, date, start_time::text AS start_time, status
   `, [id, ctx.tenant_id]);
   if (!rows[0]) throw new Error('Cita no encontrada');
+  emitAppointmentEvent('appointment.cancelled', rows[0], ctx);
   return {
     ok: true,
     appointment: rows[0],
@@ -213,7 +251,7 @@ async function rescheduleAppointment(q, ctx, args = {}) {
   if (!args.date || !args.start_time) throw new Error('Faltan fecha u hora');
 
   const { rows: currentRows } = await q(`
-    SELECT id, patient, phone, service_id, doctor_id, sucursal_id
+    SELECT id, patient, phone, service_id, doctor_id, sucursal_id, date, start_time::text AS start_time
       FROM appointments
      WHERE id=$1 AND tenant_id=$2::uuid
      LIMIT 1
@@ -238,6 +276,15 @@ async function rescheduleAppointment(q, ctx, args = {}) {
      WHERE id=$5 AND tenant_id=$6::uuid
      RETURNING id, patient, date, start_time::text AS start_time, doctor_id, status
   `, [args.date, slot.start_time, slot.doctor_id, branchKey, id, ctx.tenant_id]);
+
+  emitAppointmentEvent('appointment.rescheduled', rows[0], {
+    ...ctx,
+    branch_key: branchKey,
+  }, {
+    previous_date: current.date || null,
+    previous_start_time: current.start_time || null,
+  });
+
   return {
     ok: true,
     appointment: rows[0],

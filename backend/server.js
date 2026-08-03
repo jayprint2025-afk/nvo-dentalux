@@ -23,6 +23,7 @@ const morgan = require('morgan');
 const { Pool } = require('pg');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const { f1EventBus } = require('./modules/f1/event-bus');
 
 
 // =========================================================
@@ -440,6 +441,60 @@ function safeNumber(value) {
   if (value === null || value === undefined || value === '') return 0;
   const num = parseFloat(value);
   return isNaN(num) ? 0 : num;
+}
+
+
+function publishAppointmentEvent(name, appointment, req, extra = {}) {
+  if (!appointment) return null;
+
+  try {
+    return f1EventBus.emit(
+      name,
+      {
+        appointment_id: appointment.id || null,
+        patient: appointment.patient || null,
+        date: appointment.date || null,
+        start_time: appointment.start_time || null,
+        status: appointment.status || null,
+        doctor_id: appointment.doctor_id || null,
+        service_id: appointment.service_id || null,
+        ...extra,
+      },
+      {
+        tenant_id: getTenantId(req),
+        branch_key: getSucursal(req),
+        user_id: req.auth?.sub || null,
+        source: 'agenda-api',
+      }
+    );
+  } catch (error) {
+    // La publicación de un evento nunca debe revertir una operación ya guardada.
+    console.warn('⚠️ Event Bus Agenda:', error.message);
+    return null;
+  }
+}
+
+function classifyAppointmentUpdate(previous, updated) {
+  const beforeStatus = String(previous?.status || '').trim().toLowerCase();
+  const afterStatus = String(updated?.status || '').trim().toLowerCase();
+
+  if (afterStatus.includes('cancel') && beforeStatus !== afterStatus) {
+    return 'appointment.cancelled';
+  }
+  if (afterStatus.includes('confirm') && beforeStatus !== afterStatus) {
+    return 'appointment.confirmed';
+  }
+
+  const beforeDate = String(previous?.date || '').slice(0, 10);
+  const afterDate = String(updated?.date || '').slice(0, 10);
+  const beforeTime = String(previous?.start_time || '').slice(0, 5);
+  const afterTime = String(updated?.start_time || '').slice(0, 5);
+
+  if (beforeDate !== afterDate || beforeTime !== afterTime) {
+    return 'appointment.rescheduled';
+  }
+
+  return 'appointment.updated';
 }
 
 // ===================================================================
@@ -1799,6 +1854,8 @@ app.post('/api/appointments', authRequired, ah(async (req, res) => {
      RETURNING *`,
     [cleanPatient, doctor_id ? Number(doctor_id) : null, date, start_time || '09:00', duration_hours ? Number(duration_hours) : 1, service_id ? Number(service_id) : null, phone || null, status || 'Pendiente', s, tenantId]
   );
+
+  publishAppointmentEvent('appointment.created', rows[0], req);
   res.json(rows[0]);
 }));
 
@@ -1809,8 +1866,10 @@ app.put('/api/appointments/:id', authRequired, ah(async (req, res) => {
   const { patient, doctor_id, date, start_time, duration_hours, service_id, phone, status } = req.body || {};
 
   const { rows: prevRows } = await q(
-    `SELECT status, service_id FROM appointments
-     WHERE id=$1 AND tenant_id=$2 AND ${sucWhereN(3)}`,
+    `SELECT id, patient, doctor_id, date, start_time::text AS start_time,
+            duration_hours, service_id, phone, status, sucursal_id
+       FROM appointments
+      WHERE id=$1 AND tenant_id=$2 AND ${sucWhereN(3)}`,
     [id, tenantId, s]
   );
   const prev = prevRows[0] || null;
@@ -1829,6 +1888,11 @@ app.put('/api/appointments/:id', authRequired, ah(async (req, res) => {
   const updated = rows[0] || null;
 
   if (updated) {
+    const eventName = classifyAppointmentUpdate(prev, updated);
+    publishAppointmentEvent(eventName, updated, req, {
+      previous: prev,
+    });
+
     const finalStatus = (status || updated.status || '').toLowerCase();
     const esFinalizadaAhora = FINAL_APPOINTMENT_STATUSES.includes(finalStatus);
     if (esFinalizadaAhora && !yaEraFinalizada) {
@@ -1855,8 +1919,19 @@ app.put('/api/appointments/:id', authRequired, ah(async (req, res) => {
 app.delete('/api/appointments/:id', authRequired, ah(async (req, res) => {
   const s = getSucursal(req);
   const tenantId = getTenantId(req);
-  await q(`DELETE FROM appointments WHERE id=$1 AND tenant_id=$2 AND ${sucWhereN(3)}`,
-    [Number(req.params.id), tenantId, s]);
+  const { rows } = await q(
+    `DELETE FROM appointments
+      WHERE id=$1 AND tenant_id=$2 AND ${sucWhereN(3)}
+      RETURNING *`,
+    [Number(req.params.id), tenantId, s]
+  );
+
+  if (rows[0]) {
+    publishAppointmentEvent('appointment.updated', rows[0], req, {
+      action: 'deleted',
+    });
+  }
+
   res.status(204).end();
 }));
 

@@ -5,6 +5,7 @@ const { tools } = require('./tool-definitions');
 const { contextText, executeMemoryTool, observeToolResult, setSessionValue } = require('./memory-store');
 const { buildOperationsReport } = require('./operations-director');
 const { buildDailyBriefingText, synthesizeDailyBriefing } = require('./daily-briefing');
+const { f1EventBus } = require('./event-bus');
 
 // Idempotencia de acciones Realtime por empresa + call_id.
 // Evita ejecutar dos veces la misma herramienta cuando OpenAI emite
@@ -115,6 +116,28 @@ async function executeF1Tool(q, ctx, name, args = {}) {
 function setupF1Routes(app, q, deps) {
   const { authRequired, getTenantId, getSucursal } = deps;
   app.use('/api/f1', authRequired);
+
+  // F1-011B: historial reciente del Event Bus, aislado por empresa y sucursal.
+  // Sirve para validar que Agenda está publicando sus movimientos.
+  app.get('/api/f1/events', async (req, res) => {
+    try {
+      const ctx = buildContext(req, getTenantId, getSucursal);
+      const events = f1EventBus.getHistory({
+        tenant_id: ctx.tenant_id,
+        branch_key: req.query.branch_key || ctx.branch_key,
+        name: req.query.name || '',
+        limit: req.query.limit || 50,
+      });
+      res.json({
+        ok: true,
+        tenant_id: ctx.tenant_id,
+        branch_key: req.query.branch_key || ctx.branch_key,
+        events,
+      });
+    } catch (error) {
+      res.status(error.statusCode || error.status || 500).json({ error: error.message });
+    }
+  });
 
   app.get('/api/f1/today-summary', async (req, res) => {
     try {
