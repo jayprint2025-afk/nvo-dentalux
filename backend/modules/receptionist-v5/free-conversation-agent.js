@@ -529,6 +529,48 @@ function publishMessengerAppointmentRescheduled(result, ctx) {
   }
 }
 
+
+function publishMessengerAppointmentCancelled(appointment, ctx) {
+  if (!appointment?.id) return null;
+
+  const tenantId = String(ctx?.tenant_id || ctx?.clinic_id || '').trim();
+  if (!tenantId) return null;
+
+  try {
+    return f1EventBus.emit(
+      'appointment.cancelled',
+      {
+        appointment_id: appointment.id,
+        patient: appointment.patient || null,
+        phone: appointment.phone || null,
+        date: appointment.date || null,
+        start_time: appointment.start_time || null,
+        status: appointment.status || 'Cancelada',
+        doctor_id: appointment.doctor_id || null,
+        service_id: appointment.service_id || null,
+        channel: 'messenger',
+      },
+      {
+        tenant_id: tenantId,
+        branch_key: appointment.sucursal_id || 'sucursal_1',
+        user_id: ctx?.conversationId
+          ? `messenger-conversation:${ctx.conversationId}`
+          : 'messenger',
+        source: 'messenger',
+      }
+    );
+  } catch (error) {
+    console.warn('⚠️ Messenger Event Bus appointment.cancelled:', error.message);
+    return null;
+  }
+}
+
+function affirmativeAction(text) {
+  const value = Grounding.normalize(text);
+  return /^(si|sí|ok|okay|correcto|esta bien|está bien|confirmo|adelante|de acuerdo)$/.test(value) ||
+    /\b(si confirma|confirmo la cancelacion|cancela la cita|si cancelala)\b/.test(value);
+}
+
 function publishMessengerAppointmentCreated(created, pending, ctx) {
   if (!created?.id) return null;
 
@@ -605,22 +647,125 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
   const state = Memory.initialState(incoming);
   ObjectivePlanner.ensureGoal(state);
 
-  const isRescheduleTurn = rescheduleIntent(userText);
   const previousCollected = { ...(state.collected || {}) };
   const previousPending = state.pending_booking
     ? { ...state.pending_booking }
     : null;
 
   const grounding = Grounding.deriveFacts(userText, knowledge, state);
-  state.collected = {
-    ...grounding.collected,
-    booking_mode:
-      isRescheduleTurn ||
-      previousCollected.booking_mode === 'reschedule' ||
-      previousPending?.booking_mode === 'reschedule'
-        ? 'reschedule'
-        : (grounding.collected?.booking_mode || previousCollected.booking_mode || 'create'),
-  };
+  state.collected = grounding.collected;
+
+  // Cancelación puntual de Messenger: usa estado persistido dentro de collected.
+  if (state.collected.booking_mode === 'cancel') {
+    const existingTarget = state.collected.cancel_target || null;
+
+    if (existingTarget && affirmativeAction(userText)) {
+      const cancelled = await Appointment.cancelAppointment(q, ctx, {
+        appointment_id: existingTarget.id,
+      });
+
+      publishMessengerAppointmentCancelled(cancelled, ctx);
+
+      delete state.collected.cancel_target;
+      state.collected.booking_mode = 'create';
+      state.pending_booking = null;
+      state.appointment_id = cancelled.id;
+
+      const reply =
+        `Listo, cancelé tu cita del ${String(cancelled.date).slice(0, 10)} ` +
+        `a las ${String(cancelled.start_time).slice(0, 5)}.`;
+
+      Memory.recordTurn(state, userText, reply, {
+        used: 'appointment_cancelled',
+        objective: ObjectivePlanner.nextObjective(state),
+      });
+
+      return {
+        reply,
+        state,
+        used: 'appointment_cancelled',
+        engine_version: 'v5',
+      };
+    }
+
+    if (existingTarget && Grounding.isNegative(userText)) {
+      delete state.collected.cancel_target;
+      state.collected.booking_mode = 'create';
+
+      const reply = 'De acuerdo, no hice ningún cambio en tu cita.';
+      Memory.recordTurn(state, userText, reply, {
+        used: 'appointment_cancellation_declined',
+        objective: ObjectivePlanner.nextObjective(state),
+      });
+
+      return {
+        reply,
+        state,
+        used: 'appointment_cancellation_declined',
+        engine_version: 'v5',
+      };
+    }
+
+    if (!existingTarget) {
+      const found = await Appointment.findFutureAppointment(q, ctx, state.collected);
+
+      if (!found) {
+        state.collected.booking_mode = 'create';
+        const reply =
+          'No encontré una cita futura asociada a tu nombre o teléfono para cancelarla.';
+
+        Memory.recordTurn(state, userText, reply, {
+          used: 'cancel_appointment_not_found',
+          objective: ObjectivePlanner.nextObjective(state),
+        });
+
+        return {
+          reply,
+          state,
+          used: 'cancel_appointment_not_found',
+          engine_version: 'v5',
+        };
+      }
+
+      state.collected.cancel_target = {
+        id: found.id,
+        patient: found.patient,
+        date: found.date,
+        start_time: found.start_time,
+        sucursal_id: found.sucursal_id,
+      };
+
+      const reply =
+        `Encontré tu cita del ${String(found.date).slice(0, 10)} ` +
+        `a las ${String(found.start_time).slice(0, 5)}. ` +
+        `¿Confirmas que deseas cancelarla?`;
+
+      Memory.recordTurn(state, userText, reply, {
+        used: 'prepare_cancellation',
+        objective: ObjectivePlanner.nextObjective(state),
+      });
+
+      return {
+        reply,
+        state,
+        used: 'prepare_cancellation',
+        engine_version: 'v5',
+      };
+    }
+
+    const reply = '¿Confirmas que deseas cancelar esa cita?';
+    Memory.recordTurn(state, userText, reply, {
+      used: 'awaiting_cancellation_confirmation',
+      objective: ObjectivePlanner.nextObjective(state),
+    });
+
+    return {
+      reply,
+      state,
+      used: 'awaiting_cancellation_confirmation',
+      engine_version: 'v5',
+    };
+  }
 
   const bookingModification = detectBookingModification({
     userText,

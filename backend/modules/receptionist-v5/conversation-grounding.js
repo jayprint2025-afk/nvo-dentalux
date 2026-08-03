@@ -195,8 +195,31 @@ function isNegative(text) {
     /\bno me sirve|no funciona|otro horario|mas tarde|mas temprano|prefiero otro\b/.test(n);
 }
 
+function appointmentActionIntent(text) {
+  const n = normalize(text);
+
+  if (/\b(cancelar|cancela|cancelame|anular|anula|eliminar|elimina)\b.{0,40}\b(cita|consulta)\b/.test(n) ||
+      /\b(ya no puedo asistir|no podre asistir|no voy a poder ir|quiero cancelar)\b/.test(n)) {
+    return 'cancel';
+  }
+
+  if (/\b(reagendar|reagenda|reprogramar|reprograma)\b/.test(n) ||
+      /\b(mover|mueve|cambiar|cambia)\b.{0,40}\b(cita|fecha|dia|hora|horario)\b/.test(n) ||
+      /\b(otra fecha|otro dia|otro horario)\b.{0,30}\b(cita|consulta)?\b/.test(n)) {
+    return 'reschedule';
+  }
+
+  return null;
+}
+
+
 function deriveFacts(text, knowledge, state, options = {}) {
   const collected = { ...(state.collected || {}) };
+  const appointmentAction = appointmentActionIntent(text);
+
+  if (appointmentAction) {
+    collected.booking_mode = appointmentAction;
+  }
   const branch = findBranch(text, knowledge.branches);
   const service = findService(text, knowledge.services);
   const phone = extractPhone(text);
@@ -228,6 +251,7 @@ function deriveFacts(text, knowledge, state, options = {}) {
       date,
       time,
       information_intents: informationIntents(text),
+      appointment_action: appointmentAction,
       negative: isNegative(text),
     },
   };
@@ -340,6 +364,7 @@ module.exports = {
   parseDate,
   parseTimePreference,
   informationIntents,
+  appointmentActionIntent,
   deriveFacts,
   knownFacts,
   replyViolations,

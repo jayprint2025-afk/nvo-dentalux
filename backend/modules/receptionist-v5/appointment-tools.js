@@ -111,6 +111,36 @@ async function rescheduleAppointment(q, ctx, args = {}) {
 }
 
 
+async function cancelAppointment(q, ctx, args = {}) {
+  const tenantId = String(ctx.tenant_id || ctx.clinic_id || '').trim();
+  if (!tenantId) throw new Error('No se pudo identificar la empresa');
+
+  const appointmentId = Number(args.appointment_id || args.id);
+  if (!Number.isFinite(appointmentId) || appointmentId <= 0) {
+    throw new Error('ID de cita inválido');
+  }
+
+  const { rows } = await q(
+    `UPDATE appointments
+        SET status = 'Cancelada'
+      WHERE id = $1
+        AND tenant_id = $2::uuid
+      RETURNING id, patient, phone, doctor_id, service_id, date,
+                start_time::text AS start_time, duration_hours, status,
+                sucursal_id, tenant_id`,
+    [appointmentId, tenantId]
+  );
+
+  if (!rows[0]) {
+    const error = new Error('No encontré la cita para cancelar');
+    error.code = 'APPOINTMENT_NOT_FOUND';
+    throw error;
+  }
+
+  return rows[0];
+}
+
+
 async function createAppointment(q, ctx, args) {
   return createAppointmentTransactional(q, {
     tenant_id: ctx.tenant_id || ctx.clinic_id,
@@ -123,4 +153,4 @@ async function createAppointment(q, ctx, args) {
   });
 }
 
-module.exports={checkAvailability,createAppointment,findFutureAppointment,rescheduleAppointment,bookingKey};
+module.exports={checkAvailability,createAppointment,findFutureAppointment,rescheduleAppointment,cancelAppointment,bookingKey};
