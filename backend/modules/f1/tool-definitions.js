@@ -111,6 +111,102 @@ const tools = [
     },
   },
 
+  {
+    type: 'function',
+    name: 'get_income_summary',
+    description: 'Consulta ingresos por un día o periodo y desglosa efectivo, transferencia y tarjeta.',
+    parameters: {
+      type: 'object',
+      properties: {
+        date: { type: 'string', description: 'Fecha única YYYY-MM-DD.' },
+        date_from: { type: 'string', description: 'Fecha inicial YYYY-MM-DD.' },
+        date_to: { type: 'string', description: 'Fecha final YYYY-MM-DD.' },
+        branch_key: { type: 'string' },
+      },
+    },
+  },
+  {
+    type: 'function',
+    name: 'get_expense_summary',
+    description: 'Consulta el total de gastos por un día o periodo.',
+    parameters: {
+      type: 'object',
+      properties: {
+        date: { type: 'string' },
+        date_from: { type: 'string' },
+        date_to: { type: 'string' },
+        branch_key: { type: 'string' },
+      },
+    },
+  },
+  {
+    type: 'function',
+    name: 'get_daily_net',
+    description: 'Calcula el neto de Caja: ingresos menos gastos para un día o periodo.',
+    parameters: {
+      type: 'object',
+      properties: {
+        date: { type: 'string' },
+        date_from: { type: 'string' },
+        date_to: { type: 'string' },
+        branch_key: { type: 'string' },
+      },
+    },
+  },
+  {
+    type: 'function',
+    name: 'list_recent_payments',
+    description: 'Lista los pagos más recientes de la sucursal activa.',
+    parameters: {
+      type: 'object',
+      properties: {
+        limit: { type: 'number' },
+        branch_key: { type: 'string' },
+      },
+    },
+  },
+  {
+    type: 'function',
+    name: 'register_payment',
+    description: 'Registra un pago. Primero debe usarse con confirmed=false para pedir confirmación. Solo después de una confirmación explícita debe usarse con confirmed=true.',
+    parameters: {
+      type: 'object',
+      properties: {
+        patient: { type: 'string' },
+        amount: { type: 'number' },
+        payment_method: {
+          type: 'string',
+          enum: ['Efectivo', 'Transferencia', 'Tarjeta'],
+        },
+        date: { type: 'string' },
+        appointment_id: { type: ['number', 'string'] },
+        service_id: { type: ['number', 'string'] },
+        doctor_id: { type: ['number', 'string'] },
+        branch_key: { type: 'string' },
+        confirmed: { type: 'boolean' },
+      },
+      required: ['patient', 'amount', 'payment_method', 'confirmed'],
+    },
+  },
+  {
+    type: 'function',
+    name: 'register_expense',
+    description: 'Registra un gasto. Primero debe usarse con confirmed=false para pedir confirmación. Solo después de una confirmación explícita debe usarse con confirmed=true.',
+    parameters: {
+      type: 'object',
+      properties: {
+        concept: { type: 'string' },
+        amount: { type: 'number' },
+        payment_method: { type: 'string' },
+        date: { type: 'string' },
+        doctor_id: { type: ['number', 'string'] },
+        branch_key: { type: 'string' },
+        confirmed: { type: 'boolean' },
+      },
+      required: ['concept', 'amount', 'confirmed'],
+    },
+  },
+
 ];
 
 module.exports = { tools };

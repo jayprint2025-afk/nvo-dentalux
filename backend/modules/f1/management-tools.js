@@ -294,6 +294,295 @@ async function rescheduleAppointment(q, ctx, args = {}) {
 }
 
 
+function normalizePaymentMethod(value) {
+  const raw = text(value).toLowerCase();
+  if (!raw) return '';
+  if (raw.includes('efect')) return 'Efectivo';
+  if (raw.includes('transfer')) return 'Transferencia';
+  if (raw.includes('tarjet') || raw.includes('card')) return 'Tarjeta';
+  return text(value);
+}
+
+function moneyValue(value) {
+  const amount = Number(value);
+  return Number.isFinite(amount) ? amount : 0;
+}
+
+function emitFinanceEvent(name, payload, ctx, branchKey) {
+  try {
+    return f1EventBus.emit(name, payload, {
+      tenant_id: ctx.tenant_id,
+      branch_key: branchKey || ctx.branch_key || 'sucursal_1',
+      user_id: ctx.user_id || null,
+      source: 'f1',
+    });
+  } catch (error) {
+    console.warn(`⚠️ F1 Event Bus ${name}:`, error.message);
+    return null;
+  }
+}
+
+async function getIncomeSummary(q, ctx, args = {}) {
+  const branch = text(args.branch_key || ctx.branch_key) || 'sucursal_1';
+  const dateFrom = text(args.date_from || args.date || localDate(ctx.timezone));
+  const dateTo = text(args.date_to || args.date || dateFrom);
+
+  const { rows } = await q(`
+    SELECT
+      COALESCE(SUM(amount),0)::numeric AS total,
+      COALESCE(SUM(amount) FILTER (
+        WHERE LOWER(COALESCE(payment_method,'')) LIKE '%efect%'
+      ),0)::numeric AS cash,
+      COALESCE(SUM(amount) FILTER (
+        WHERE LOWER(COALESCE(payment_method,'')) LIKE '%transfer%'
+      ),0)::numeric AS transfer,
+      COALESCE(SUM(amount) FILTER (
+        WHERE LOWER(COALESCE(payment_method,'')) LIKE '%tarjet%'
+           OR LOWER(COALESCE(payment_method,'')) LIKE '%card%'
+      ),0)::numeric AS card,
+      COUNT(*)::integer AS movements
+    FROM payments
+    WHERE tenant_id=$1::uuid
+      AND date BETWEEN $2::date AND $3::date
+      AND (sucursal_id=$4 OR sucursal_id IS NULL)
+  `, [ctx.tenant_id, dateFrom, dateTo, branch]);
+
+  const row = rows[0] || {};
+  const total = moneyValue(row.total);
+  const cash = moneyValue(row.cash);
+  const transfer = moneyValue(row.transfer);
+  const card = moneyValue(row.card);
+
+  return {
+    date_from: dateFrom,
+    date_to: dateTo,
+    branch_key: branch,
+    total,
+    methods: { cash, transfer, card },
+    movements: Number(row.movements || 0),
+    assistant_message:
+      `Del ${dateFrom} al ${dateTo} se registraron $${total.toFixed(2)} en ingresos: ` +
+      `$${cash.toFixed(2)} en efectivo, $${transfer.toFixed(2)} por transferencia ` +
+      `y $${card.toFixed(2)} con tarjeta.`,
+  };
+}
+
+async function getExpenseSummary(q, ctx, args = {}) {
+  const branch = text(args.branch_key || ctx.branch_key) || 'sucursal_1';
+  const dateFrom = text(args.date_from || args.date || localDate(ctx.timezone));
+  const dateTo = text(args.date_to || args.date || dateFrom);
+
+  const { rows } = await q(`
+    SELECT COALESCE(SUM(amount),0)::numeric AS total,
+           COUNT(*)::integer AS movements
+    FROM expenses
+    WHERE tenant_id=$1::uuid
+      AND date BETWEEN $2::date AND $3::date
+      AND (sucursal_id=$4 OR sucursal_id IS NULL)
+  `, [ctx.tenant_id, dateFrom, dateTo, branch]);
+
+  const row = rows[0] || {};
+  const total = moneyValue(row.total);
+
+  return {
+    date_from: dateFrom,
+    date_to: dateTo,
+    branch_key: branch,
+    total,
+    movements: Number(row.movements || 0),
+    assistant_message:
+      `Del ${dateFrom} al ${dateTo} se registraron $${total.toFixed(2)} en gastos.`,
+  };
+}
+
+async function getDailyNet(q, ctx, args = {}) {
+  const income = await getIncomeSummary(q, ctx, args);
+  const expenses = await getExpenseSummary(q, ctx, args);
+  const net = income.total - expenses.total;
+
+  return {
+    date_from: income.date_from,
+    date_to: income.date_to,
+    branch_key: income.branch_key,
+    income: income.total,
+    expenses: expenses.total,
+    net,
+    assistant_message:
+      `El resultado neto del periodo es $${net.toFixed(2)}: ` +
+      `$${income.total.toFixed(2)} de ingresos menos ` +
+      `$${expenses.total.toFixed(2)} de gastos.`,
+  };
+}
+
+async function listRecentPayments(q, ctx, args = {}) {
+  const branch = text(args.branch_key || ctx.branch_key) || 'sucursal_1';
+  const limit = Math.max(1, Math.min(Number(args.limit || 10), 30));
+
+  const { rows } = await q(`
+    SELECT id, appointment_id, patient, service_id, amount,
+           payment_method, date, doctor_id, sucursal_id
+    FROM payments
+    WHERE tenant_id=$1::uuid
+      AND (sucursal_id=$2 OR sucursal_id IS NULL)
+    ORDER BY date DESC, id DESC
+    LIMIT $3
+  `, [ctx.tenant_id, branch, limit]);
+
+  return {
+    payments: rows,
+    assistant_message: rows.length
+      ? `Encontré ${rows.length} pago${rows.length === 1 ? '' : 's'} reciente${rows.length === 1 ? '' : 's'}.`
+      : 'No encontré pagos recientes en la sucursal actual.',
+  };
+}
+
+async function registerPayment(q, ctx, args = {}) {
+  const patient = text(args.patient);
+  const amount = moneyValue(args.amount);
+  const paymentMethod = normalizePaymentMethod(args.payment_method);
+  const date = text(args.date) || localDate(ctx.timezone);
+  const branch = text(args.branch_key || ctx.branch_key) || 'sucursal_1';
+
+  if (!patient) throw new Error('Falta el nombre del paciente');
+  if (amount <= 0) throw new Error('El monto debe ser mayor a 0');
+  if (!paymentMethod) throw new Error('Falta el método de pago');
+
+  if (args.confirmed !== true) {
+    return {
+      ok: false,
+      confirmation_required: true,
+      pending_action: {
+        tool: 'register_payment',
+        args: {
+          ...args,
+          patient,
+          amount,
+          payment_method: paymentMethod,
+          date,
+          branch_key: branch,
+          confirmed: true,
+        },
+      },
+      assistant_message:
+        `Voy a registrar un pago de $${amount.toFixed(2)} de ${patient} ` +
+        `en ${paymentMethod}. ¿Confirmas?`,
+    };
+  }
+
+  const { rows } = await q(`
+    INSERT INTO payments (
+      appointment_id, patient, service_id, amount, payment_method,
+      date, doctor_id, sucursal_id, tenant_id
+    )
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::uuid)
+    RETURNING *
+  `, [
+    args.appointment_id || null,
+    patient,
+    args.service_id ? Number(args.service_id) : null,
+    amount,
+    paymentMethod,
+    date,
+    args.doctor_id ? Number(args.doctor_id) : null,
+    branch,
+    ctx.tenant_id,
+  ]);
+
+  const payment = rows[0];
+
+  emitFinanceEvent('payment.created', {
+    payment_id: payment.id,
+    patient: payment.patient,
+    amount: payment.amount,
+    payment_method: payment.payment_method,
+    date: payment.date,
+  }, ctx, branch);
+
+  return {
+    ok: true,
+    payment,
+    assistant_message:
+      `Pago registrado correctamente: $${amount.toFixed(2)} de ${patient} en ${paymentMethod}.`,
+    client_event: {
+      type: 'finance_changed',
+      area: 'payments',
+      movement_id: payment.id,
+    },
+  };
+}
+
+async function registerExpense(q, ctx, args = {}) {
+  const concept = text(args.concept);
+  const amount = moneyValue(args.amount);
+  const date = text(args.date) || localDate(ctx.timezone);
+  const paymentMethod = normalizePaymentMethod(args.payment_method) || null;
+  const branch = text(args.branch_key || ctx.branch_key) || 'sucursal_1';
+
+  if (!concept) throw new Error('Falta el concepto del gasto');
+  if (amount <= 0) throw new Error('El monto debe ser mayor a 0');
+
+  if (args.confirmed !== true) {
+    return {
+      ok: false,
+      confirmation_required: true,
+      pending_action: {
+        tool: 'register_expense',
+        args: {
+          ...args,
+          concept,
+          amount,
+          payment_method: paymentMethod,
+          date,
+          branch_key: branch,
+          confirmed: true,
+        },
+      },
+      assistant_message:
+        `Voy a registrar un gasto de $${amount.toFixed(2)} por ${concept}. ¿Confirmas?`,
+    };
+  }
+
+  const { rows } = await q(`
+    INSERT INTO expenses (
+      concept, amount, date, doctor_id, payment_method,
+      sucursal_id, tenant_id
+    )
+    VALUES ($1,$2,$3,$4,$5,$6,$7::uuid)
+    RETURNING *
+  `, [
+    concept,
+    amount,
+    date,
+    args.doctor_id ? Number(args.doctor_id) : null,
+    paymentMethod,
+    branch,
+    ctx.tenant_id,
+  ]);
+
+  const expense = rows[0];
+
+  emitFinanceEvent('expense.created', {
+    expense_id: expense.id,
+    concept: expense.concept,
+    amount: expense.amount,
+    payment_method: expense.payment_method,
+    date: expense.date,
+  }, ctx, branch);
+
+  return {
+    ok: true,
+    expense,
+    assistant_message:
+      `Gasto registrado correctamente: $${amount.toFixed(2)} por ${concept}.`,
+    client_event: {
+      type: 'finance_changed',
+      area: 'expenses',
+      movement_id: expense.id,
+    },
+  };
+}
+
+
 function openModule(_q, _ctx, args = {}) {
   const raw = text(args.module).toLowerCase();
   const aliases = {
@@ -323,6 +612,12 @@ async function operationsReport(q, ctx, args = {}) {
 const handlers = {
   open_module: openModule,
   get_operations_report: operationsReport,
+  get_income_summary: getIncomeSummary,
+  get_expense_summary: getExpenseSummary,
+  get_daily_net: getDailyNet,
+  list_recent_payments: listRecentPayments,
+  register_payment: registerPayment,
+  register_expense: registerExpense,
   get_today_summary: todaySummary,
   list_doctors: listDoctors,
   list_services: listServices,

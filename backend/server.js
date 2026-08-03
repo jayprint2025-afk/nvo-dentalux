@@ -1957,6 +1957,24 @@ app.post('/api/payments', authRequired, ah(async (req, res) => {
     `INSERT INTO payments (appointment_id, patient, service_id, amount, payment_method, date, doctor_id, sucursal_id, tenant_id)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
     [appointment_id || null, patient.trim(), service_id ? Number(service_id) : null, Number(amount), payment_method.trim(), date, doctor_id ? Number(doctor_id) : null, s, tenantId]);
+
+  try {
+    f1EventBus.emit('payment.created', {
+      payment_id: rows[0].id,
+      patient: rows[0].patient,
+      amount: rows[0].amount,
+      payment_method: rows[0].payment_method,
+      date: rows[0].date,
+    }, {
+      tenant_id: tenantId,
+      branch_key: s,
+      user_id: req.auth?.sub || null,
+      source: 'caja-api',
+    });
+  } catch (error) {
+    console.warn('⚠️ Event Bus Caja payment.created:', error.message);
+  }
+
   res.json(rows[0]);
 }));
 
@@ -1998,6 +2016,24 @@ app.post('/api/expenses', authRequired, ah(async (req, res) => {
     `INSERT INTO expenses (concept, amount, date, doctor_id, payment_method, sucursal_id, tenant_id)
      VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
     [concept.trim(), Number(amount), date, doctor_id ? Number(doctor_id) : null, payment_method || null, s, tenantId]);
+
+  try {
+    f1EventBus.emit('expense.created', {
+      expense_id: rows[0].id,
+      concept: rows[0].concept,
+      amount: rows[0].amount,
+      payment_method: rows[0].payment_method,
+      date: rows[0].date,
+    }, {
+      tenant_id: tenantId,
+      branch_key: s,
+      user_id: req.auth?.sub || null,
+      source: 'caja-api',
+    });
+  } catch (error) {
+    console.warn('⚠️ Event Bus Caja expense.created:', error.message);
+  }
+
   res.json(rows[0]);
 }));
 

@@ -635,6 +635,16 @@ const buildLeadReport = React.useCallback(() => {
           },
         }));
       }
+
+      if (clientEvent?.type === 'finance_changed') {
+        window.dispatchEvent(new CustomEvent('dentalux:finance-changed', {
+          detail: {
+            source: 'f1',
+            area: clientEvent.area || null,
+            movement_id: clientEvent.movement_id || null,
+          },
+        }));
+      }
     }
   }, []);
 
@@ -654,6 +664,10 @@ const buildLeadReport = React.useCallback(() => {
         return `La cita de ${patient} fue reagendada${time ? ` para las ${time}` : ""}.`;
       case "appointment.updated":
         return `La cita de ${patient} fue actualizada.`;
+      case "payment.created":
+        return `Se registró un pago de $${Number(payload?.amount || 0).toFixed(2)} de ${String(payload?.patient || "un paciente")} en ${String(payload?.payment_method || "Caja")}.`;
+      case "expense.created":
+        return `Se registró un gasto de $${Number(payload?.amount || 0).toFixed(2)} por ${String(payload?.concept || "un concepto")}.`;
       default:
         return "";
     }
@@ -681,6 +695,16 @@ const buildLeadReport = React.useCallback(() => {
           source: "event-bus",
           event_name: event.name,
           appointment_id: event?.payload?.appointment_id || null,
+        },
+      }));
+    }
+
+    if (event.name === "payment.created" || event.name === "expense.created") {
+      window.dispatchEvent(new CustomEvent("dentalux:finance-changed", {
+        detail: {
+          source: "event-bus",
+          event_name: event.name,
+          movement_id: event?.payload?.payment_id || event?.payload?.expense_id || null,
         },
       }));
     }
