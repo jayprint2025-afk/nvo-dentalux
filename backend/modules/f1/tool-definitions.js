@@ -64,6 +64,40 @@ const tools = [
       required: ['appointment_id','date','start_time'],
     },
   },
+  {
+    type: 'function',
+    name: 'remember_context',
+    description: 'Guarda una preferencia o dato operativo cuando el usuario pide explícitamente recordarlo. Usa session para una tarea temporal, day para el día actual, user para una preferencia personal permanente y company para una regla general de la empresa.',
+    parameters: {
+      type: 'object',
+      properties: {
+        scope: { type: 'string', enum: ['session','day','user','company'] },
+        key: { type: 'string' },
+        value: {},
+      },
+      required: ['scope','key','value'],
+    },
+  },
+  {
+    type: 'function',
+    name: 'forget_context',
+    description: 'Olvida una memoria cuando el usuario lo solicita explícitamente.',
+    parameters: {
+      type: 'object',
+      properties: {
+        scope: { type: 'string', enum: ['session','day','user','company'] },
+        key: { type: 'string' },
+      },
+      required: ['scope'],
+    },
+  },
+  {
+    type: 'function',
+    name: 'list_context_memory',
+    description: 'Consulta qué contexto recuerda F1 para la sesión, el usuario y la empresa.',
+    parameters: { type: 'object', properties: {} },
+  },
+
 ];
 
 module.exports = { tools };
