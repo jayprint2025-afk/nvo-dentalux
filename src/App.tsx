@@ -6398,13 +6398,11 @@ const [to, setTo] = useState<string>(defaultTo);
     sucursalId={getSucursalActual() || 'sucursal_1'}
   />
 )}
-{/* 🤖 Módulo IA flotante */}
-{isSuperAdmin && (
-  <AIFloatingWidget
-    sucursalId={getSucursalActual() || 'sucursal_1'}
-    dbKey="db2"
-  />
-)}
+{/* 🤖 Módulo IA flotante + F1 Copilot (disponible para todo usuario autenticado) */}
+<AIFloatingWidget
+  sucursalId={getSucursalActual() || 'sucursal_1'}
+  dbKey="db2"
+/>
 
 
       </div>

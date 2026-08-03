@@ -1,5 +1,6 @@
 import React from "react";
-import { MessagesSquare, Send, X, Trash2 } from "lucide-react";
+import { MessagesSquare, Send, X, Trash2, Mic, MicOff, Bell, CalendarDays, Volume2 } from "lucide-react";
+import { api } from "./lib/api";
 
 /**
  * AIFloatingWidget
@@ -118,7 +119,7 @@ export default function AIFloatingWidget(props: { apiBase?: string; sucursalId?:
 
   const [open, setOpen] = React.useState(false);
   const [closing, setClosing] = React.useState(false);
-  const [tab, setTab] = React.useState<"convs" | "chat" | "ventas">("convs");
+  const [tab, setTab] = React.useState<"f1" | "convs" | "chat" | "ventas">("f1");
 
   // Robot flotante (draggable) + persistencia
   const ROBOT_SIZE = 92; // grande y visible
@@ -226,6 +227,22 @@ export default function AIFloatingWidget(props: { apiBase?: string; sucursalId?:
   const [leadInput, setLeadInput] = React.useState("");
   const [sendingLead, setSendingLead] = React.useState(false);
   const [salesErr, setSalesErr] = React.useState<string | null>(null);
+
+  // ===== F1 Copilot: gestión, resumen diario y voz OpenAI Realtime =====
+  type F1Message = { role: "user" | "assistant"; content: string };
+  const [f1Summary, setF1Summary] = React.useState<any>(null);
+  const [f1Notifications, setF1Notifications] = React.useState<any[]>([]);
+  const [f1Messages, setF1Messages] = React.useState<F1Message[]>([]);
+  const [f1Input, setF1Input] = React.useState("");
+  const [f1Sending, setF1Sending] = React.useState(false);
+  const [f1Error, setF1Error] = React.useState<string | null>(null);
+  const [voiceConnected, setVoiceConnected] = React.useState(false);
+  const [voiceConnecting, setVoiceConnecting] = React.useState(false);
+  const [voiceTranscript, setVoiceTranscript] = React.useState("");
+  const peerRef = React.useRef<RTCPeerConnection | null>(null);
+  const dataChannelRef = React.useRef<RTCDataChannel | null>(null);
+  const audioRef = React.useRef<HTMLAudioElement | null>(null);
+  const mediaRef = React.useRef<MediaStream | null>(null);
 
   const headers = React.useMemo(() => {
     const h: Record<string, string> = { "content-type": "application/json" };
@@ -533,6 +550,165 @@ const buildLeadReport = React.useCallback(() => {
       setSendingLead(false);
     }
   }, [API_BASE, headers, leadInput, selectedLead?.id, loadLeadMsgs, loadLeads]);
+
+  const loadF1Dashboard = React.useCallback(async () => {
+    try {
+      setF1Error(null);
+      const data: any = await api(`/f1/notifications?branch_key=${encodeURIComponent(sucursalId || "sucursal_1")}`);
+      setF1Summary(data?.summary || null);
+      setF1Notifications(Array.isArray(data?.notifications) ? data.notifications : []);
+    } catch (error: any) {
+      setF1Error(error?.message || String(error));
+    }
+  }, [sucursalId]);
+
+  const sendF1Text = React.useCallback(async () => {
+    const message = f1Input.trim();
+    if (!message || f1Sending) return;
+    const nextHistory: F1Message[] = [...f1Messages, { role: "user", content: message }];
+    setF1Messages(nextHistory);
+    setF1Input("");
+    setF1Sending(true);
+    setF1Error(null);
+    try {
+      const result: any = await api('/f1/chat', {
+        method: 'POST',
+        body: JSON.stringify({
+          message,
+          branch_key: sucursalId || 'sucursal_1',
+          history: f1Messages.slice(-10),
+        }),
+      });
+      setF1Messages(current => [...current, { role: "assistant", content: String(result?.reply || 'Listo.') }]);
+      if (Array.isArray(result?.actions) && result.actions.length) await loadF1Dashboard();
+    } catch (error: any) {
+      setF1Error(error?.message || String(error));
+    } finally {
+      setF1Sending(false);
+    }
+  }, [f1Input, f1Sending, f1Messages, sucursalId, loadF1Dashboard]);
+
+  const executeRealtimeTool = React.useCallback(async (item: any) => {
+    const name = String(item?.name || '');
+    const callId = String(item?.call_id || item?.id || '');
+    if (!name || !callId) return;
+    let args: any = {};
+    try { args = JSON.parse(item?.arguments || '{}'); } catch {}
+    let output: any;
+    try {
+      output = await api('/f1/actions', {
+        method: 'POST',
+        body: JSON.stringify({ name, arguments: args, branch_key: sucursalId || 'sucursal_1' }),
+      });
+      await loadF1Dashboard();
+    } catch (error: any) {
+      output = { ok: false, error: error?.message || String(error) };
+    }
+    const dc = dataChannelRef.current;
+    if (!dc || dc.readyState !== 'open') return;
+    dc.send(JSON.stringify({
+      type: 'conversation.item.create',
+      item: { type: 'function_call_output', call_id: callId, output: JSON.stringify(output) },
+    }));
+    dc.send(JSON.stringify({ type: 'response.create' }));
+  }, [sucursalId, loadF1Dashboard]);
+
+  const disconnectVoice = React.useCallback(() => {
+    try { dataChannelRef.current?.close(); } catch {}
+    try { peerRef.current?.close(); } catch {}
+    try { mediaRef.current?.getTracks().forEach(track => track.stop()); } catch {}
+    dataChannelRef.current = null;
+    peerRef.current = null;
+    mediaRef.current = null;
+    setVoiceConnected(false);
+    setVoiceConnecting(false);
+  }, []);
+
+  const connectVoice = React.useCallback(async () => {
+    if (voiceConnected || voiceConnecting) {
+      disconnectVoice();
+      return;
+    }
+    setVoiceConnecting(true);
+    setF1Error(null);
+    setVoiceTranscript('Conectando con F1…');
+    try {
+      const token = localStorage.getItem('dentalux_auth_token') || '';
+      if (!token) throw new Error('Inicia sesión nuevamente para usar la voz.');
+      const pc = new RTCPeerConnection();
+      peerRef.current = pc;
+      const audio = audioRef.current || document.createElement('audio');
+      audio.autoplay = true;
+      audioRef.current = audio;
+      pc.ontrack = event => { audio.srcObject = event.streams[0]; };
+
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaRef.current = stream;
+      stream.getTracks().forEach(track => pc.addTrack(track, stream));
+
+      const dc = pc.createDataChannel('oai-events');
+      dataChannelRef.current = dc;
+      dc.onopen = () => {
+        setVoiceConnected(true);
+        setVoiceConnecting(false);
+        setVoiceTranscript('F1 está escuchando…');
+      };
+      dc.onclose = () => setVoiceConnected(false);
+      dc.onmessage = async event => {
+        let payload: any;
+        try { payload = JSON.parse(event.data); } catch { return; }
+        if (payload.type === 'conversation.item.input_audio_transcription.completed') {
+          const transcript = String(payload.transcript || '').trim();
+          if (transcript) {
+            setVoiceTranscript(`Tú: ${transcript}`);
+            setF1Messages(current => [...current, { role: 'user', content: transcript }]);
+          }
+        }
+        if (payload.type === 'response.output_audio_transcript.delta' || payload.type === 'response.audio_transcript.delta') {
+          setVoiceTranscript(current => current.startsWith('F1:') ? `${current}${payload.delta || ''}` : `F1: ${payload.delta || ''}`);
+        }
+        if (payload.type === 'response.output_audio_transcript.done' || payload.type === 'response.audio_transcript.done') {
+          const transcript = String(payload.transcript || '').trim();
+          if (transcript) {
+            setVoiceTranscript(`F1: ${transcript}`);
+            setF1Messages(current => [...current, { role: 'assistant', content: transcript }]);
+          }
+        }
+        if (payload.type === 'response.output_item.done' && payload.item?.type === 'function_call') {
+          await executeRealtimeTool(payload.item);
+        }
+        if (payload.type === 'response.done') {
+          for (const item of payload.response?.output || []) {
+            if (item?.type === 'function_call') await executeRealtimeTool(item);
+          }
+        }
+        if (payload.type === 'error') setF1Error(payload.error?.message || 'Error en la sesión de voz.');
+      };
+
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      const response = await fetch(`${API_BASE}/api/f1/realtime/call?branch_key=${encodeURIComponent(sucursalId || 'sucursal_1')}`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/sdp', 'x-sucursal': sucursalId || 'sucursal_1' },
+        body: offer.sdp || '',
+      });
+      if (!response.ok) throw new Error(await response.text());
+      const answerSdp = await response.text();
+      await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
+    } catch (error: any) {
+      disconnectVoice();
+      setF1Error(error?.message || String(error));
+      setVoiceTranscript('');
+    }
+  }, [API_BASE, sucursalId, voiceConnected, voiceConnecting, disconnectVoice, executeRealtimeTool]);
+
+  React.useEffect(() => {
+    loadF1Dashboard();
+    const timer = window.setInterval(loadF1Dashboard, 60000);
+    return () => window.clearInterval(timer);
+  }, [loadF1Dashboard]);
+
+  React.useEffect(() => () => disconnectVoice(), [disconnectVoice]);
 
   // ===== Effects IA =====
   React.useEffect(() => {
@@ -901,8 +1077,13 @@ const buildLeadReport = React.useCallback(() => {
         title="IA"
       >
         <div className="aiRobotWrap">
-          <img src={ROBOT_SRC} alt="IA" draggable={false} className="aiRobotImg" />
+          <img src={ROBOT_SRC} alt="F1" draggable={false} className="aiRobotImg" />
           <div className="aiBlink" />
+          {!!f1Summary?.counts?.total && (
+            <div style={{ position: "absolute", right: -4, top: -4, minWidth: 24, height: 24, borderRadius: 999, background: "#dc2626", color: "white", fontSize: 11, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 6px", border: "2px solid white" }}>
+              {f1Summary.counts.total}
+            </div>
+          )}
         </div>
       </div>
 
@@ -940,7 +1121,7 @@ const buildLeadReport = React.useCallback(() => {
           >
             <div className="flex items-center gap-2">
               <img src={ROBOT_SRC} alt="IA" className="w-7 h-7 object-contain" draggable={false} />
-              <span className="text-sm font-semibold text-gray-800">IA</span>
+              <span className="text-sm font-semibold text-gray-800">F1 · Asistente CliniqOne</span>
             </div>
 
             <div className="flex items-center gap-2" style={{ flexShrink: 0 }}>
@@ -965,9 +1146,15 @@ const buildLeadReport = React.useCallback(() => {
           </div>
 
           {/* Tabs */}
-          <div className="flex border-b">
+          <div className="flex border-b overflow-x-auto">
             <button
-              className={`flex-1 px-3 py-2 text-sm ${tab === "convs" ? "bg-white font-semibold" : "bg-gray-50"}`}
+              className={`flex-1 min-w-[110px] px-3 py-2 text-sm ${tab === "f1" ? "bg-white font-semibold" : "bg-gray-50"}`}
+              onClick={() => setTab("f1")}
+            >
+              <span className="inline-flex items-center gap-2"><Mic className="w-4 h-4" /> F1 Gestión</span>
+            </button>
+            <button
+              className={`flex-1 min-w-[110px] px-3 py-2 text-sm ${tab === "convs" ? "bg-white font-semibold" : "bg-gray-50"}`}
               onClick={() => setTab("convs")}
             >
               <span className="inline-flex items-center gap-2">
@@ -975,7 +1162,7 @@ const buildLeadReport = React.useCallback(() => {
               </span>
             </button>
             <button
-              className={`flex-1 px-3 py-2 text-sm ${tab === "chat" ? "bg-white font-semibold" : "bg-gray-50"}`}
+              className={`flex-1 min-w-[110px] px-3 py-2 text-sm ${tab === "chat" ? "bg-white font-semibold" : "bg-gray-50"}`}
               onClick={() => setTab("chat")}
             >
               <span className="inline-flex items-center gap-2">
@@ -983,7 +1170,7 @@ const buildLeadReport = React.useCallback(() => {
               </span>
             </button>
             <button
-              className={`flex-1 px-3 py-2 text-sm ${tab === "ventas" ? "bg-white font-semibold" : "bg-gray-50"}`}
+              className={`flex-1 min-w-[110px] px-3 py-2 text-sm ${tab === "ventas" ? "bg-white font-semibold" : "bg-gray-50"}`}
               onClick={() => setTab("ventas")}
             >
               <span className="inline-flex items-center gap-2">
@@ -994,7 +1181,51 @@ const buildLeadReport = React.useCallback(() => {
 
           {/* Body */}
           <div className="flex-1 min-h-0">
-            {tab === "convs" ? (
+            {tab === "f1" ? (
+              <div className="h-full flex flex-col bg-gray-50">
+                <div className="p-3 overflow-auto flex-1">
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3">
+                    <div className="bg-white border rounded-xl p-3"><div className="text-[11px] text-gray-500">Citas hoy</div><div className="text-2xl font-bold text-gray-900">{f1Summary?.counts?.total ?? '—'}</div></div>
+                    <div className="bg-white border rounded-xl p-3"><div className="text-[11px] text-gray-500">Confirmadas</div><div className="text-2xl font-bold text-emerald-700">{f1Summary?.counts?.confirmed ?? '—'}</div></div>
+                    <div className="bg-white border rounded-xl p-3"><div className="text-[11px] text-gray-500">Pendientes</div><div className="text-2xl font-bold text-amber-700">{f1Summary?.counts?.pending ?? '—'}</div></div>
+                    <div className="bg-white border rounded-xl p-3"><div className="text-[11px] text-gray-500">Canceladas</div><div className="text-2xl font-bold text-red-700">{f1Summary?.counts?.cancelled ?? '—'}</div></div>
+                  </div>
+
+                  <div className="bg-white border rounded-xl p-3 mb-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2"><Bell className="w-4 h-4" /><span className="text-sm font-semibold">Información de hoy</span></div>
+                      <button className="text-xs px-2 py-1 rounded border" onClick={loadF1Dashboard}>Actualizar</button>
+                    </div>
+                    {f1Notifications.length ? f1Notifications.map(n => <div key={n.id} className="mt-2 text-xs text-gray-700"><b>{n.title}:</b> {n.message}</div>) : <div className="mt-2 text-xs text-gray-500">Sin avisos pendientes.</div>}
+                    {f1Summary?.first_appointment && <div className="mt-2 text-xs text-gray-600">Primera cita: {String(f1Summary.first_appointment.start_time || '').slice(0,5)} · {f1Summary.first_appointment.patient}</div>}
+                  </div>
+
+                  <div className="bg-white border rounded-xl p-3 mb-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <div><div className="text-sm font-semibold">Voz OpenAI Realtime</div><div className="text-[11px] text-gray-500">Habla naturalmente: “F1, agenda a Juan Pérez mañana a las 2”.</div></div>
+                      <button onClick={connectVoice} disabled={voiceConnecting} className={`inline-flex items-center gap-2 px-3 py-2 rounded-xl text-white ${voiceConnected ? 'bg-red-600' : 'bg-indigo-600'} disabled:opacity-60`}>
+                        {voiceConnected ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+                        {voiceConnecting ? 'Conectando…' : voiceConnected ? 'Terminar' : 'Hablar con F1'}
+                      </button>
+                    </div>
+                    {!!voiceTranscript && <div className="mt-2 rounded-lg bg-gray-50 border p-2 text-xs text-gray-700 whitespace-pre-wrap">{voiceTranscript}</div>}
+                    <audio ref={audioRef} autoPlay />
+                  </div>
+
+                  <div className="space-y-2">
+                    {f1Messages.map((m, index) => <div key={`${m.role}-${index}`} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}><div className={`max-w-[88%] rounded-2xl px-3 py-2 text-sm border ${m.role === 'user' ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-gray-800 border-gray-200'}`}>{m.content}</div></div>)}
+                    {!f1Messages.length && <div className="text-center text-sm text-gray-500 py-4">F1 puede consultar y gestionar la agenda por texto o voz.</div>}
+                  </div>
+                  {f1Error && <div className="mt-2 text-xs text-red-600 whitespace-pre-wrap">{f1Error}</div>}
+                </div>
+                <div className="p-2 border-t bg-white">
+                  <div className="flex gap-2">
+                    <input value={f1Input} onChange={e => setF1Input(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') sendF1Text(); }} placeholder="Escribe una orden para F1…" className="flex-1 border rounded-xl px-3 py-2 text-sm" disabled={f1Sending} />
+                    <button onClick={sendF1Text} disabled={f1Sending || !f1Input.trim()} className="px-3 py-2 rounded-xl bg-indigo-600 text-white disabled:opacity-60"><Send className="w-4 h-4" /></button>
+                  </div>
+                </div>
+              </div>
+            ) : tab === "convs" ? (
               <div className="h-full p-3 overflow-auto">
                 <div className="flex items-center justify-between mb-2">
                   <div className="text-xs text-gray-500">{loadingConvs ? "Cargando..." : `${convs.length} conversaciones`}</div>

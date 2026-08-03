@@ -5818,6 +5818,16 @@ async function ensureWhatsAppTenantIsolationSchema() {
 }
 
 // ===============================================================================
+// F1 COPILOT — gestión por texto y voz OpenAI Realtime
+// Se agrega sin sustituir la Recepcionista V5, Messenger, WhatsApp ni la agenda.
+try {
+  const { setupF1Routes } = require('./modules/f1');
+  setupF1Routes(app, q, { authRequired, getTenantId, getSucursal });
+} catch (error) {
+  console.error('❌ No se pudo montar F1 Copilot:', error);
+}
+
+// ===============================================================================
 // WHATSAPP CLOUD API
 // Monta GET/POST /api/whatsapp/webhook y las demás rutas del módulo.
 const whatsappRoutes = require('./routes/whatsapp');
