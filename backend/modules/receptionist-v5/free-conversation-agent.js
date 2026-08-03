@@ -484,6 +484,51 @@ function updatedConfirmationReply(args, knowledge) {
 }
 
 
+
+function rescheduleIntent(text) {
+  const value = Grounding.normalize(text);
+  return /\b(reagendar|reagenda|reprogramar|reprograma|mover mi cita|mueve mi cita|cambiar mi cita|cambia mi cita|cambiar la fecha|cambiar el dia|cambiar la hora|otra fecha para mi cita|otro horario para mi cita)\b/.test(value);
+}
+
+function publishMessengerAppointmentRescheduled(result, ctx) {
+  const appointment = result?.appointment;
+  const previous = result?.previous;
+  if (!appointment?.id) return null;
+
+  const tenantId = String(ctx?.tenant_id || ctx?.clinic_id || '').trim();
+  if (!tenantId) return null;
+
+  try {
+    return f1EventBus.emit(
+      'appointment.rescheduled',
+      {
+        appointment_id: appointment.id,
+        patient: appointment.patient || null,
+        phone: appointment.phone || null,
+        date: appointment.date || null,
+        start_time: appointment.start_time || null,
+        status: appointment.status || null,
+        doctor_id: appointment.doctor_id || null,
+        service_id: appointment.service_id || null,
+        previous_date: previous?.date || null,
+        previous_start_time: previous?.start_time || null,
+        channel: 'messenger',
+      },
+      {
+        tenant_id: tenantId,
+        branch_key: appointment.sucursal_id || 'sucursal_1',
+        user_id: ctx?.conversationId
+          ? `messenger-conversation:${ctx.conversationId}`
+          : 'messenger',
+        source: 'messenger',
+      }
+    );
+  } catch (error) {
+    console.warn('⚠️ Messenger Event Bus appointment.rescheduled:', error.message);
+    return null;
+  }
+}
+
 function publishMessengerAppointmentCreated(created, pending, ctx) {
   if (!created?.id) return null;
 
@@ -559,6 +604,10 @@ function publishMessengerAppointmentCreated(created, pending, ctx) {
 async function runAgent(q, ctx, incoming, userText, knowledge) {
   const state = Memory.initialState(incoming);
   ObjectivePlanner.ensureGoal(state);
+
+  if (rescheduleIntent(userText)) {
+    state.reschedule_requested = true;
+  }
   const previousCollected = { ...(state.collected || {}) };
   const previousPending = state.pending_booking
     ? { ...state.pending_booking }
@@ -969,15 +1018,44 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
       plan.reply = 'Esa cita ya fue registrada anteriormente; no crearé un duplicado.';
       used = 'duplicate_blocked';
     } else {
-      const created = await Appointment.createAppointment(q, ctx, pending);
+      if (state.reschedule_requested) {
+        try {
+          const result = await Appointment.rescheduleAppointment(q, ctx, pending);
+          const updated = result.appointment;
 
-      publishMessengerAppointmentCreated(created, pending, ctx);
+          publishMessengerAppointmentRescheduled(result, ctx);
 
-      state.appointment_id = created.id;
-      state.completed_booking_keys.push(pending.booking_key);
-      state.pending_booking = null;
-      plan.reply = `Listo, tu cita quedó registrada correctamente. Número de cita: ${created.id}.`;
-      used = 'appointment_booked';
+          state.appointment_id = updated.id;
+          state.pending_booking = null;
+          state.reschedule_requested = false;
+          state.completed_booking_keys.push(pending.booking_key);
+
+          plan.reply =
+            `Listo, tu cita fue reagendada correctamente para el ` +
+            `${String(updated.date).slice(0, 10)} a las ` +
+            `${String(updated.start_time).slice(0, 5)}. Número de cita: ${updated.id}.`;
+          used = 'appointment_rescheduled';
+        } catch (error) {
+          if (error?.code === 'APPOINTMENT_NOT_FOUND') {
+            plan.reply =
+              'No encontré una cita futura a tu nombre o teléfono para moverla. ' +
+              'Puedo ayudarte a crear una cita nueva, pero necesito que me lo confirmes.';
+            used = 'reschedule_appointment_not_found';
+          } else {
+            throw error;
+          }
+        }
+      } else {
+        const created = await Appointment.createAppointment(q, ctx, pending);
+
+        publishMessengerAppointmentCreated(created, pending, ctx);
+
+        state.appointment_id = created.id;
+        state.completed_booking_keys.push(pending.booking_key);
+        state.pending_booking = null;
+        plan.reply = `Listo, tu cita quedó registrada correctamente. Número de cita: ${created.id}.`;
+        used = 'appointment_booked';
+      }
     }
   }
 
