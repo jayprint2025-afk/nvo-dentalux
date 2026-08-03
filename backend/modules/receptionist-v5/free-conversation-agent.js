@@ -605,16 +605,22 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
   const state = Memory.initialState(incoming);
   ObjectivePlanner.ensureGoal(state);
 
-  if (rescheduleIntent(userText)) {
-    state.reschedule_requested = true;
-  }
+  const isRescheduleTurn = rescheduleIntent(userText);
   const previousCollected = { ...(state.collected || {}) };
   const previousPending = state.pending_booking
     ? { ...state.pending_booking }
     : null;
 
   const grounding = Grounding.deriveFacts(userText, knowledge, state);
-  state.collected = grounding.collected;
+  state.collected = {
+    ...grounding.collected,
+    booking_mode:
+      isRescheduleTurn ||
+      previousCollected.booking_mode === 'reschedule' ||
+      previousPending?.booking_mode === 'reschedule'
+        ? 'reschedule'
+        : (grounding.collected?.booking_mode || previousCollected.booking_mode || 'create'),
+  };
 
   const bookingModification = detectBookingModification({
     userText,
@@ -971,6 +977,7 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
       const key = Appointment.bookingKey(args);
       state.pending_booking = {
         ...args,
+        booking_mode: state.collected.booking_mode || args.booking_mode || 'create',
         booking_key: key,
         summary: confirmationSummary(args, knowledge),
         presented_at: new Date().toISOString(),
@@ -986,16 +993,7 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
     used = 'prepare_confirmation';
   }
 
-  console.log("======== CREATE APPOINTMENT ========");
-console.log({
-  action: plan.action.type,
-  reschedule_requested: state.reschedule_requested,
-  pending_booking: !!state.pending_booking,
-  appointment_id: state.appointment_id,
-  booking_key: state.pending_booking?.booking_key
-});
-
-if (plan.action.type === 'create_appointment') {
+  if (plan.action.type === 'create_appointment') {
     const normalized = state.pending_booking
       ? normalizedPendingBooking(state, knowledge)
       : ensurePendingBookingFromCollected(state, knowledge);
@@ -1027,9 +1025,11 @@ if (plan.action.type === 'create_appointment') {
       plan.reply = 'Esa cita ya fue registrada anteriormente; no crearé un duplicado.';
       used = 'duplicate_blocked';
     } else {
-      console.log("RESCHEDULE FLAG =", state.reschedule_requested);
+      const shouldReschedule =
+        pending.booking_mode === 'reschedule' ||
+        state.collected.booking_mode === 'reschedule';
 
-if (state.reschedule_requested) {
+      if (shouldReschedule) {
         try {
           const result = await Appointment.rescheduleAppointment(q, ctx, pending);
           const updated = result.appointment;
@@ -1038,7 +1038,7 @@ if (state.reschedule_requested) {
 
           state.appointment_id = updated.id;
           state.pending_booking = null;
-          state.reschedule_requested = false;
+          state.collected.booking_mode = 'create';
           state.completed_booking_keys.push(pending.booking_key);
 
           plan.reply =
