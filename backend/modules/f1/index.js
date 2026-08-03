@@ -8,6 +8,67 @@ const { tools } = require('./tool-definitions');
 // response.output_item.done y después vuelve a incluirla en response.done.
 const actionExecutions = new Map();
 
+// Memoria operativa por empresa + sucursal + usuario.
+// Se mantiene en memoria del proceso y nunca mezcla datos entre tenants.
+const operationalMemory = new Map();
+const MEMORY_TTL_MS = Number(process.env.F1_MEMORY_TTL_MS || 8 * 60 * 60 * 1000);
+const MEMORY_MAX_MESSAGES = Number(process.env.F1_MEMORY_MAX_MESSAGES || 24);
+
+function memoryKey(ctx) {
+  return [ctx.tenant_id, ctx.branch_key, ctx.user_id || 'anonymous'].join(':');
+}
+
+function getOperationalMemory(ctx) {
+  const key = memoryKey(ctx);
+  const now = Date.now();
+  let memory = operationalMemory.get(key);
+  if (!memory || now - memory.updated_at > MEMORY_TTL_MS) {
+    memory = { messages: [], facts: {}, updated_at: now };
+    operationalMemory.set(key, memory);
+  }
+  memory.updated_at = now;
+  return memory;
+}
+
+function rememberMessages(ctx, messages) {
+  const memory = getOperationalMemory(ctx);
+  const clean = (messages || [])
+    .filter(item => item && ['user', 'assistant'].includes(item.role) && String(item.content || '').trim())
+    .map(item => ({ role: item.role, content: String(item.content).trim() }));
+  memory.messages.push(...clean);
+  memory.messages = memory.messages.slice(-MEMORY_MAX_MESSAGES);
+  memory.updated_at = Date.now();
+}
+
+function updateOperationalFacts(ctx, name, args = {}, result = {}) {
+  const memory = getOperationalMemory(ctx);
+  const appointment = result?.appointment || result?.appointments?.[0] || null;
+  const facts = memory.facts;
+  facts.last_tool = name || facts.last_tool;
+  facts.last_module = name === 'open_module' ? (args.module || result?.client_action?.target) : facts.last_module;
+  facts.last_patient = args.patient || appointment?.patient || facts.last_patient;
+  facts.last_date = args.date || appointment?.date || facts.last_date;
+  facts.last_time = args.start_time || appointment?.start_time || facts.last_time;
+  facts.last_appointment_id = args.appointment_id || appointment?.id || facts.last_appointment_id;
+  facts.last_service_id = args.service_id || appointment?.service_id || facts.last_service_id;
+  facts.last_doctor_id = args.doctor_id || appointment?.doctor_id || facts.last_doctor_id;
+  memory.updated_at = Date.now();
+}
+
+function memoryInstructions(ctx) {
+  const memory = getOperationalMemory(ctx);
+  const facts = Object.entries(memory.facts)
+    .filter(([, value]) => value !== null && value !== undefined && String(value) !== '')
+    .map(([key, value]) => `${key}=${value}`);
+  return facts.length
+    ? `Contexto operativo reciente del mismo usuario, empresa y sucursal: ${facts.join(', ')}. Úsalo solo cuando la nueva frase sea una continuación natural; si hay ambigüedad, pregunta antes de ejecutar.`
+    : 'No hay contexto operativo previo guardado para este usuario en esta sucursal.';
+}
+
+function clearOperationalMemory(ctx) {
+  operationalMemory.delete(memoryKey(ctx));
+}
+
 async function executeActionOnce(key, task) {
   if (!key) return task();
   const existing = actionExecutions.get(key);
@@ -52,6 +113,8 @@ Para crear una cita reúne paciente, servicio, fecha y hora; teléfono es recome
 Distingue preguntas informativas de órdenes: “¿cómo agendo un paciente?” pide instrucciones y NO solicita crear una cita; “agenda/agéndame a...” sí es una orden de ejecución.
 Antes de cancelar una cita pide confirmación explícita. Para crear o reagendar, confirma claramente el resultado después de que la herramienta responda.
 No puedes crear empresas ni modificar empresas. Esa acción continúa reservada al superadministrador.
+Mantén continuidad conversacional: si el usuario responde “a las 4”, “limpieza”, “esa cita”, “y ayer” o “reagéndala”, relaciona la frase con el contexto previo del mismo usuario. Haz solo una pregunta por turno cuando falte un dato indispensable.
+${memoryInstructions(ctx)}
 Cuando el usuario diga “mañana”, interpreta la fecha local de la clínica. Responde con texto y voz de forma natural y concisa.`;
 }
 
@@ -136,9 +199,20 @@ function setupF1Routes(app, q, deps) {
         actionKey,
         () => executeTool(q, ctx, name, args)
       );
+      updateOperationalFacts(ctx, name, args, result);
       res.json({ ok: true, name, call_id: callId || null, result });
     } catch (error) {
       res.status(error.statusCode || error.status || 400).json({ ok: false, error: error.message });
+    }
+  });
+
+  app.delete('/api/f1/context', async (req, res) => {
+    try {
+      const ctx = buildContext(req, getTenantId, getSucursal);
+      clearOperationalMemory(ctx);
+      res.json({ ok: true, message: 'Contexto de F1 reiniciado.' });
+    } catch (error) {
+      res.status(error.statusCode || error.status || 500).json({ error: error.message });
     }
   });
 
@@ -150,7 +224,11 @@ function setupF1Routes(app, q, deps) {
       if (isHowToBookingQuestion(text)) {
         return res.json({ reply: bookingHelpReply(), actions: [] });
       }
-      const history = Array.isArray(req.body?.history) ? req.body.history.slice(-12) : [];
+      const clientHistory = Array.isArray(req.body?.history) ? req.body.history.slice(-12) : [];
+      const storedHistory = getOperationalMemory(ctx).messages.slice(-12);
+      // El historial visible del navegador tiene prioridad; la memoria del servidor
+      // sirve como respaldo cuando se recarga la página o se inicia una sesión nueva.
+      const history = clientHistory.length ? clientHistory : storedHistory;
       const messages = [...history, { role: 'user', content: text }];
       const conversation = [...messages];
       const executed = [];
@@ -179,6 +257,7 @@ function setupF1Routes(app, q, deps) {
               () => executeTool(q, ctx, name, args)
             );
             executed.push({ name, args, call_id: callId || null, result });
+            updateOperationalFacts(ctx, name, args, result);
             conversation.push({
               role: 'tool',
               tool_call_id: call.id,
@@ -203,7 +282,11 @@ function setupF1Routes(app, q, deps) {
         ? String(successfulMessages[successfulMessages.length - 1])
         : modelReply || (executed.length ? 'La acción fue procesada.' : 'No pude completar la solicitud.');
 
-      res.json({ reply, actions: executed });
+      rememberMessages(ctx, [
+        { role: 'user', content: text },
+        { role: 'assistant', content: reply },
+      ]);
+      res.json({ reply, actions: executed, context_active: true });
     } catch (error) {
       res.status(error.statusCode || error.status || 500).json({ error: error.message });
     }
