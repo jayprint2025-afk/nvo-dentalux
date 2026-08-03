@@ -3,6 +3,7 @@ const express = require('express');
 const jwt = require('jsonwebtoken');
 const router = express.Router();
 const { evaluateAndExecute } = require('../rules/engine'); // motor de reglas
+const { f1EventBus } = require('../modules/f1/event-bus');
 
 // ⬇️ garantiza que /webhook (POST) tenga body JSON
 router.use(express.json({ type: ['application/json', 'application/*+json'] }));// ===================== IA Booking via WhatsApp =====================
@@ -470,6 +471,58 @@ async function qBypass(text, params = []) {
 
 function currentTenantId() {
   return als.getStore()?.tenantId || null;
+}
+
+
+function publishWhatsAppAppointmentEvent(name, appointment, options = {}) {
+  const tenantId = String(
+    options.tenant_id ||
+    appointment?.tenant_id ||
+    currentTenantId() ||
+    ''
+  ).trim();
+
+  if (!tenantId || !appointment) return null;
+
+  const branchKey = String(
+    options.branch_key ||
+    appointment?.sucursal_id ||
+    process.env.SUCURSAL_ID_DEFAULT ||
+    'sucursal_1'
+  ).trim();
+
+  try {
+    return f1EventBus.emit(
+      name,
+      {
+        appointment_id: appointment.id || null,
+        patient:
+          appointment.patient ||
+          appointment.patient_name ||
+          appointment.name ||
+          options.patient ||
+          null,
+        phone: options.phone || appointment.phone || null,
+        date: appointment.date || null,
+        start_time: appointment.start_time || null,
+        status: options.status || appointment.status || null,
+        doctor_id: appointment.doctor_id || null,
+        service_id: appointment.service_id || null,
+        channel: 'whatsapp',
+        action: options.action || null,
+      },
+      {
+        tenant_id: tenantId,
+        branch_key: branchKey,
+        user_id: 'whatsapp-webhook',
+        source: 'whatsapp',
+      }
+    );
+  } catch (error) {
+    // Nunca bloquear la confirmación ya guardada en PostgreSQL.
+    console.warn('⚠️ Event Bus WhatsApp appointment:', error.message);
+    return null;
+  }
 }
 
 function requireTenantId(req) {
@@ -2458,13 +2511,13 @@ if (action === 'CONFIRMAR') {
               SET status = $1
             WHERE id = $2
               AND tenant_id = $3::uuid
-            RETURNING id,date,start_time,sucursal_id,tenant_id`
+            RETURNING id,patient,phone,date,start_time,status,doctor_id,service_id,sucursal_id,tenant_id`
         : `UPDATE appointments
               SET status = $1
             WHERE id = $2
               AND tenant_id = $3::uuid
               AND (sucursal_id = $4::text OR sucursal_id IS NULL)
-            RETURNING id,date,start_time,sucursal_id,tenant_id`;
+            RETURNING id,patient,phone,date,start_time,status,doctor_id,service_id,sucursal_id,tenant_id`;
       const params = IGNORE_SUC
         ? [newStatus, idHint, resolvedTenantId]
         : [newStatus, idHint, resolvedTenantId, sucursalId];
@@ -2513,6 +2566,18 @@ if (action === 'CONFIRMAR') {
         await markProcessed(wamid);
         return res.sendStatus(200);
       }
+
+      publishWhatsAppAppointmentEvent(
+        action === 'CONFIRMAR' ? 'appointment.confirmed' : 'appointment.cancelled',
+        appt,
+        {
+          tenant_id: resolvedTenantId,
+          branch_key: appt.sucursal_id || sucursalId,
+          phone: from,
+          status: newStatus,
+          action,
+        }
+      );
 
       const msgOk = (action === 'CONFIRMAR')
         ? friendlyText('', { kind: 'confirmOk', args: [appt.id, dateMx(appt.date), hhmm(appt.start_time), appt.sucursal_id || sucursalId] })
@@ -2671,6 +2736,18 @@ if (!appt && CROSS_SUC_FALLBACK) {
       status_changed_to: newStatus,
       success: true
     });
+
+    publishWhatsAppAppointmentEvent(
+      action === 'CONFIRMAR' ? 'appointment.confirmed' : 'appointment.cancelled',
+      appt,
+      {
+        tenant_id: resolvedTenantId,
+        branch_key: appt.sucursal_id || sucursalId,
+        phone: from,
+        status: newStatus,
+        action,
+      }
+    );
 
     const msgOk = (action === 'CONFIRMAR')
       ? friendlyText('', { kind: 'confirmOk', args: [appt.id, dateMx(appt.date), hhmm(appt.start_time), appt.sucursal_id || sucursalId] })
