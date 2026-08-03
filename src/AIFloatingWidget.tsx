@@ -241,6 +241,7 @@ export default function AIFloatingWidget(props: { apiBase?: string; sucursalId?:
   const [voiceTranscript, setVoiceTranscript] = React.useState("");
   const peerRef = React.useRef<RTCPeerConnection | null>(null);
   const dataChannelRef = React.useRef<RTCDataChannel | null>(null);
+  const executedRealtimeCallsRef = React.useRef<Set<string>>(new Set());
   const audioRef = React.useRef<HTMLAudioElement | null>(null);
   const mediaRef = React.useRef<MediaStream | null>(null);
 
@@ -607,13 +608,24 @@ const buildLeadReport = React.useCallback(() => {
     const name = String(item?.name || '');
     const callId = String(item?.call_id || item?.id || '');
     if (!name || !callId) return;
+
+    // OpenAI puede publicar la misma function_call en dos eventos distintos.
+    // Marcarla antes de ejecutar evita dobles citas y dobles movimientos.
+    if (executedRealtimeCallsRef.current.has(callId)) return;
+    executedRealtimeCallsRef.current.add(callId);
+
     let args: any = {};
     try { args = JSON.parse(item?.arguments || '{}'); } catch {}
     let output: any;
     try {
       output = await api('/f1/actions', {
         method: 'POST',
-        body: JSON.stringify({ name, arguments: args, branch_key: sucursalId || 'sucursal_1' }),
+        body: JSON.stringify({
+          name,
+          arguments: args,
+          call_id: callId,
+          branch_key: sucursalId || 'sucursal_1',
+        }),
       });
       applyF1ClientActions([output]);
       await loadF1Dashboard();
@@ -634,6 +646,7 @@ const buildLeadReport = React.useCallback(() => {
     try { peerRef.current?.close(); } catch {}
     try { mediaRef.current?.getTracks().forEach(track => track.stop()); } catch {}
     dataChannelRef.current = null;
+    executedRealtimeCallsRef.current.clear();
     peerRef.current = null;
     mediaRef.current = null;
     setVoiceConnected(false);

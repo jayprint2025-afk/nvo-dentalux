@@ -3,6 +3,30 @@
 const { executeTool, localDate } = require('./management-tools');
 const { tools } = require('./tool-definitions');
 
+// Idempotencia de acciones Realtime por empresa + call_id.
+// Evita ejecutar dos veces la misma herramienta cuando OpenAI emite
+// response.output_item.done y después vuelve a incluirla en response.done.
+const actionExecutions = new Map();
+
+async function executeActionOnce(key, task) {
+  if (!key) return task();
+  const existing = actionExecutions.get(key);
+  if (existing) return existing;
+
+  const promise = Promise.resolve().then(task);
+  actionExecutions.set(key, promise);
+  setTimeout(() => {
+    if (actionExecutions.get(key) === promise) actionExecutions.delete(key);
+  }, 10 * 60 * 1000).unref?.();
+
+  try {
+    return await promise;
+  } catch (error) {
+    actionExecutions.delete(key);
+    throw error;
+  }
+}
+
 function parseArgs(value) {
   if (!value) return {};
   if (typeof value === 'object') return value;
@@ -106,8 +130,13 @@ function setupF1Routes(app, q, deps) {
       const ctx = buildContext(req, getTenantId, getSucursal);
       const name = String(req.body?.name || '');
       const args = parseArgs(req.body?.arguments ?? req.body?.args);
-      const result = await executeTool(q, ctx, name, args);
-      res.json({ ok: true, name, result });
+      const callId = String(req.body?.call_id || req.body?.callId || '').trim();
+      const actionKey = callId ? `${ctx.tenant_id}:${callId}` : null;
+      const result = await executeActionOnce(
+        actionKey,
+        () => executeTool(q, ctx, name, args)
+      );
+      res.json({ ok: true, name, call_id: callId || null, result });
     } catch (error) {
       res.status(error.statusCode || error.status || 400).json({ ok: false, error: error.message });
     }
