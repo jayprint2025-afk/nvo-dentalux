@@ -4,6 +4,7 @@ const { executeTool, localDate } = require('./management-tools');
 const { tools } = require('./tool-definitions');
 const { contextText, executeMemoryTool, observeToolResult, setSessionValue } = require('./memory-store');
 const { buildOperationsReport } = require('./operations-director');
+const { buildDailyBriefingText, synthesizeDailyBriefing } = require('./daily-briefing');
 
 // Idempotencia de acciones Realtime por empresa + call_id.
 // Evita ejecutar dos veces la misma herramienta cuando OpenAI emite
@@ -155,6 +156,50 @@ function setupF1Routes(app, q, deps) {
         branch_key: req.query.branch_key,
       });
       res.json(report);
+    } catch (error) {
+      res.status(error.statusCode || error.status || 500).json({ error: error.message });
+    }
+  });
+
+  // F1-010 Paso 1: genera el texto del briefing diario.
+  // Todavía no se reproduce automáticamente; eso se conectará en el Paso 2.
+  app.get('/api/f1/daily-briefing', async (req, res) => {
+    try {
+      const ctx = buildContext(req, getTenantId, getSucursal);
+      const report = await buildOperationsReport(q, ctx, {
+        date: req.query.date,
+        branch_key: req.query.branch_key,
+      });
+      const briefing = buildDailyBriefingText(report, ctx);
+      res.json({
+        ok: true,
+        date: report.date,
+        tenant_id: ctx.tenant_id,
+        branch_key: report.branch_key,
+        briefing,
+        highest_priority: report.highest_priority,
+      });
+    } catch (error) {
+      res.status(error.statusCode || error.status || 500).json({ error: error.message });
+    }
+  });
+
+  // Genera el MP3 en el backend para no exponer OPENAI_API_KEY al navegador.
+  app.post('/api/f1/daily-briefing/audio', async (req, res) => {
+    try {
+      const ctx = buildContext(req, getTenantId, getSucursal);
+      const report = await buildOperationsReport(q, ctx, {
+        date: req.body?.date,
+        branch_key: req.body?.branch_key,
+      });
+      const briefing = buildDailyBriefingText(report, ctx);
+      const audio = await synthesizeDailyBriefing(briefing);
+
+      res.setHeader('Content-Type', audio.contentType);
+      res.setHeader('Content-Length', String(audio.buffer.length));
+      res.setHeader('Cache-Control', 'no-store');
+      res.setHeader('X-F1-Briefing-Date', report.date);
+      res.status(200).send(audio.buffer);
     } catch (error) {
       res.status(error.statusCode || error.status || 500).json({ error: error.message });
     }
