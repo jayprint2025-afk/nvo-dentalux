@@ -562,6 +562,18 @@ const buildLeadReport = React.useCallback(() => {
     }
   }, [sucursalId]);
 
+
+  const applyF1ClientActions = React.useCallback((actions: any[]) => {
+    for (const action of actions || []) {
+      const clientAction = action?.result?.client_action || action?.client_action;
+      if (clientAction?.type === 'navigate' && clientAction?.target) {
+        window.dispatchEvent(new CustomEvent('cliniqone:f1-navigate', {
+          detail: { target: String(clientAction.target) },
+        }));
+      }
+    }
+  }, []);
+
   const sendF1Text = React.useCallback(async () => {
     const message = f1Input.trim();
     if (!message || f1Sending) return;
@@ -580,13 +592,16 @@ const buildLeadReport = React.useCallback(() => {
         }),
       });
       setF1Messages(current => [...current, { role: "assistant", content: String(result?.reply || 'Listo.') }]);
-      if (Array.isArray(result?.actions) && result.actions.length) await loadF1Dashboard();
+      if (Array.isArray(result?.actions) && result.actions.length) {
+        applyF1ClientActions(result.actions);
+        await loadF1Dashboard();
+      }
     } catch (error: any) {
       setF1Error(error?.message || String(error));
     } finally {
       setF1Sending(false);
     }
-  }, [f1Input, f1Sending, f1Messages, sucursalId, loadF1Dashboard]);
+  }, [f1Input, f1Sending, f1Messages, sucursalId, loadF1Dashboard, applyF1ClientActions]);
 
   const executeRealtimeTool = React.useCallback(async (item: any) => {
     const name = String(item?.name || '');
@@ -600,6 +615,7 @@ const buildLeadReport = React.useCallback(() => {
         method: 'POST',
         body: JSON.stringify({ name, arguments: args, branch_key: sucursalId || 'sucursal_1' }),
       });
+      applyF1ClientActions([output]);
       await loadF1Dashboard();
     } catch (error: any) {
       output = { ok: false, error: error?.message || String(error) };
@@ -611,7 +627,7 @@ const buildLeadReport = React.useCallback(() => {
       item: { type: 'function_call_output', call_id: callId, output: JSON.stringify(output) },
     }));
     dc.send(JSON.stringify({ type: 'response.create' }));
-  }, [sucursalId, loadF1Dashboard]);
+  }, [sucursalId, loadF1Dashboard, applyF1ClientActions]);
 
   const disconnectVoice = React.useCallback(() => {
     try { dataChannelRef.current?.close(); } catch {}

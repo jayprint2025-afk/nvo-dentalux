@@ -210,7 +210,31 @@ async function rescheduleAppointment(q, ctx, args = {}) {
   return { ok: true, appointment: rows[0] };
 }
 
+
+function openModule(_q, _ctx, args = {}) {
+  const raw = text(args.module).toLowerCase();
+  const aliases = {
+    agenda: 'agenda', citas: 'agenda', calendario: 'agenda',
+    caja: 'pagos', pagos: 'pagos', ingresos: 'pagos', egresos: 'pagos',
+    reportes: 'analytics', reporte: 'analytics', productividad: 'analytics', dashboard: 'analytics',
+    laboratorio: 'laboratorios', laboratorios: 'laboratorios',
+    whatsapp: 'whatsapp', mensajes: 'whatsapp',
+    facturacion: 'facturacion', factura: 'facturacion',
+    empresas: 'empresas', empresa: 'empresas',
+    inventario: 'inventario',
+    expediente: 'expediente', pacientes: 'expediente', paciente: 'expediente',
+  };
+  const target = aliases[raw];
+  if (!target) throw new Error(`Módulo no reconocido: ${raw || 'vacío'}`);
+  return {
+    ok: true,
+    client_action: { type: 'navigate', target },
+    message: `Abriendo ${raw}.`,
+  };
+}
+
 const handlers = {
+  open_module: openModule,
   get_today_summary: todaySummary,
   list_doctors: listDoctors,
   list_services: listServices,

@@ -1,6 +1,22 @@
 'use strict';
 
 const tools = [
+
+  {
+    type: 'function',
+    name: 'open_module',
+    description: 'Abre un módulo de la aplicación CliniqOne para el usuario. Úsala cuando el usuario diga abre, ve a, llévame a o muéstrame un módulo.',
+    parameters: {
+      type: 'object',
+      properties: {
+        module: {
+          type: 'string',
+          enum: ['agenda','caja','reportes','laboratorio','whatsapp','facturacion','empresas','inventario','expediente'],
+        },
+      },
+      required: ['module'],
+    },
+  },
   {
     type: 'function', name: 'get_today_summary',
     description: 'Obtiene el resumen y listado de citas de hoy o de una fecha.',

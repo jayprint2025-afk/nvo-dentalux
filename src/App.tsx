@@ -1830,6 +1830,32 @@ const [showPatientHistory, setShowPatientHistory] = useState(false);
 const [showFacturacion, setShowFacturacion] = useState(false);
 const [mostrarDashboardGlobal, setMostrarDashboardGlobal] = useState(false);  // ← AGREGAR ESTA LÍNEA
 
+React.useEffect(() => {
+  const handleF1Navigation = (event: Event) => {
+    const target = String((event as CustomEvent)?.detail?.target || '').toLowerCase();
+
+    setShowInventory(false);
+    setShowPatientHistory(false);
+    setShowFacturacion(false);
+    setMostrarDashboardGlobal(false);
+
+    if (target === 'inventario') {
+      setShowInventory(true);
+      return;
+    }
+    if (target === 'expediente') {
+      setShowPatientHistory(true);
+      return;
+    }
+
+    const allowed = new Set(['agenda','pagos','analytics','laboratorios','whatsapp','facturacion','empresas']);
+    if (allowed.has(target)) setActiveTab(target as any);
+  };
+
+  window.addEventListener('cliniqone:f1-navigate', handleF1Navigation as EventListener);
+  return () => window.removeEventListener('cliniqone:f1-navigate', handleF1Navigation as EventListener);
+}, []);
+
 
 // 🏥 Hook para Expediente Médico Dental Completo
 const { 
