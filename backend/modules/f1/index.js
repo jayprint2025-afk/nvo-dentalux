@@ -152,30 +152,58 @@ function setupF1Routes(app, q, deps) {
       }
       const history = Array.isArray(req.body?.history) ? req.body.history.slice(-12) : [];
       const messages = [...history, { role: 'user', content: text }];
-      let payload = await callChatModel({ messages, ctx });
-      let assistant = payload.choices?.[0]?.message || {};
-      const toolCalls = Array.isArray(assistant.tool_calls) ? assistant.tool_calls : [];
+      const conversation = [...messages];
       const executed = [];
+      let assistant = {};
 
-      if (toolCalls.length) {
-        const follow = [...messages, assistant];
+      // Un comando escrito puede requerir varias herramientas consecutivas:
+      // por ejemplo listar servicios -> consultar disponibilidad -> crear cita.
+      // Procesar hasta que el modelo entregue texto final evita responder “Listo”
+      // antes de que la acción realmente se haya ejecutado.
+      for (let round = 0; round < 6; round += 1) {
+        const payload = await callChatModel({ messages: conversation, ctx });
+        assistant = payload.choices?.[0]?.message || {};
+        conversation.push(assistant);
+
+        const toolCalls = Array.isArray(assistant.tool_calls) ? assistant.tool_calls : [];
+        if (!toolCalls.length) break;
+
         for (const call of toolCalls) {
           const name = call.function?.name;
           const args = parseArgs(call.function?.arguments);
+          const callId = String(call.id || '').trim();
+          const actionKey = callId ? `${ctx.tenant_id}:text:${callId}` : null;
           try {
-            const result = await executeTool(q, ctx, name, args);
-            executed.push({ name, args, result });
-            follow.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify({ ok: true, result }) });
+            const result = await executeActionOnce(
+              actionKey,
+              () => executeTool(q, ctx, name, args)
+            );
+            executed.push({ name, args, call_id: callId || null, result });
+            conversation.push({
+              role: 'tool',
+              tool_call_id: call.id,
+              content: JSON.stringify({ ok: true, result }),
+            });
           } catch (error) {
-            executed.push({ name, args, error: error.message });
-            follow.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify({ ok: false, error: error.message }) });
+            executed.push({ name, args, call_id: callId || null, error: error.message });
+            conversation.push({
+              role: 'tool',
+              tool_call_id: call.id,
+              content: JSON.stringify({ ok: false, error: error.message }),
+            });
           }
         }
-        payload = await callChatModel({ messages: follow, ctx });
-        assistant = payload.choices?.[0]?.message || {};
       }
 
-      res.json({ reply: String(assistant.content || 'Listo.').trim(), actions: executed });
+      const successfulMessages = executed
+        .map(action => action?.result?.assistant_message)
+        .filter(Boolean);
+      const modelReply = String(assistant?.content || '').trim();
+      const reply = successfulMessages.length
+        ? String(successfulMessages[successfulMessages.length - 1])
+        : modelReply || (executed.length ? 'La acción fue procesada.' : 'No pude completar la solicitud.');
+
+      res.json({ reply, actions: executed });
     } catch (error) {
       res.status(error.statusCode || error.status || 500).json({ error: error.message });
     }

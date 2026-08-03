@@ -97,7 +97,15 @@ async function checkAvailability(q, ctx, args = {}) {
     slots = slots.filter(slot => text(slot.start_time).slice(0, 5) === exact);
   }
   if (args.doctor_id) slots = slots.filter(slot => String(slot.doctor_id) === String(args.doctor_id));
-  return { date: args.date, branch_key: branchKey, slots: slots.slice(0, 20) };
+  const visibleSlots = slots.slice(0, 20);
+  return {
+    date: args.date,
+    branch_key: branchKey,
+    slots: visibleSlots,
+    assistant_message: visibleSlots.length
+      ? `Encontré ${visibleSlots.length} horarios disponibles para el ${args.date}.`
+      : `No encontré horarios disponibles para el ${args.date}.`,
+  };
 }
 
 async function createAppointment(q, ctx, args = {}) {
@@ -137,7 +145,19 @@ async function createAppointment(q, ctx, args = {}) {
     slot: selectedSlot,
   });
 
-  return { ok: true, appointment: created };
+  const appointment = created || {};
+  const patient = text(appointment.patient || args.patient);
+  const date = text(appointment.date || selectedSlot.date);
+  const startTime = text(appointment.start_time || selectedSlot.start_time).slice(0, 5);
+  const doctorName = text(appointment.doctor_name || selectedSlot.doctor_name);
+  return {
+    ok: true,
+    appointment,
+    assistant_message:
+      `Perfecto. Agendé a ${patient} para el ${date} a las ${startTime}` +
+      `${doctorName ? ` con ${doctorName}` : ''}. La cita quedó registrada correctamente.` ,
+    client_event: { type: 'appointments_changed', appointment_id: appointment.id || null },
+  };
 }
 
 async function findAppointments(q, ctx, args = {}) {
@@ -160,7 +180,12 @@ async function findAppointments(q, ctx, args = {}) {
      ORDER BY a.date DESC, a.start_time ASC
      LIMIT 30
   `, params);
-  return { appointments: rows };
+  return {
+    appointments: rows,
+    assistant_message: rows.length
+      ? `Encontré ${rows.length} cita${rows.length === 1 ? '' : 's'}${patient ? ` para ${patient}` : ''}.`
+      : `No encontré citas${patient ? ` para ${patient}` : ''} en la sucursal actual.`,
+  };
 }
 
 async function cancelAppointment(q, ctx, args = {}) {
@@ -173,7 +198,12 @@ async function cancelAppointment(q, ctx, args = {}) {
      RETURNING id, patient, date, start_time::text AS start_time, status
   `, [id, ctx.tenant_id]);
   if (!rows[0]) throw new Error('Cita no encontrada');
-  return { ok: true, appointment: rows[0] };
+  return {
+    ok: true,
+    appointment: rows[0],
+    assistant_message: `La cita de ${rows[0].patient} del ${rows[0].date} a las ${text(rows[0].start_time).slice(0, 5)} fue cancelada correctamente.`,
+    client_event: { type: 'appointments_changed', appointment_id: rows[0].id },
+  };
 }
 
 async function rescheduleAppointment(q, ctx, args = {}) {
@@ -207,7 +237,12 @@ async function rescheduleAppointment(q, ctx, args = {}) {
      WHERE id=$5 AND tenant_id=$6::uuid
      RETURNING id, patient, date, start_time::text AS start_time, doctor_id, status
   `, [args.date, slot.start_time, slot.doctor_id, branchKey, id, ctx.tenant_id]);
-  return { ok: true, appointment: rows[0] };
+  return {
+    ok: true,
+    appointment: rows[0],
+    assistant_message: `La cita de ${rows[0].patient} fue reagendada para el ${rows[0].date} a las ${text(rows[0].start_time).slice(0, 5)}.`,
+    client_event: { type: 'appointments_changed', appointment_id: rows[0].id },
+  };
 }
 
 
@@ -229,7 +264,7 @@ function openModule(_q, _ctx, args = {}) {
   return {
     ok: true,
     client_action: { type: 'navigate', target },
-    message: `Abriendo ${raw}.`,
+    assistant_message: `Abriendo ${raw}.`,
   };
 }
 

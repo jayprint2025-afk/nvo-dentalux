@@ -566,10 +566,22 @@ const buildLeadReport = React.useCallback(() => {
 
   const applyF1ClientActions = React.useCallback((actions: any[]) => {
     for (const action of actions || []) {
-      const clientAction = action?.result?.client_action || action?.client_action;
+      const result = action?.result || action;
+      const clientAction = result?.client_action;
+      const clientEvent = result?.client_event;
+
       if (clientAction?.type === 'navigate' && clientAction?.target) {
         window.dispatchEvent(new CustomEvent('cliniqone:f1-navigate', {
           detail: { target: String(clientAction.target) },
+        }));
+      }
+
+      if (clientEvent?.type === 'appointments_changed') {
+        window.dispatchEvent(new CustomEvent('dentalux:appointments-changed', {
+          detail: {
+            source: 'f1',
+            appointment_id: clientEvent.appointment_id || null,
+          },
         }));
       }
     }
