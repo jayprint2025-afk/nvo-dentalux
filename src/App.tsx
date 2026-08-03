@@ -694,6 +694,7 @@ const createAppointment = async (appointmentData: Partial<Appointment>) => {
         status: appointmentData.status || 'Pendiente'
       })
     });
+    window.dispatchEvent(new CustomEvent('dentalux:appointments-changed', { detail: { action: 'created', appointment: created } }));
     return transformAppointmentFromDB(created);
   } catch (error) {
     console.error('Error creating appointment:', error);
@@ -717,6 +718,7 @@ const updateAppointment = async (id: number, appointmentData: Partial<Appointmen
       method: 'PUT', 
       body: JSON.stringify(payload)
     });
+    window.dispatchEvent(new CustomEvent('dentalux:appointments-changed', { detail: { action: 'updated', appointment: updated } }));
     return transformAppointmentFromDB(updated);
   } catch (error) {
     console.error('Error updating appointment:', error);
@@ -727,6 +729,7 @@ const updateAppointment = async (id: number, appointmentData: Partial<Appointmen
 const deleteAppointmentById = async (id: number) => {
   try {
     await api(`/appointments/${id}`, { method: 'DELETE' });
+    window.dispatchEvent(new CustomEvent('dentalux:appointments-changed', { detail: { action: 'deleted', appointmentId: id } }));
   } catch (error) {
     console.error('Error deleting appointment:', error);
     throw error;

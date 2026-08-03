@@ -704,8 +704,27 @@ const buildLeadReport = React.useCallback(() => {
 
   React.useEffect(() => {
     loadF1Dashboard();
-    const timer = window.setInterval(loadF1Dashboard, 60000);
-    return () => window.clearInterval(timer);
+
+    const refreshNow = () => { void loadF1Dashboard(); };
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') refreshNow();
+    };
+
+    // Actualización inmediata cuando Agenda crea, confirma, cancela,
+    // reagenda o elimina una cita.
+    window.addEventListener('dentalux:appointments-changed', refreshNow);
+    window.addEventListener('focus', refreshNow);
+    document.addEventListener('visibilitychange', onVisibility);
+
+    // Respaldo ligero por si el cambio llegó desde WhatsApp/Messenger.
+    const timer = window.setInterval(refreshNow, 10000);
+
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener('dentalux:appointments-changed', refreshNow);
+      window.removeEventListener('focus', refreshNow);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
   }, [loadF1Dashboard]);
 
   React.useEffect(() => () => disconnectVoice(), [disconnectVoice]);

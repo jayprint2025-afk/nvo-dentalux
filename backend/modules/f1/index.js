@@ -25,9 +25,34 @@ Tu usuario ya inició sesión en la empresa y sucursal actuales. Sucursal activa
 Puedes consultar agenda, doctores, servicios, disponibilidad, crear, buscar, reagendar y cancelar citas usando exclusivamente las herramientas disponibles.
 No inventes identificadores, doctores, servicios, horarios ni resultados. Consulta herramientas cuando necesites datos reales.
 Para crear una cita reúne paciente, servicio, fecha y hora; teléfono es recomendable pero no obligatorio para el usuario interno.
+Distingue preguntas informativas de órdenes: “¿cómo agendo un paciente?” pide instrucciones y NO solicita crear una cita; “agenda/agéndame a...” sí es una orden de ejecución.
 Antes de cancelar una cita pide confirmación explícita. Para crear o reagendar, confirma claramente el resultado después de que la herramienta responda.
 No puedes crear empresas ni modificar empresas. Esa acción continúa reservada al superadministrador.
 Cuando el usuario diga “mañana”, interpreta la fecha local de la clínica. Responde con texto y voz de forma natural y concisa.`;
+}
+
+function isHowToBookingQuestion(text) {
+  const value = String(text || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim();
+
+  return /^(como|de que manera|que pasos|donde)\s+(agendo|agendar|programo|programar|creo|crear)\b/.test(value)
+    || /\bcomo se (agenda|programa|crea) una cita\b/.test(value);
+}
+
+function bookingHelpReply() {
+  return [
+    'Para agendar un paciente en CliniqOne:',
+    '1. Abre Agenda.',
+    '2. Selecciona el día y horario.',
+    '3. Presiona Nueva cita.',
+    '4. Captura paciente, doctor, servicio, teléfono y duración.',
+    '5. Guarda la cita.',
+    '',
+    'También puedes pedírmelo directamente, por ejemplo: “F1, agenda a Juan Pérez mañana a las 2 para limpieza”.'
+  ].join('\n');
 }
 
 async function callChatModel({ messages, ctx }) {
@@ -93,6 +118,9 @@ function setupF1Routes(app, q, deps) {
       const ctx = buildContext(req, getTenantId, getSucursal);
       const text = String(req.body?.message || '').trim();
       if (!text) return res.status(400).json({ error: 'Mensaje vacío' });
+      if (isHowToBookingQuestion(text)) {
+        return res.json({ reply: bookingHelpReply(), actions: [] });
+      }
       const history = Array.isArray(req.body?.history) ? req.body.history.slice(-12) : [];
       const messages = [...history, { role: 'user', content: text }];
       let payload = await callChatModel({ messages, ctx });
@@ -131,24 +159,50 @@ function setupF1Routes(app, q, deps) {
       if (!key) return res.status(503).json({ error: 'Falta OPENAI_API_KEY' });
       if (!req.body || typeof req.body !== 'string') return res.status(400).json({ error: 'Oferta SDP vacía' });
 
-      const form = new FormData();
-      form.append('sdp', new Blob([req.body], { type: 'application/sdp' }), 'offer.sdp');
-      form.append('session', new Blob([JSON.stringify({
+      const session = {
         type: 'realtime',
         model: process.env.F1_REALTIME_MODEL || 'gpt-realtime',
         instructions: instructions(ctx),
         output_modalities: ['audio'],
         audio: {
-          input: { transcription: { model: process.env.F1_TRANSCRIBE_MODEL || 'gpt-4o-mini-transcribe', language: 'es' }, turn_detection: { type: 'semantic_vad', eagerness: 'medium', create_response: true, interrupt_response: true } },
+          input: {
+            transcription: {
+              model: process.env.F1_TRANSCRIBE_MODEL || 'gpt-4o-mini-transcribe',
+              language: 'es',
+            },
+            turn_detection: {
+              type: 'semantic_vad',
+              eagerness: 'medium',
+              create_response: true,
+              interrupt_response: true,
+            },
+          },
           output: { voice: process.env.F1_VOICE || 'marin', speed: 1 },
         },
         tools,
         tool_choice: 'auto',
         max_output_tokens: 700,
-      })], { type: 'application/json' }), 'session.json');
+      };
+
+      // Construcción multipart manual para conservar exactamente los campos
+      // `sdp` y `session` requeridos por POST /v1/realtime/calls.
+      const boundary = `----CliniqOneF1${Date.now().toString(16)}`;
+      const multipart = Buffer.concat([
+        Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="sdp"; filename="offer.sdp"\r\nContent-Type: application/sdp\r\n\r\n`),
+        Buffer.from(req.body, 'utf8'),
+        Buffer.from(`\r\n--${boundary}\r\nContent-Disposition: form-data; name="session"\r\nContent-Type: application/json\r\n\r\n`),
+        Buffer.from(JSON.stringify(session), 'utf8'),
+        Buffer.from(`\r\n--${boundary}--\r\n`),
+      ]);
 
       const upstream = await fetch('https://api.openai.com/v1/realtime/calls', {
-        method: 'POST', headers: { Authorization: `Bearer ${key}` }, body: form,
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${key}`,
+          'Content-Type': `multipart/form-data; boundary=${boundary}`,
+          'Content-Length': String(multipart.length),
+        },
+        body: multipart,
       });
       const body = await upstream.text();
       if (!upstream.ok) return res.status(upstream.status).type('text/plain').send(body);
