@@ -6,6 +6,7 @@ const {
   computeAvailability,
   createAppointmentTransactional,
 } = require('../booking-engine');
+const { buildOperationsReport } = require('./operations-director');
 
 function text(value) {
   return value == null ? '' : String(value).trim();
@@ -268,8 +269,13 @@ function openModule(_q, _ctx, args = {}) {
   };
 }
 
+async function operationsReport(q, ctx, args = {}) {
+  return buildOperationsReport(q, ctx, args);
+}
+
 const handlers = {
   open_module: openModule,
+  get_operations_report: operationsReport,
   get_today_summary: todaySummary,
   list_doctors: listDoctors,
   list_services: listServices,

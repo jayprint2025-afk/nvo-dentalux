@@ -232,6 +232,7 @@ export default function AIFloatingWidget(props: { apiBase?: string; sucursalId?:
   type F1Message = { role: "user" | "assistant"; content: string };
   const [f1Summary, setF1Summary] = React.useState<any>(null);
   const [f1Notifications, setF1Notifications] = React.useState<any[]>([]);
+  const [f1Operations, setF1Operations] = React.useState<any>(null);
   const [f1Messages, setF1Messages] = React.useState<F1Message[]>([]);
   const [f1Input, setF1Input] = React.useState("");
   const [f1Sending, setF1Sending] = React.useState(false);
@@ -558,6 +559,7 @@ const buildLeadReport = React.useCallback(() => {
       const data: any = await api(`/f1/notifications?branch_key=${encodeURIComponent(sucursalId || "sucursal_1")}`);
       setF1Summary(data?.summary || null);
       setF1Notifications(Array.isArray(data?.notifications) ? data.notifications : []);
+      setF1Operations(data?.operations_report || null);
     } catch (error: any) {
       setF1Error(error?.message || String(error));
     }
@@ -584,6 +586,23 @@ const buildLeadReport = React.useCallback(() => {
           },
         }));
       }
+    }
+  }, []);
+
+  const priorityStyle = React.useCallback((priority: string) => {
+    const value = String(priority || 'info');
+    if (value === 'critical') return { border: '#fecaca', background: '#fef2f2', label: 'Crítico', icon: '🔴' };
+    if (value === 'attention') return { border: '#fed7aa', background: '#fff7ed', label: 'Atención', icon: '🟠' };
+    if (value === 'important') return { border: '#fde68a', background: '#fffbeb', label: 'Importante', icon: '🟡' };
+    return { border: '#bfdbfe', background: '#eff6ff', label: 'Informativo', icon: '🟢' };
+  }, []);
+
+  const openOperationsAction = React.useCallback((alert: any) => {
+    const action = alert?.action;
+    if (action?.type === 'navigate' && action?.target) {
+      window.dispatchEvent(new CustomEvent('cliniqone:f1-navigate', {
+        detail: { target: String(action.target) },
+      }));
     }
   }, []);
 
@@ -1256,8 +1275,45 @@ const buildLeadReport = React.useCallback(() => {
                       <div className="flex items-center gap-2"><Bell className="w-4 h-4" /><span className="text-sm font-semibold">Información de hoy</span></div>
                       <button className="text-xs px-2 py-1 rounded border" onClick={loadF1Dashboard}>Actualizar</button>
                     </div>
-                    {f1Notifications.length ? f1Notifications.map(n => <div key={n.id} className="mt-2 text-xs text-gray-700"><b>{n.title}:</b> {n.message}</div>) : <div className="mt-2 text-xs text-gray-500">Sin avisos pendientes.</div>}
+                    {f1Notifications.length ? (
+                      <div className="mt-2 grid gap-2">
+                        {f1Notifications.slice(0, 6).map((n: any) => {
+                          const style = priorityStyle(n.priority);
+                          return (
+                            <button
+                              type="button"
+                              key={n.id}
+                              onClick={() => openOperationsAction(n)}
+                              className="text-left rounded-lg p-2"
+                              style={{ border: `1px solid ${style.border}`, background: style.background }}
+                            >
+                              <div className="text-[10px] font-semibold uppercase tracking-wide text-gray-500">{style.icon} {style.label} · {n.area}</div>
+                              <div className="text-xs font-semibold text-gray-900">{n.title}</div>
+                              <div className="text-xs text-gray-700">{n.message}</div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : <div className="mt-2 text-xs text-gray-500">Sin avisos pendientes.</div>}
                     {f1Summary?.first_appointment && <div className="mt-2 text-xs text-gray-600">Primera cita: {String(f1Summary.first_appointment.start_time || '').slice(0,5)} · {f1Summary.first_appointment.patient}</div>}
+                    {f1Operations && (
+                      <div className="mt-3 border-t pt-3">
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                          <div className="rounded-lg bg-emerald-50 p-2"><div className="text-[10px] text-emerald-700">Ingresos hoy</div><div className="font-bold text-emerald-900">${Number(f1Operations.finance?.income_today || 0).toLocaleString('es-MX')}</div></div>
+                          <div className="rounded-lg bg-slate-50 p-2"><div className="text-[10px] text-slate-600">Neto hoy</div><div className="font-bold text-slate-900">${Number(f1Operations.finance?.net_today || 0).toLocaleString('es-MX')}</div></div>
+                          <div className="rounded-lg bg-orange-50 p-2"><div className="text-[10px] text-orange-700">Lab. vencidos</div><div className="font-bold text-orange-900">{f1Operations.laboratory?.overdue || 0}</div></div>
+                          <div className="rounded-lg bg-red-50 p-2"><div className="text-[10px] text-red-700">Agotados</div><div className="font-bold text-red-900">{f1Operations.inventory?.out_of_stock || 0}</div></div>
+                        </div>
+                        {!!f1Operations.recommendations?.length && (
+                          <div className="mt-2 rounded-lg bg-violet-50 p-2">
+                            <div className="text-[11px] font-semibold text-violet-900">💡 Recomendaciones de F1</div>
+                            {f1Operations.recommendations.slice(0, 3).map((item: string, index: number) => (
+                              <div key={index} className="mt-1 text-xs text-violet-800">• {item}</div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
 
                   <div className="bg-white border rounded-xl p-3 mb-3">

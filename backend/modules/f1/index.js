@@ -3,6 +3,7 @@
 const { executeTool, localDate } = require('./management-tools');
 const { tools } = require('./tool-definitions');
 const { contextText, executeMemoryTool, observeToolResult, setSessionValue } = require('./memory-store');
+const { buildOperationsReport } = require('./operations-director');
 
 // Idempotencia de acciones Realtime por empresa + call_id.
 // Evita ejecutar dos veces la misma herramienta cuando OpenAI emite
@@ -47,7 +48,7 @@ function buildContext(req, getTenantId, getSucursal) {
 function instructions(ctx, memoryContext = '') {
   return `Eres F1, el Asistente Inteligente de gestión de CliniqOne. Hablas español mexicano, con voz profesional, clara y breve.
 Tu usuario ya inició sesión en la empresa y sucursal actuales. Sucursal activa: ${ctx.branch_key}. Fecha local de hoy: ${localDate(ctx.timezone)}.
-Puedes consultar agenda, doctores, servicios, disponibilidad, crear, buscar, reagendar y cancelar citas usando exclusivamente las herramientas disponibles.
+Puedes consultar agenda, doctores, servicios, disponibilidad, crear, buscar, reagendar y cancelar citas; también puedes analizar la operación diaria mediante el reporte de operaciones.
 No inventes identificadores, doctores, servicios, horarios ni resultados. Consulta herramientas cuando necesites datos reales.
 Para crear una cita reúne paciente, servicio, fecha y hora; teléfono es recomendable pero no obligatorio para el usuario interno.
 Distingue preguntas informativas de órdenes: “¿cómo agendo un paciente?” pide instrucciones y NO solicita crear una cita; “agenda/agéndame a...” sí es una orden de ejecución.
@@ -127,11 +128,33 @@ function setupF1Routes(app, q, deps) {
   app.get('/api/f1/notifications', async (req, res) => {
     try {
       const ctx = buildContext(req, getTenantId, getSucursal);
-      const summary = await executeF1Tool(q, ctx, 'get_today_summary', {});
-      const notifications = [];
-      if (summary.counts.total) notifications.push({ id: `today-${summary.date}`, type: 'agenda', title: `${summary.counts.total} citas hoy`, message: `${summary.counts.confirmed} confirmadas y ${summary.counts.pending} pendientes.` });
-      if (summary.counts.pending) notifications.push({ id: `pending-${summary.date}`, type: 'warning', title: 'Citas pendientes', message: `${summary.counts.pending} citas aún están pendientes.` });
-      res.json({ notifications, summary });
+      const report = await buildOperationsReport(q, ctx, {
+        date: req.query.date,
+        branch_key: req.query.branch_key,
+      });
+      res.json({
+        notifications: report.alerts,
+        summary: {
+          date: report.date,
+          branch_key: report.branch_key,
+          counts: report.agenda,
+          first_appointment: report.agenda.first_appointment,
+        },
+        operations_report: report,
+      });
+    } catch (error) {
+      res.status(error.statusCode || error.status || 500).json({ error: error.message });
+    }
+  });
+
+  app.get('/api/f1/operations-report', async (req, res) => {
+    try {
+      const ctx = buildContext(req, getTenantId, getSucursal);
+      const report = await buildOperationsReport(q, ctx, {
+        date: req.query.date,
+        branch_key: req.query.branch_key,
+      });
+      res.json(report);
     } catch (error) {
       res.status(error.statusCode || error.status || 500).json({ error: error.message });
     }

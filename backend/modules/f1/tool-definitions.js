@@ -98,6 +98,19 @@ const tools = [
     parameters: { type: 'object', properties: {} },
   },
 
+  {
+    type: 'function',
+    name: 'get_operations_report',
+    description: 'Genera el reporte operativo proactivo de la empresa y sucursal actuales: agenda, caja, laboratorio, inventario, prioridades y recomendaciones. Úsala cuando el usuario pida resumen, situación, pendientes, alertas o reporte del día.',
+    parameters: {
+      type: 'object',
+      properties: {
+        date: { type: 'string', description: 'Fecha YYYY-MM-DD; por defecto hoy.' },
+        branch_key: { type: 'string' },
+      },
+    },
+  },
+
 ];
 
 module.exports = { tools };
