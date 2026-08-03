@@ -71,6 +71,34 @@ function clamp(n: number, min: number, max: number) {
 }
 
 
+function decodeJwtIdentity(token: string) {
+  try {
+    const part = String(token || "").split(".")[1] || "";
+    const normalized = part.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
+    const payload = JSON.parse(atob(padded));
+    return {
+      tenant: String(payload?.tenantId || payload?.tenant_id || "tenant"),
+      user: String(payload?.sub || payload?.user_id || payload?.email || "user"),
+    };
+  } catch {
+    return { tenant: "tenant", user: "user" };
+  }
+}
+
+function dailyBriefingPlayedKey(date: string, branch: string) {
+  const token = localStorage.getItem("dentalux_auth_token") || "";
+  const identity = decodeJwtIdentity(token);
+  return [
+    "f1_daily_briefing_played",
+    identity.tenant,
+    identity.user,
+    branch || "sucursal_1",
+    date || "unknown-date",
+  ].join(":");
+}
+
+
 function stripInternalJson(content: string): string {
   if (!content) return content;
   const s = String(content);
@@ -242,6 +270,10 @@ export default function AIFloatingWidget(props: { apiBase?: string; sucursalId?:
   const [briefingPlaying, setBriefingPlaying] = React.useState(false);
   const [briefingLoading, setBriefingLoading] = React.useState(false);
   const [briefingText, setBriefingText] = React.useState("");
+  const [dailyBriefingEnabled, setDailyBriefingEnabled] = React.useState(() => {
+    return localStorage.getItem("f1_daily_briefing_enabled") !== "0";
+  });
+  const autoBriefingAttemptedRef = React.useRef(false);
   const briefingAudioRef = React.useRef<HTMLAudioElement | null>(null);
   const briefingObjectUrlRef = React.useRef<string | null>(null);
   const peerRef = React.useRef<RTCPeerConnection | null>(null);
@@ -609,9 +641,14 @@ const buildLeadReport = React.useCallback(() => {
     setBriefingLoading(false);
   }, []);
 
-  const playDailyBriefing = React.useCallback(async () => {
+  const playDailyBriefing = React.useCallback(async (options?: {
+    automatic?: boolean;
+    briefingData?: any;
+  }) => {
+    const automatic = Boolean(options?.automatic);
+
     if (briefingPlaying || briefingLoading) {
-      stopDailyBriefing();
+      if (!automatic) stopDailyBriefing();
       return;
     }
 
@@ -622,8 +659,17 @@ const buildLeadReport = React.useCallback(() => {
       const token = localStorage.getItem("dentalux_auth_token") || "";
       if (!token) throw new Error("Inicia sesión nuevamente para escuchar el resumen.");
 
-      // Cargar también el texto para mostrarlo debajo del botón.
-      const textData: any = await api(`/f1/daily-briefing?branch_key=${encodeURIComponent(sucursalId || "sucursal_1")}`);
+      const branchKey = sucursalId || "sucursal_1";
+      const textData: any = options?.briefingData || await api(
+        `/f1/daily-briefing?branch_key=${encodeURIComponent(branchKey)}`
+      );
+      const briefingDate = String(textData?.date || "");
+      const playedKey = dailyBriefingPlayedKey(briefingDate, branchKey);
+
+      // La reproducción automática ocurre una sola vez por
+      // empresa + usuario + sucursal + fecha.
+      if (automatic && localStorage.getItem(playedKey) === "1") return;
+
       setBriefingText(String(textData?.briefing || ""));
 
       const response = await fetch(`${API_BASE}/api/f1/daily-briefing/audio`, {
@@ -631,9 +677,12 @@ const buildLeadReport = React.useCallback(() => {
         headers: {
           Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
-          "x-sucursal": sucursalId || "sucursal_1",
+          "x-sucursal": branchKey,
         },
-        body: JSON.stringify({ branch_key: sucursalId || "sucursal_1" }),
+        body: JSON.stringify({
+          branch_key: branchKey,
+          date: briefingDate || undefined,
+        }),
       });
 
       if (!response.ok) {
@@ -662,14 +711,90 @@ const buildLeadReport = React.useCallback(() => {
       };
 
       await audio.play();
+
+      // Marcar únicamente después de que el navegador realmente inició el audio.
+      localStorage.setItem(playedKey, "1");
       setBriefingPlaying(true);
     } catch (error: any) {
       stopDailyBriefing();
-      setF1Error(error?.message || String(error));
+
+      // El autoplay puede ser bloqueado por el navegador. En ese caso dejamos
+      // disponible el botón manual sin mostrar un error técnico molesto.
+      const message = error?.message || String(error);
+      if (!automatic || !/play\(\)|autoplay|user gesture|notallowed/i.test(message)) {
+        setF1Error(message);
+      }
     } finally {
       setBriefingLoading(false);
     }
   }, [API_BASE, sucursalId, briefingPlaying, briefingLoading, stopDailyBriefing]);
+
+  const toggleDailyBriefing = React.useCallback(() => {
+    setDailyBriefingEnabled((current) => {
+      const next = !current;
+      localStorage.setItem("f1_daily_briefing_enabled", next ? "1" : "0");
+      if (!next) stopDailyBriefing();
+      return next;
+    });
+  }, [stopDailyBriefing]);
+
+  // Intenta reproducir el briefing una sola vez al día. Debido a las reglas de
+  // Chrome/Edge, espera la primera interacción del usuario con la aplicación.
+  React.useEffect(() => {
+    if (!dailyBriefingEnabled || autoBriefingAttemptedRef.current) return;
+
+    let cancelled = false;
+    let timer: number | null = null;
+
+    const begin = async () => {
+      if (cancelled || autoBriefingAttemptedRef.current) return;
+      autoBriefingAttemptedRef.current = true;
+
+      try {
+        const branchKey = sucursalId || "sucursal_1";
+        const data: any = await api(
+          `/f1/daily-briefing?branch_key=${encodeURIComponent(branchKey)}`
+        );
+        const playedKey = dailyBriefingPlayedKey(String(data?.date || ""), branchKey);
+        if (localStorage.getItem(playedKey) === "1") return;
+
+        timer = window.setTimeout(() => {
+          if (!cancelled && !voiceConnected && !voiceConnecting) {
+            void playDailyBriefing({ automatic: true, briefingData: data });
+          }
+        }, 450);
+      } catch {
+        // No bloquear el resto de F1 si el briefing no está disponible.
+      }
+    };
+
+    const onFirstInteraction = () => {
+      window.removeEventListener("pointerdown", onFirstInteraction, true);
+      window.removeEventListener("keydown", onFirstInteraction, true);
+      void begin();
+    };
+
+    const userActivation = (navigator as any).userActivation;
+    if (userActivation?.hasBeenActive) {
+      void begin();
+    } else {
+      window.addEventListener("pointerdown", onFirstInteraction, true);
+      window.addEventListener("keydown", onFirstInteraction, true);
+    }
+
+    return () => {
+      cancelled = true;
+      if (timer != null) window.clearTimeout(timer);
+      window.removeEventListener("pointerdown", onFirstInteraction, true);
+      window.removeEventListener("keydown", onFirstInteraction, true);
+    };
+  }, [
+    dailyBriefingEnabled,
+    sucursalId,
+    voiceConnected,
+    voiceConnecting,
+    playDailyBriefing,
+  ]);
 
   const sendF1Text = React.useCallback(async () => {
     const message = f1Input.trim();
@@ -1350,9 +1475,17 @@ const buildLeadReport = React.useCallback(() => {
                       <div>
                         <div className="text-sm font-semibold">Resumen diario por voz</div>
                         <div className="text-[11px] text-gray-500">Escucha el reporte operativo sin encender el micrófono.</div>
+                        <label className="mt-1 inline-flex items-center gap-2 text-[11px] text-gray-600 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={dailyBriefingEnabled}
+                            onChange={toggleDailyBriefing}
+                          />
+                          Reproducir automáticamente una vez al día
+                        </label>
                       </div>
                       <button
-                        onClick={playDailyBriefing}
+                        onClick={() => playDailyBriefing()}
                         disabled={briefingLoading}
                         className={`inline-flex items-center gap-2 px-3 py-2 rounded-xl text-white ${briefingPlaying ? 'bg-red-600' : 'bg-emerald-600'} disabled:opacity-60`}
                       >
