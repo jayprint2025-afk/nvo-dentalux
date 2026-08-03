@@ -264,6 +264,10 @@ export default function AIFloatingWidget(props: { apiBase?: string; sucursalId?:
   const [f1Input, setF1Input] = React.useState("");
   const [f1Sending, setF1Sending] = React.useState(false);
   const [f1Error, setF1Error] = React.useState<string | null>(null);
+  const [f1LiveEvent, setF1LiveEvent] = React.useState<any>(null);
+  const [f1StreamConnected, setF1StreamConnected] = React.useState(false);
+  const f1StreamAbortRef = React.useRef<AbortController | null>(null);
+  const f1StreamRetryRef = React.useRef<number | null>(null);
   const [voiceConnected, setVoiceConnected] = React.useState(false);
   const [voiceConnecting, setVoiceConnecting] = React.useState(false);
   const [voiceTranscript, setVoiceTranscript] = React.useState("");
@@ -626,6 +630,153 @@ const buildLeadReport = React.useCallback(() => {
     }
   }, []);
 
+  const describeF1Event = React.useCallback((event: any) => {
+    const payload = event?.payload || {};
+    const patient = String(payload?.patient || "La cita");
+    const time = payload?.start_time ? String(payload.start_time).slice(0, 5) : "";
+
+    switch (String(event?.name || "")) {
+      case "appointment.created":
+        return `${patient} fue agendado${time ? ` a las ${time}` : ""}.`;
+      case "appointment.confirmed":
+        return `${patient} confirmó su cita${time ? ` de las ${time}` : ""}.`;
+      case "appointment.cancelled":
+        return `La cita de ${patient} fue cancelada${time ? `; se liberó el horario de las ${time}` : ""}.`;
+      case "appointment.rescheduled":
+        return `La cita de ${patient} fue reagendada${time ? ` para las ${time}` : ""}.`;
+      case "appointment.updated":
+        return `La cita de ${patient} fue actualizada.`;
+      default:
+        return "";
+    }
+  }, []);
+
+  const handleF1LiveEvent = React.useCallback(async (event: any) => {
+    if (!event?.name) return;
+
+    setF1LiveEvent(event);
+    const message = describeF1Event(event);
+
+    if (message) {
+      setF1Messages((current) => [
+        ...current.slice(-30),
+        { role: "assistant", content: message },
+      ]);
+    }
+
+    if (String(event.name).startsWith("appointment.")) {
+      window.dispatchEvent(new CustomEvent("dentalux:appointments-changed", {
+        detail: {
+          source: "event-bus",
+          event_name: event.name,
+          appointment_id: event?.payload?.appointment_id || null,
+        },
+      }));
+    }
+
+    await loadF1Dashboard();
+  }, [describeF1Event, loadF1Dashboard]);
+
+  const connectF1EventStream = React.useCallback(() => {
+    const token = localStorage.getItem("dentalux_auth_token") || "";
+    if (!token || !API_BASE) return () => {};
+
+    f1StreamAbortRef.current?.abort();
+    if (f1StreamRetryRef.current != null) {
+      window.clearTimeout(f1StreamRetryRef.current);
+      f1StreamRetryRef.current = null;
+    }
+
+    const controller = new AbortController();
+    f1StreamAbortRef.current = controller;
+    let stopped = false;
+
+    const start = async () => {
+      try {
+        const branchKey = sucursalId || "sucursal_1";
+        const response = await fetch(
+          `${API_BASE}/api/f1/events/stream?branch_key=${encodeURIComponent(branchKey)}`,
+          {
+            method: "GET",
+            headers: {
+              Authorization: `Bearer ${token}`,
+              Accept: "text/event-stream",
+              "x-sucursal": branchKey,
+            },
+            cache: "no-store",
+            signal: controller.signal,
+          }
+        );
+
+        if (!response.ok || !response.body) {
+          throw new Error(`Event Stream HTTP ${response.status}`);
+        }
+
+        setF1StreamConnected(true);
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        while (!stopped) {
+          const { value, done } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
+          let boundary = buffer.indexOf("\n\n");
+
+          while (boundary !== -1) {
+            const block = buffer.slice(0, boundary);
+            buffer = buffer.slice(boundary + 2);
+            boundary = buffer.indexOf("\n\n");
+
+            if (!block.trim() || block.startsWith(":")) continue;
+
+            let eventName = "message";
+            const dataLines: string[] = [];
+
+            for (const line of block.split("\n")) {
+              if (line.startsWith("event:")) eventName = line.slice(6).trim();
+              if (line.startsWith("data:")) dataLines.push(line.slice(5).trim());
+            }
+
+            if (eventName === "f1-event" && dataLines.length) {
+              try {
+                const event = JSON.parse(dataLines.join("\n"));
+                void handleF1LiveEvent(event);
+              } catch {}
+            }
+          }
+        }
+
+        if (!stopped) throw new Error("Event Stream desconectado");
+      } catch (error: any) {
+        setF1StreamConnected(false);
+        if (stopped || error?.name === "AbortError") return;
+
+        f1StreamRetryRef.current = window.setTimeout(() => {
+          if (!stopped) void start();
+        }, 3000);
+      }
+    };
+
+    void start();
+
+    return () => {
+      stopped = true;
+      controller.abort();
+      if (f1StreamRetryRef.current != null) {
+        window.clearTimeout(f1StreamRetryRef.current);
+        f1StreamRetryRef.current = null;
+      }
+      setF1StreamConnected(false);
+    };
+  }, [API_BASE, sucursalId, handleF1LiveEvent]);
+
+  React.useEffect(() => {
+    const disconnect = connectF1EventStream();
+    return disconnect;
+  }, [connectF1EventStream]);
+
   const stopDailyBriefing = React.useCallback(() => {
     const audio = briefingAudioRef.current;
     if (audio) {
@@ -979,6 +1130,12 @@ const buildLeadReport = React.useCallback(() => {
 
   React.useEffect(() => () => disconnectVoice(), [disconnectVoice]);
   React.useEffect(() => () => stopDailyBriefing(), [stopDailyBriefing]);
+  React.useEffect(() => () => {
+    f1StreamAbortRef.current?.abort();
+    if (f1StreamRetryRef.current != null) {
+      window.clearTimeout(f1StreamRetryRef.current);
+    }
+  }, []);
 
   // ===== Effects IA =====
   React.useEffect(() => {
@@ -1468,6 +1625,18 @@ const buildLeadReport = React.useCallback(() => {
                     </div>
                     {f1Notifications.length ? f1Notifications.map(n => <div key={n.id} className="mt-2 text-xs text-gray-700"><b>{n.title}:</b> {n.message}</div>) : <div className="mt-2 text-xs text-gray-500">Sin avisos pendientes.</div>}
                     {f1Summary?.first_appointment && <div className="mt-2 text-xs text-gray-600">Primera cita: {String(f1Summary.first_appointment.start_time || '').slice(0,5)} · {f1Summary.first_appointment.patient}</div>}
+                  </div>
+
+                  <div className="mb-3 flex items-center justify-between rounded-xl border bg-white px-3 py-2">
+                    <div className="min-w-0">
+                      <div className="text-xs font-semibold">Actualización en tiempo real</div>
+                      <div className="truncate text-[11px] text-gray-500">
+                        {f1LiveEvent
+                          ? describeF1Event(f1LiveEvent) || String(f1LiveEvent?.name || "")
+                          : "Esperando movimientos de la clínica…"}
+                      </div>
+                    </div>
+                    <span className={`ml-3 h-2.5 w-2.5 rounded-full ${f1StreamConnected ? "bg-emerald-500" : "bg-amber-400"}`} />
                   </div>
 
                   <div className="bg-white border rounded-xl p-3 mb-3">

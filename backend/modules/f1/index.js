@@ -139,6 +139,78 @@ function setupF1Routes(app, q, deps) {
     }
   });
 
+  // F1-011C: stream SSE autenticado y aislado por empresa + sucursal.
+  app.get('/api/f1/events/stream', (req, res) => {
+    let unsubscribe = null;
+    let heartbeat = null;
+
+    try {
+      const ctx = buildContext(req, getTenantId, getSucursal);
+      const branchKey = String(req.query.branch_key || ctx.branch_key || 'sucursal_1');
+
+      res.status(200);
+      res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+      res.setHeader('Cache-Control', 'no-cache, no-transform');
+      res.setHeader('Connection', 'keep-alive');
+      res.setHeader('X-Accel-Buffering', 'no');
+      res.flushHeaders?.();
+
+      const send = (eventName, payload) => {
+        if (res.writableEnded || res.destroyed) return;
+        res.write(`event: ${eventName}\n`);
+        res.write(`data: ${JSON.stringify(payload)}\n\n`);
+      };
+
+      send('connected', {
+        ok: true,
+        tenant_id: ctx.tenant_id,
+        branch_key: branchKey,
+        connected_at: new Date().toISOString(),
+      });
+
+      unsubscribe = f1EventBus.on(
+        '*',
+        (event) => send('f1-event', event),
+        {
+          tenant_id: ctx.tenant_id,
+          branch_key: branchKey,
+        }
+      );
+
+      heartbeat = setInterval(() => {
+        if (!res.writableEnded && !res.destroyed) {
+          res.write(`: heartbeat ${Date.now()}\n\n`);
+        }
+      }, 25000);
+      heartbeat.unref?.();
+
+      const cleanup = () => {
+        if (unsubscribe) {
+          unsubscribe();
+          unsubscribe = null;
+        }
+        if (heartbeat) {
+          clearInterval(heartbeat);
+          heartbeat = null;
+        }
+      };
+
+      req.on('close', cleanup);
+      req.on('aborted', cleanup);
+      res.on('close', cleanup);
+      res.on('finish', cleanup);
+    } catch (error) {
+      if (!res.headersSent) {
+        res.status(error.statusCode || error.status || 500).json({ error: error.message });
+      } else if (!res.writableEnded) {
+        res.write(`event: error\ndata: ${JSON.stringify({ error: error.message })}\n\n`);
+        res.end();
+      }
+      if (unsubscribe) unsubscribe();
+      if (heartbeat) clearInterval(heartbeat);
+    }
+  });
+
   app.get('/api/f1/today-summary', async (req, res) => {
     try {
       const ctx = buildContext(req, getTenantId, getSucursal);
