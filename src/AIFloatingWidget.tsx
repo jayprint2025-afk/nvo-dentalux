@@ -232,7 +232,6 @@ export default function AIFloatingWidget(props: { apiBase?: string; sucursalId?:
   type F1Message = { role: "user" | "assistant"; content: string };
   const [f1Summary, setF1Summary] = React.useState<any>(null);
   const [f1Notifications, setF1Notifications] = React.useState<any[]>([]);
-  const [f1Operations, setF1Operations] = React.useState<any>(null);
   const [f1Messages, setF1Messages] = React.useState<F1Message[]>([]);
   const [f1Input, setF1Input] = React.useState("");
   const [f1Sending, setF1Sending] = React.useState(false);
@@ -240,6 +239,11 @@ export default function AIFloatingWidget(props: { apiBase?: string; sucursalId?:
   const [voiceConnected, setVoiceConnected] = React.useState(false);
   const [voiceConnecting, setVoiceConnecting] = React.useState(false);
   const [voiceTranscript, setVoiceTranscript] = React.useState("");
+  const [briefingPlaying, setBriefingPlaying] = React.useState(false);
+  const [briefingLoading, setBriefingLoading] = React.useState(false);
+  const [briefingText, setBriefingText] = React.useState("");
+  const briefingAudioRef = React.useRef<HTMLAudioElement | null>(null);
+  const briefingObjectUrlRef = React.useRef<string | null>(null);
   const peerRef = React.useRef<RTCPeerConnection | null>(null);
   const dataChannelRef = React.useRef<RTCDataChannel | null>(null);
   const executedRealtimeCallsRef = React.useRef<Set<string>>(new Set());
@@ -248,6 +252,8 @@ export default function AIFloatingWidget(props: { apiBase?: string; sucursalId?:
 
   const headers = React.useMemo(() => {
     const h: Record<string, string> = { "content-type": "application/json" };
+    const token = localStorage.getItem("dentalux_auth_token") || "";
+    if (token) h.Authorization = `Bearer ${token}`;
     if (sucursalId) h["x-sucursal"] = sucursalId;
     if (dbKey) h["x-db"] = String(dbKey);
     if (appId) h["x-app"] = String(appId);
@@ -559,7 +565,6 @@ const buildLeadReport = React.useCallback(() => {
       const data: any = await api(`/f1/notifications?branch_key=${encodeURIComponent(sucursalId || "sucursal_1")}`);
       setF1Summary(data?.summary || null);
       setF1Notifications(Array.isArray(data?.notifications) ? data.notifications : []);
-      setF1Operations(data?.operations_report || null);
     } catch (error: any) {
       setF1Error(error?.message || String(error));
     }
@@ -589,22 +594,82 @@ const buildLeadReport = React.useCallback(() => {
     }
   }, []);
 
-  const priorityStyle = React.useCallback((priority: string) => {
-    const value = String(priority || 'info');
-    if (value === 'critical') return { border: '#fecaca', background: '#fef2f2', label: 'Crítico', icon: '🔴' };
-    if (value === 'attention') return { border: '#fed7aa', background: '#fff7ed', label: 'Atención', icon: '🟠' };
-    if (value === 'important') return { border: '#fde68a', background: '#fffbeb', label: 'Importante', icon: '🟡' };
-    return { border: '#bfdbfe', background: '#eff6ff', label: 'Informativo', icon: '🟢' };
+  const stopDailyBriefing = React.useCallback(() => {
+    const audio = briefingAudioRef.current;
+    if (audio) {
+      audio.pause();
+      audio.currentTime = 0;
+      audio.src = "";
+    }
+    if (briefingObjectUrlRef.current) {
+      URL.revokeObjectURL(briefingObjectUrlRef.current);
+      briefingObjectUrlRef.current = null;
+    }
+    setBriefingPlaying(false);
+    setBriefingLoading(false);
   }, []);
 
-  const openOperationsAction = React.useCallback((alert: any) => {
-    const action = alert?.action;
-    if (action?.type === 'navigate' && action?.target) {
-      window.dispatchEvent(new CustomEvent('cliniqone:f1-navigate', {
-        detail: { target: String(action.target) },
-      }));
+  const playDailyBriefing = React.useCallback(async () => {
+    if (briefingPlaying || briefingLoading) {
+      stopDailyBriefing();
+      return;
     }
-  }, []);
+
+    try {
+      setBriefingLoading(true);
+      setF1Error(null);
+
+      const token = localStorage.getItem("dentalux_auth_token") || "";
+      if (!token) throw new Error("Inicia sesión nuevamente para escuchar el resumen.");
+
+      // Cargar también el texto para mostrarlo debajo del botón.
+      const textData: any = await api(`/f1/daily-briefing?branch_key=${encodeURIComponent(sucursalId || "sucursal_1")}`);
+      setBriefingText(String(textData?.briefing || ""));
+
+      const response = await fetch(`${API_BASE}/api/f1/daily-briefing/audio`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+          "x-sucursal": sucursalId || "sucursal_1",
+        },
+        body: JSON.stringify({ branch_key: sucursalId || "sucursal_1" }),
+      });
+
+      if (!response.ok) {
+        const details = await response.text();
+        throw new Error(details || `HTTP ${response.status}`);
+      }
+
+      const blob = await response.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      if (briefingObjectUrlRef.current) URL.revokeObjectURL(briefingObjectUrlRef.current);
+      briefingObjectUrlRef.current = objectUrl;
+
+      const audio = briefingAudioRef.current || new Audio();
+      briefingAudioRef.current = audio;
+      audio.src = objectUrl;
+      audio.onended = () => {
+        setBriefingPlaying(false);
+        if (briefingObjectUrlRef.current) {
+          URL.revokeObjectURL(briefingObjectUrlRef.current);
+          briefingObjectUrlRef.current = null;
+        }
+      };
+      audio.onerror = () => {
+        setBriefingPlaying(false);
+        setF1Error("No fue posible reproducir el resumen diario.");
+      };
+
+      await audio.play();
+      setBriefingPlaying(true);
+    } catch (error: any) {
+      stopDailyBriefing();
+      setF1Error(error?.message || String(error));
+    } finally {
+      setBriefingLoading(false);
+    }
+  }, [API_BASE, sucursalId, briefingPlaying, briefingLoading, stopDailyBriefing]);
 
   const sendF1Text = React.useCallback(async () => {
     const message = f1Input.trim();
@@ -788,6 +853,7 @@ const buildLeadReport = React.useCallback(() => {
   }, [loadF1Dashboard]);
 
   React.useEffect(() => () => disconnectVoice(), [disconnectVoice]);
+  React.useEffect(() => () => stopDailyBriefing(), [stopDailyBriefing]);
 
   // ===== Effects IA =====
   React.useEffect(() => {
@@ -1275,43 +1341,28 @@ const buildLeadReport = React.useCallback(() => {
                       <div className="flex items-center gap-2"><Bell className="w-4 h-4" /><span className="text-sm font-semibold">Información de hoy</span></div>
                       <button className="text-xs px-2 py-1 rounded border" onClick={loadF1Dashboard}>Actualizar</button>
                     </div>
-                    {f1Notifications.length ? (
-                      <div className="mt-2 grid gap-2">
-                        {f1Notifications.slice(0, 6).map((n: any) => {
-                          const style = priorityStyle(n.priority);
-                          return (
-                            <button
-                              type="button"
-                              key={n.id}
-                              onClick={() => openOperationsAction(n)}
-                              className="text-left rounded-lg p-2"
-                              style={{ border: `1px solid ${style.border}`, background: style.background }}
-                            >
-                              <div className="text-[10px] font-semibold uppercase tracking-wide text-gray-500">{style.icon} {style.label} · {n.area}</div>
-                              <div className="text-xs font-semibold text-gray-900">{n.title}</div>
-                              <div className="text-xs text-gray-700">{n.message}</div>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    ) : <div className="mt-2 text-xs text-gray-500">Sin avisos pendientes.</div>}
+                    {f1Notifications.length ? f1Notifications.map(n => <div key={n.id} className="mt-2 text-xs text-gray-700"><b>{n.title}:</b> {n.message}</div>) : <div className="mt-2 text-xs text-gray-500">Sin avisos pendientes.</div>}
                     {f1Summary?.first_appointment && <div className="mt-2 text-xs text-gray-600">Primera cita: {String(f1Summary.first_appointment.start_time || '').slice(0,5)} · {f1Summary.first_appointment.patient}</div>}
-                    {f1Operations && (
-                      <div className="mt-3 border-t pt-3">
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                          <div className="rounded-lg bg-emerald-50 p-2"><div className="text-[10px] text-emerald-700">Ingresos hoy</div><div className="font-bold text-emerald-900">${Number(f1Operations.finance?.income_today || 0).toLocaleString('es-MX')}</div></div>
-                          <div className="rounded-lg bg-slate-50 p-2"><div className="text-[10px] text-slate-600">Neto hoy</div><div className="font-bold text-slate-900">${Number(f1Operations.finance?.net_today || 0).toLocaleString('es-MX')}</div></div>
-                          <div className="rounded-lg bg-orange-50 p-2"><div className="text-[10px] text-orange-700">Lab. vencidos</div><div className="font-bold text-orange-900">{f1Operations.laboratory?.overdue || 0}</div></div>
-                          <div className="rounded-lg bg-red-50 p-2"><div className="text-[10px] text-red-700">Agotados</div><div className="font-bold text-red-900">{f1Operations.inventory?.out_of_stock || 0}</div></div>
-                        </div>
-                        {!!f1Operations.recommendations?.length && (
-                          <div className="mt-2 rounded-lg bg-violet-50 p-2">
-                            <div className="text-[11px] font-semibold text-violet-900">💡 Recomendaciones de F1</div>
-                            {f1Operations.recommendations.slice(0, 3).map((item: string, index: number) => (
-                              <div key={index} className="mt-1 text-xs text-violet-800">• {item}</div>
-                            ))}
-                          </div>
-                        )}
+                  </div>
+
+                  <div className="bg-white border rounded-xl p-3 mb-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-semibold">Resumen diario por voz</div>
+                        <div className="text-[11px] text-gray-500">Escucha el reporte operativo sin encender el micrófono.</div>
+                      </div>
+                      <button
+                        onClick={playDailyBriefing}
+                        disabled={briefingLoading}
+                        className={`inline-flex items-center gap-2 px-3 py-2 rounded-xl text-white ${briefingPlaying ? 'bg-red-600' : 'bg-emerald-600'} disabled:opacity-60`}
+                      >
+                        <Volume2 className="w-4 h-4" />
+                        {briefingLoading ? 'Preparando…' : briefingPlaying ? 'Detener' : 'Escuchar resumen'}
+                      </button>
+                    </div>
+                    {!!briefingText && (
+                      <div className="mt-2 rounded-lg bg-emerald-50 border border-emerald-100 p-2 text-xs text-gray-700">
+                        {briefingText}
                       </div>
                     )}
                   </div>

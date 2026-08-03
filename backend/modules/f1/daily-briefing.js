@@ -38,8 +38,13 @@ function buildDailyBriefingText(report, ctx = {}) {
   const outOfStock = number(inventory.out_of_stock);
   const lowStock = number(inventory.low_stock);
 
-  const userName = String(ctx.user_name || '').trim();
-  const greeting = `${greetingForTime(ctx.timezone)}${userName && userName !== 'Usuario' ? `, ${userName}` : ''}.`;
+  const rawUserName = String(ctx.user_name || '').trim();
+  // No leer correos electrónicos como nombre. Cuando el JWT incluya un nombre real,
+  // se utilizará; de lo contrario, el saludo será general.
+  const userName = rawUserName && rawUserName !== 'Usuario' && !rawUserName.includes('@')
+    ? rawUserName
+    : '';
+  const greeting = `${greetingForTime(ctx.timezone)}${userName ? `, ${userName}` : ''}.`;
 
   const parts = [
     greeting,
