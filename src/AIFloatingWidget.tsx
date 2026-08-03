@@ -215,7 +215,14 @@ export default function AIFloatingWidget(props: { apiBase?: string; sucursalId?:
 
     // Si casi no se movió, es "tap/click" → abrir/cerrar panel
     if (robotDrag.current.moved < 6) {
-      setOpen((v) => !v);
+      setOpen((current) => {
+        const next = !current;
+        if (next) {
+          setTab("f1");
+          setF1UnreadEvents(0);
+        }
+        return next;
+      });
     }
   };
 
@@ -265,6 +272,7 @@ export default function AIFloatingWidget(props: { apiBase?: string; sucursalId?:
   const [f1Sending, setF1Sending] = React.useState(false);
   const [f1Error, setF1Error] = React.useState<string | null>(null);
   const [f1LiveEvent, setF1LiveEvent] = React.useState<any>(null);
+  const [f1UnreadEvents, setF1UnreadEvents] = React.useState(0);
   const [f1StreamConnected, setF1StreamConnected] = React.useState(false);
   const f1StreamAbortRef = React.useRef<AbortController | null>(null);
   const f1StreamRetryRef = React.useRef<number | null>(null);
@@ -655,6 +663,9 @@ const buildLeadReport = React.useCallback(() => {
     if (!event?.name) return;
 
     setF1LiveEvent(event);
+    if (!open || tab !== "f1") {
+      setF1UnreadEvents((current) => Math.min(current + 1, 99));
+    }
     const message = describeF1Event(event);
 
     if (message) {
@@ -675,7 +686,7 @@ const buildLeadReport = React.useCallback(() => {
     }
 
     await loadF1Dashboard();
-  }, [describeF1Event, loadF1Dashboard]);
+  }, [describeF1Event, loadF1Dashboard, open, tab]);
 
   const connectF1EventStream = React.useCallback(() => {
     const token = localStorage.getItem("dentalux_auth_token") || "";
@@ -1506,9 +1517,29 @@ const buildLeadReport = React.useCallback(() => {
         <div className="aiRobotWrap">
           <img src={ROBOT_SRC} alt="F1" draggable={false} className="aiRobotImg" />
           <div className="aiBlink" />
-          {!!f1Summary?.counts?.total && (
-            <div style={{ position: "absolute", right: -4, top: -4, minWidth: 24, height: 24, borderRadius: 999, background: "#dc2626", color: "white", fontSize: 11, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 6px", border: "2px solid white" }}>
-              {f1Summary.counts.total}
+          {f1UnreadEvents > 0 && (
+            <div
+              title={`${f1UnreadEvents} actualización${f1UnreadEvents === 1 ? "" : "es"} nueva${f1UnreadEvents === 1 ? "" : "s"}`}
+              style={{
+                position: "absolute",
+                right: -4,
+                top: -4,
+                minWidth: 24,
+                height: 24,
+                borderRadius: 999,
+                background: "#dc2626",
+                color: "white",
+                fontSize: 11,
+                fontWeight: 700,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                padding: "0 6px",
+                border: "2px solid white",
+                boxShadow: "0 4px 12px rgba(220,38,38,.35)",
+              }}
+            >
+              {f1UnreadEvents > 99 ? "99+" : f1UnreadEvents}
             </div>
           )}
         </div>
@@ -1576,7 +1607,10 @@ const buildLeadReport = React.useCallback(() => {
           <div className="flex border-b overflow-x-auto">
             <button
               className={`flex-1 min-w-[110px] px-3 py-2 text-sm ${tab === "f1" ? "bg-white font-semibold" : "bg-gray-50"}`}
-              onClick={() => setTab("f1")}
+              onClick={() => {
+                setTab("f1");
+                setF1UnreadEvents(0);
+              }}
             >
               <span className="inline-flex items-center gap-2"><Mic className="w-4 h-4" /> F1 Gestión</span>
             </button>
@@ -1629,7 +1663,14 @@ const buildLeadReport = React.useCallback(() => {
 
                   <div className="mb-3 flex items-center justify-between rounded-xl border bg-white px-3 py-2">
                     <div className="min-w-0">
-                      <div className="text-xs font-semibold">Actualización en tiempo real</div>
+                      <div className="text-xs font-semibold">
+                        Actualización en tiempo real
+                        {f1UnreadEvents > 0 && (
+                          <span className="ml-2 rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-bold text-red-700">
+                            {f1UnreadEvents} nuevas
+                          </span>
+                        )}
+                      </div>
                       <div className="truncate text-[11px] text-gray-500">
                         {f1LiveEvent
                           ? describeF1Event(f1LiveEvent) || String(f1LiveEvent?.name || "")
