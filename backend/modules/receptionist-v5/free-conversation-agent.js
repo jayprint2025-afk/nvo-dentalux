@@ -971,19 +971,13 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
     } else {
       const created = await Appointment.createAppointment(q, ctx, pending);
 
-      // Solo notificar una creación real. Si el webhook fue repetido y se recuperó
-      // la cita existente, no generamos una segunda notificación.
-      if (!created.deduplicated) {
-        publishMessengerAppointmentCreated(created, pending, ctx);
-      }
+      publishMessengerAppointmentCreated(created, pending, ctx);
 
       state.appointment_id = created.id;
       state.completed_booking_keys.push(pending.booking_key);
       state.pending_booking = null;
-      plan.reply = created.deduplicated
-        ? `Tu cita ya estaba registrada correctamente. Número de cita: ${created.id}.`
-        : `Listo, tu cita quedó registrada correctamente. Número de cita: ${created.id}.`;
-      used = created.deduplicated ? 'appointment_duplicate_recovered' : 'appointment_booked';
+      plan.reply = `Listo, tu cita quedó registrada correctamente. Número de cita: ${created.id}.`;
+      used = 'appointment_booked';
     }
   }
 
