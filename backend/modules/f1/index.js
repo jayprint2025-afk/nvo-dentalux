@@ -184,16 +184,35 @@ function setupF1Routes(app, q, deps) {
         max_output_tokens: 700,
       };
 
-      // FormData nativo de Node: deja que fetch genere el boundary correcto.
-      // OpenAI requiere los campos multipart exactos `sdp` y `session`.
-      const form = new FormData();
-      form.append('sdp', new Blob([req.body], { type: 'application/sdp' }), 'offer.sdp');
-      form.append('session', new Blob([JSON.stringify(session)], { type: 'application/json' }));
+      // Construir multipart/form-data manualmente para garantizar que OpenAI
+      // reciba exactamente los campos `sdp` y `session` con sus content-types.
+      const boundary = `----CliniqOneF1${Date.now().toString(16)}${Math.random().toString(16).slice(2)}`;
+      const multipartBody = Buffer.concat([
+        Buffer.from(
+          `--${boundary}\r\n` +
+          `Content-Disposition: form-data; name=\"sdp\"; filename=\"offer.sdp\"\r\n` +
+          `Content-Type: application/sdp\r\n\r\n`,
+          'utf8'
+        ),
+        Buffer.from(req.body, 'utf8'),
+        Buffer.from(
+          `\r\n--${boundary}\r\n` +
+          `Content-Disposition: form-data; name=\"session\"\r\n` +
+          `Content-Type: application/json\r\n\r\n` +
+          `${JSON.stringify(session)}\r\n` +
+          `--${boundary}--\r\n`,
+          'utf8'
+        ),
+      ]);
 
       const upstream = await fetch('https://api.openai.com/v1/realtime/calls', {
         method: 'POST',
-        headers: { Authorization: `Bearer ${key}` },
-        body: form,
+        headers: {
+          Authorization: `Bearer ${key}`,
+          'Content-Type': `multipart/form-data; boundary=${boundary}`,
+          'Content-Length': String(multipartBody.length),
+        },
+        body: multipartBody,
       });
       const body = await upstream.text();
       if (!upstream.ok) return res.status(upstream.status).type('text/plain').send(body);
