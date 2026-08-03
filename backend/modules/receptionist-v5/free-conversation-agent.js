@@ -5,6 +5,7 @@ const Memory = require('./conversation-memory');
 const Appointment = require('./appointment-tools');
 const Grounding = require('./conversation-grounding');
 const ObjectivePlanner = require('./booking-objective-planner');
+const { f1EventBus } = require('../f1/event-bus');
 
 const SYSTEM_RULES = `
 Eres una recepcionista dental humana, cálida, eficiente y profesional.
@@ -482,6 +483,79 @@ function updatedConfirmationReply(args, knowledge) {
   );
 }
 
+
+function publishMessengerAppointmentCreated(created, pending, ctx) {
+  if (!created?.id) return null;
+
+  const tenantId = String(
+    ctx?.tenant_id ||
+    ctx?.clinic_id ||
+    ''
+  ).trim();
+
+  if (!tenantId) {
+    console.warn('⚠️ Messenger Event Bus: tenant_id ausente');
+    return null;
+  }
+
+  const branchKey = String(
+    created?.sucursal_id ||
+    created?.branch_key ||
+    pending?.branch_key ||
+    'sucursal_1'
+  ).trim();
+
+  try {
+    return f1EventBus.emit(
+      'appointment.created',
+      {
+        appointment_id: created.id,
+        patient:
+          created.patient ||
+          pending?.patient ||
+          pending?.patient_name ||
+          null,
+        phone:
+          created.phone ||
+          pending?.phone ||
+          null,
+        date:
+          created.date ||
+          pending?.date ||
+          null,
+        start_time:
+          created.start_time ||
+          pending?.start_time ||
+          null,
+        status:
+          created.status ||
+          'Pendiente',
+        doctor_id:
+          created.doctor_id ||
+          pending?.doctor_id ||
+          null,
+        service_id:
+          created.service_id ||
+          pending?.service_id ||
+          null,
+        channel: 'messenger',
+      },
+      {
+        tenant_id: tenantId,
+        branch_key: branchKey,
+        user_id: ctx?.conversationId
+          ? `messenger-conversation:${ctx.conversationId}`
+          : 'messenger',
+        source: 'messenger',
+      }
+    );
+  } catch (error) {
+    // La notificación nunca debe cancelar una cita ya guardada.
+    console.warn('⚠️ Messenger Event Bus appointment.created:', error.message);
+    return null;
+  }
+}
+
 async function runAgent(q, ctx, incoming, userText, knowledge) {
   const state = Memory.initialState(incoming);
   ObjectivePlanner.ensureGoal(state);
@@ -896,6 +970,9 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
       used = 'duplicate_blocked';
     } else {
       const created = await Appointment.createAppointment(q, ctx, pending);
+
+      publishMessengerAppointmentCreated(created, pending, ctx);
+
       state.appointment_id = created.id;
       state.completed_booking_keys.push(pending.booking_key);
       state.pending_booking = null;
