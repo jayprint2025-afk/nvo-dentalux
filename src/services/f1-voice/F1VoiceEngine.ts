@@ -1,221 +1,131 @@
-import { F1LocalWakeDetector } from "./F1LocalWakeDetector";
-import { F1VoiceGate } from "./F1VoiceGate";
+import {
+  EngineBuilder,
+  type F1VoiceEngine as CoreF1VoiceEngine,
+  type F1VoiceEngineState,
+} from "@cliniqone/f1-voice-engine";
+import { OnnxWakeModel } from "@cliniqone/onnx-runtime";
+
 import type {
   F1VoiceEngineOptions,
   F1VoiceEngineStatus,
-  F1WakeDetector,
+  F1WakeEvent,
 } from "./types";
 
+const DEFAULT_MODEL_ROOT = "/models/hola-f1";
+const PILOT_THRESHOLD = 0.47;
+
 export class F1VoiceEngine {
-  private readonly options: Required<
-    Pick<
-      F1VoiceEngineOptions,
-      "phrase" | "threshold" | "cooldownMs" | "workletUrl"
-    >
-  > &
-    F1VoiceEngineOptions;
+  private readonly options: F1VoiceEngineOptions;
+  private readonly core: CoreF1VoiceEngine;
+  private disposed = false;
 
-  private readonly gate = new F1VoiceGate();
-  private readonly detector: F1WakeDetector;
+  constructor(options: F1VoiceEngineOptions = {}) {
+    this.options = options;
 
-  private stream: MediaStream | null = null;
-  private context: AudioContext | null = null;
-  private source: MediaStreamAudioSourceNode | null = null;
-  private worklet: AudioWorkletNode | null = null;
-  private sink: GainNode | null = null;
-  private status: F1VoiceEngineStatus = "idle";
-  private lastWakeAt = 0;
-  private consecutiveHits = 0;
-  private running = false;
-  private paused = false;
+    const configuredModelUrl = String(options.modelUrl || "").trim();
+    const modelRoot = configuredModelUrl
+      ? configuredModelUrl.replace(/\/hola-f1\.onnx(?:\?.*)?$/, "")
+      : DEFAULT_MODEL_ROOT;
 
-  constructor(
-    options: F1VoiceEngineOptions = {},
-    detector: F1WakeDetector = new F1LocalWakeDetector()
-  ) {
-    this.options = {
-      phrase: options.phrase || "Hola F1",
-      threshold: Number(options.threshold || 0.78),
-      cooldownMs: Number(options.cooldownMs || 5000),
-      workletUrl:
-        options.workletUrl || "/f1-voice/f1-audio-processor.js",
-      ...options,
-    };
-    this.detector = detector;
+    const wakeModel = new OnnxWakeModel({
+      modelUrl: `${modelRoot}/hola-f1.onnx`,
+      manifestUrl: `${modelRoot}/manifest.json`,
+      externalDataUrl: `${modelRoot}/hola-f1.onnx.data`,
+      externalDataPath: "hola-f1.onnx.data",
+      executionProviders: ["wasm"],
+    });
+
+    const cooldownMs = Number(options.cooldownMs ?? 5000);
+    const cooldownFrames = Math.max(1, Math.ceil(cooldownMs / 80));
+
+    this.core = new EngineBuilder()
+      .withWakeModel(wakeModel)
+      .withConfig({
+        diagnostics: false,
+        wakeDetector: {
+          featureBands: 16,
+          windowFrames: 12,
+          expectedSampleRate: 16000,
+          preEmphasis: 0.97,
+          detectionThreshold: Number(options.threshold ?? PILOT_THRESHOLD),
+          consecutiveHits: 2,
+          cooldownFrames,
+        },
+      })
+      .build();
+
+    this.bindEvents();
   }
 
   get currentStatus(): F1VoiceEngineStatus {
-    return this.status;
-  }
-
-  private setStatus(status: F1VoiceEngineStatus, detail?: string) {
-    this.status = status;
-    this.options.onStatus?.(status, detail);
+    return this.mapStatus(this.core.state);
   }
 
   async start(): Promise<void> {
-    if (this.running) return;
-
-    if (!navigator.mediaDevices?.getUserMedia || !window.AudioContext) {
-      this.setStatus("unsupported", "Web Audio no está disponible.");
-      return;
+    if (this.disposed) {
+      throw new Error("F1VoiceEngine ya fue liberado.");
     }
-
-    const modelUrl = String(this.options.modelUrl || "").trim();
-    if (!modelUrl) {
-      this.setStatus(
-        "model-missing",
-        "Falta el modelo local entrenado para “Hola F1”."
-      );
-      return;
-    }
-
-    this.setStatus("starting");
 
     try {
-      await this.detector.load(modelUrl);
-
-      this.stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          channelCount: 1,
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
-      });
-
-      this.context = new AudioContext({ sampleRate: 48000 });
-      await this.context.audioWorklet.addModule(this.options.workletUrl);
-
-      this.source = this.context.createMediaStreamSource(this.stream);
-      this.worklet = new AudioWorkletNode(
-        this.context,
-        "f1-voice-audio-processor",
-        {
-          processorOptions: {
-            targetSampleRate: 16000,
-            frameSamples: 1280,
-          },
-        }
-      );
-
-      // Mantiene vivo el grafo sin reproducir el micrófono por bocinas.
-      this.sink = this.context.createGain();
-      this.sink.gain.value = 0;
-
-      this.worklet.port.onmessage = (event: MessageEvent) => {
-        if (event.data?.type !== "audio-frame") return;
-        const pcm = event.data.pcm as Float32Array;
-        const sampleRate = Number(event.data.sampleRate || 16000);
-        void this.processFrame(pcm, sampleRate);
-      };
-
-      this.source.connect(this.worklet);
-      this.worklet.connect(this.sink);
-      this.sink.connect(this.context.destination);
-
-      this.running = true;
-      this.paused = false;
-      this.setStatus("listening");
-    } catch (error: any) {
-      await this.stop();
-      const message = error?.message || String(error);
-
-      if (/modelo|model/i.test(message)) {
-        this.setStatus("model-missing", message);
-      } else {
-        this.setStatus("error", message);
-      }
+      await this.core.start();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.options.onStatus?.("error", message);
     }
-  }
-
-  private async processFrame(
-    frame: Float32Array,
-    sampleRate: number
-  ): Promise<void> {
-    if (!this.running || this.paused || !this.detector.ready) return;
-
-    // La silla, golpes y ruido impulsivo se descartan antes del modelo.
-    if (!this.gate.isLikelyVoice(frame)) {
-      this.consecutiveHits = 0;
-      return;
-    }
-
-    const confidence = await this.detector.score(frame, sampleRate);
-
-    if (confidence >= this.options.threshold) {
-      this.consecutiveHits += 1;
-    } else {
-      this.consecutiveHits = 0;
-    }
-
-    // Exige dos cuadros positivos consecutivos.
-    if (this.consecutiveHits < 2) return;
-
-    const now = Date.now();
-    if (now - this.lastWakeAt < this.options.cooldownMs) return;
-
-    this.lastWakeAt = now;
-    this.consecutiveHits = 0;
-    this.pause();
-
-    this.options.onWake?.({
-      phrase: this.options.phrase,
-      confidence,
-      detectedAt: now,
-    });
   }
 
   pause(): void {
-    this.paused = true;
-    if (this.running) this.setStatus("paused");
+    this.core.pause();
   }
 
   resume(): void {
-    if (!this.running) return;
-    this.paused = false;
-    this.consecutiveHits = 0;
-    this.setStatus("listening");
+    this.core.resume();
   }
 
   async stop(): Promise<void> {
-    this.running = false;
-    this.paused = false;
-    this.consecutiveHits = 0;
+    await this.core.stop();
+  }
 
-    if (this.worklet) {
-      this.worklet.port.onmessage = null;
-      try {
-        this.worklet.disconnect();
-      } catch {}
-      this.worklet = null;
+  async dispose(): Promise<void> {
+    if (this.disposed) return;
+    this.disposed = true;
+    await this.core.dispose();
+  }
+
+  private bindEvents(): void {
+    this.core.on("statechange", ({ current }) => {
+      this.options.onStatus?.(this.mapStatus(current));
+    });
+
+    this.core.on("wake", ({ score, timestampMs }) => {
+      const event: F1WakeEvent = {
+        phrase: this.options.phrase || "Hola F1",
+        confidence: score,
+        detectedAt: timestampMs,
+      };
+
+      this.options.onWake?.(event);
+    });
+
+    this.core.on("error", ({ message }) => {
+      this.options.onStatus?.("error", message);
+    });
+  }
+
+  private mapStatus(state: F1VoiceEngineState): F1VoiceEngineStatus {
+    switch (state) {
+      case "idle":
+      case "stopping":
+      case "disposed":
+        return "idle";
+      case "starting":
+        return "starting";
+      case "running":
+        return "listening";
+      case "paused":
+        return "paused";
+      case "failed":
+        return "error";
     }
-
-    if (this.source) {
-      try {
-        this.source.disconnect();
-      } catch {}
-      this.source = null;
-    }
-
-    if (this.sink) {
-      try {
-        this.sink.disconnect();
-      } catch {}
-      this.sink = null;
-    }
-
-    this.stream?.getTracks().forEach((track) => track.stop());
-    this.stream = null;
-
-    if (this.context) {
-      try {
-        await this.context.close();
-      } catch {}
-      this.context = null;
-    }
-
-    await this.detector.dispose();
-    this.setStatus("idle");
   }
 }
