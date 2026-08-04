@@ -1,0 +1,37 @@
+{
+  "id": "hola-f1",
+  "version": "0.1.0-pilot",
+  "format": "onnx",
+  "sampleRate": 16000,
+  "frameDurationMs": 80,
+  "frameSamples": 1280,
+  "windowFrames": 12,
+  "featureBands": 16,
+  "featureSize": 18,
+  "preEmphasis": 0.97,
+  "inputName": "features",
+  "inputShape": [
+    1,
+    12,
+    18
+  ],
+  "outputName": "score",
+  "outputShape": [
+    1,
+    1
+  ],
+  "threshold": 0.47,
+  "labels": {
+    "0": "background",
+    "1": "hola-f1"
+  },
+  "sha256": "88c93b028f6e261bbceff83a702de7cc8d49c2291cfef9a572824ae81eb0f37f",
+  "training": {
+    "positiveFiles": 240,
+    "nearNegativeFiles": 768,
+    "epochs": 40,
+    "seed": 20260803
+  },
+  "status": "pilot",
+  "warning": "Debe evaluarse con voces humanas y audio real antes de producción permanente."
+}
