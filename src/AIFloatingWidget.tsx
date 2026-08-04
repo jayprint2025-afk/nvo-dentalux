@@ -1,6 +1,7 @@
 import React from "react";
 import { MessagesSquare, Send, X, Trash2, Mic, MicOff, Bell, CalendarDays, Volume2 } from "lucide-react";
 import { api } from "./lib/api";
+import { F1VoiceEngine, type F1VoiceEngineStatus } from "./services/f1-voice";
 
 /**
  * AIFloatingWidget
@@ -279,6 +280,13 @@ export default function AIFloatingWidget(props: { apiBase?: string; sucursalId?:
   const [voiceConnected, setVoiceConnected] = React.useState(false);
   const [voiceConnecting, setVoiceConnecting] = React.useState(false);
   const [voiceTranscript, setVoiceTranscript] = React.useState("");
+  const [f1VoiceEngineEnabled, setF1VoiceEngineEnabled] = React.useState(() => {
+    return localStorage.getItem("f1_voice_engine_enabled") === "1";
+  });
+  const [f1VoiceEngineStatus, setF1VoiceEngineStatus] =
+    React.useState<F1VoiceEngineStatus>("idle");
+  const [f1VoiceEngineDetail, setF1VoiceEngineDetail] = React.useState("");
+  const f1VoiceEngineRef = React.useRef<F1VoiceEngine | null>(null);
   const [briefingPlaying, setBriefingPlaying] = React.useState(false);
   const [briefingLoading, setBriefingLoading] = React.useState(false);
   const [briefingText, setBriefingText] = React.useState("");
@@ -1139,6 +1147,64 @@ const buildLeadReport = React.useCallback(() => {
   }, [API_BASE, sucursalId, voiceConnected, voiceConnecting, disconnectVoice, executeRealtimeTool]);
 
   React.useEffect(() => {
+    const modelUrl = String(
+      (import.meta as any).env?.VITE_F1_WAKE_MODEL_URL || ""
+    ).trim();
+
+    const engine = new F1VoiceEngine({
+      phrase: "Hola F1",
+      modelUrl,
+      threshold: 0.78,
+      cooldownMs: 5000,
+      onStatus: (status, detail) => {
+        setF1VoiceEngineStatus(status);
+        setF1VoiceEngineDetail(String(detail || ""));
+      },
+      onWake: () => {
+        setOpen(true);
+        setTab("f1");
+        setVoiceTranscript("F1 activado. Te escucho…");
+        void connectVoice();
+      },
+    });
+
+    f1VoiceEngineRef.current = engine;
+
+    if (f1VoiceEngineEnabled) {
+      void engine.start();
+    }
+
+    return () => {
+      f1VoiceEngineRef.current = null;
+      void engine.stop();
+    };
+  }, [connectVoice, f1VoiceEngineEnabled]);
+
+  React.useEffect(() => {
+    const engine = f1VoiceEngineRef.current;
+    if (!engine) return;
+
+    if (voiceConnected || voiceConnecting) {
+      engine.pause();
+    } else if (f1VoiceEngineEnabled) {
+      engine.resume();
+    }
+  }, [voiceConnected, voiceConnecting, f1VoiceEngineEnabled]);
+
+  const toggleF1VoiceEngine = React.useCallback(() => {
+    setF1VoiceEngineEnabled((current) => {
+      const next = !current;
+      localStorage.setItem("f1_voice_engine_enabled", next ? "1" : "0");
+
+      const engine = f1VoiceEngineRef.current;
+      if (next) void engine?.start();
+      else void engine?.stop();
+
+      return next;
+    });
+  }, []);
+
+  React.useEffect(() => {
     loadF1Dashboard();
 
     const refreshNow = () => { void loadF1Dashboard(); };
@@ -1732,6 +1798,30 @@ const buildLeadReport = React.useCallback(() => {
                         {briefingText}
                       </div>
                     )}
+                  </div>
+
+                  <div className="bg-white border rounded-xl p-3 mb-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="text-sm font-semibold">F1 Voice Engine</div>
+                        <div className="text-[11px] text-gray-500">
+                          Motor local preparado para detectar “Hola F1”.
+                        </div>
+                        <div className="mt-1 text-[11px] text-gray-600">
+                          Estado: {f1VoiceEngineStatus}
+                          {f1VoiceEngineDetail ? ` · ${f1VoiceEngineDetail}` : ""}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={toggleF1VoiceEngine}
+                        className={`rounded-xl px-3 py-2 text-white ${
+                          f1VoiceEngineEnabled ? "bg-emerald-600" : "bg-gray-600"
+                        }`}
+                      >
+                        {f1VoiceEngineEnabled ? "Motor activo" : "Activar motor"}
+                      </button>
+                    </div>
                   </div>
 
                   <div className="bg-white border rounded-xl p-3 mb-3">
