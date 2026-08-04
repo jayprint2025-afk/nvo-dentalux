@@ -852,7 +852,20 @@ const buildLeadReport = React.useCallback(() => {
 
       // El briefing tiene exclusividad de salida de audio:
       // no debe coexistir con Realtime ni con el micrófono wake.
-      disconnectVoice();
+      // Cierra Realtime sin depender de la función declarada más abajo
+      // en el componente (evita Temporal Dead Zone durante el render).
+      try { dataChannelRef.current?.close(); } catch {}
+      try { peerRef.current?.close(); } catch {}
+      try {
+        mediaRef.current?.getTracks().forEach((track) => track.stop());
+      } catch {}
+      dataChannelRef.current = null;
+      executedRealtimeCallsRef.current.clear();
+      peerRef.current = null;
+      mediaRef.current = null;
+      setVoiceConnected(false);
+      setVoiceConnecting(false);
+
       await f1VoiceEngineRef.current?.stop();
 
       const token = localStorage.getItem("dentalux_auth_token") || "";
@@ -938,7 +951,6 @@ const buildLeadReport = React.useCallback(() => {
     briefingPlaying,
     briefingLoading,
     stopDailyBriefing,
-    disconnectVoice,
     f1VoiceEngineEnabled,
   ]);
 
