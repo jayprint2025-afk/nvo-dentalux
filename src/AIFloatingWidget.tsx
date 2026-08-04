@@ -301,6 +301,7 @@ export default function AIFloatingWidget(props: { apiBase?: string; sucursalId?:
   const executedRealtimeCallsRef = React.useRef<Set<string>>(new Set());
   const audioRef = React.useRef<HTMLAudioElement | null>(null);
   const mediaRef = React.useRef<MediaStream | null>(null);
+  const connectVoiceRef = React.useRef<() => Promise<void>>(async () => {});
 
   const headers = React.useMemo(() => {
     const h: Record<string, string> = { "content-type": "application/json" };
@@ -1129,18 +1130,31 @@ const buildLeadReport = React.useCallback(() => {
       dc.onopen = () => {
         setVoiceConnected(true);
         setVoiceConnecting(false);
-        setVoiceTranscript("F1: Te escucho.");
 
-        // La frase de activación ya fue consumida por el Wake Engine.
-        // Realtime inicia con una respuesta breve y después espera
-        // una instrucción nueva del usuario.
-        dc.send(JSON.stringify({
-          type: "response.create",
-          response: {
-            modalities: ["audio", "text"],
-            instructions: "Responde únicamente: Te escucho.",
-          },
-        }));
+        const microphoneTrack = mediaRef.current?.getAudioTracks()[0] || null;
+
+        // Evita que Realtime capture su propio saludo.
+        if (microphoneTrack) microphoneTrack.enabled = false;
+
+        const enableMicrophone = () => {
+          if (microphoneTrack) microphoneTrack.enabled = true;
+          setVoiceTranscript("F1: Te escucho. Da tu instrucción.");
+        };
+
+        if ("speechSynthesis" in window) {
+          window.speechSynthesis.cancel();
+
+          const greeting = new SpeechSynthesisUtterance("Te escucho");
+          greeting.lang = "es-MX";
+          greeting.rate = 1;
+          greeting.onend = enableMicrophone;
+          greeting.onerror = enableMicrophone;
+
+          setVoiceTranscript("F1 activado…");
+          window.speechSynthesis.speak(greeting);
+        } else {
+          enableMicrophone();
+        }
       };
       dc.onclose = () => setVoiceConnected(false);
       dc.onmessage = async event => {
@@ -1199,6 +1213,10 @@ const buildLeadReport = React.useCallback(() => {
     stopDailyBriefing,
   ]);
 
+  // El Wake Engine conserva una referencia estable y no se recrea
+  // cada vez que cambia el estado de OpenAI Realtime.
+  connectVoiceRef.current = connectVoice;
+
   React.useEffect(() => {
     const modelUrl = String(
       (import.meta as any).env?.VITE_F1_WAKE_MODEL_URL ||
@@ -1227,7 +1245,7 @@ const buildLeadReport = React.useCallback(() => {
           setTab("f1");
           setVoiceTranscript("F1 activado. Preparando escucha…");
 
-          await connectVoice();
+          await connectVoiceRef.current();
         })();
       },
     });
@@ -1242,7 +1260,7 @@ const buildLeadReport = React.useCallback(() => {
       f1VoiceEngineRef.current = null;
       void engine.dispose();
     };
-  }, [connectVoice, f1VoiceEngineEnabled, stopDailyBriefing]);
+  }, [f1VoiceEngineEnabled, stopDailyBriefing]);
 
   React.useEffect(() => {
     const engine = f1VoiceEngineRef.current;
