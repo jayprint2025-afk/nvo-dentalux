@@ -287,6 +287,7 @@ export default function AIFloatingWidget(props: { apiBase?: string; sucursalId?:
   const wakeRecognitionRef = React.useRef<any>(null);
   const wakeRestartTimerRef = React.useRef<number | null>(null);
   const wakeActivatingRef = React.useRef(false);
+  const wakeLastErrorRef = React.useRef("");
   const wakeEnabledRef = React.useRef(wakeWordEnabled);
   const voiceStateRef = React.useRef({ connected: false, connecting: false });
   const [briefingPlaying, setBriefingPlaying] = React.useState(false);
@@ -1199,6 +1200,7 @@ const buildLeadReport = React.useCallback(() => {
 
     try {
       setWakeWordError(null);
+      wakeLastErrorRef.current = "";
 
       const recognition = new SpeechRecognitionCtor();
       wakeRecognitionRef.current = recognition;
@@ -1228,9 +1230,9 @@ const buildLeadReport = React.useCallback(() => {
               .trim();
 
             const detected =
-              /\b(?:oye\s+)?f\s*1\b/.test(transcript) ||
-              /\b(?:oye\s+)?efe\s+uno\b/.test(transcript) ||
-              /\b(?:oye\s+)?ef\s+uno\b/.test(transcript);
+              /^(?:oye\s+)?f\s*1$/.test(transcript) ||
+              /^(?:oye\s+)?efe\s+uno$/.test(transcript) ||
+              /^(?:oye\s+)?ef\s+uno$/.test(transcript);
 
             if (!detected || wakeActivatingRef.current) continue;
 
@@ -1269,6 +1271,7 @@ const buildLeadReport = React.useCallback(() => {
 
       recognition.onerror = (event: any) => {
         const code = String(event?.error || '');
+        wakeLastErrorRef.current = code;
 
         if (code === 'not-allowed' || code === 'service-not-allowed') {
           setWakeWordError(
@@ -1292,10 +1295,20 @@ const buildLeadReport = React.useCallback(() => {
           !voiceStateRef.current.connecting &&
           !wakeActivatingRef.current
         ) {
+          // Edge/Chrome pueden cerrar SpeechRecognition por silencio.
+          // Reiniciar cada segundo hace que el sistema operativo active y
+          // desactive el micrófono repetidamente. Esperamos más tiempo para
+          // mantener el modo de espera discreto.
+          const lastError = wakeLastErrorRef.current;
+          const restartDelay =
+            lastError === 'no-speech' ? 15000 :
+            lastError === 'network' ? 10000 :
+            8000;
+
           wakeRestartTimerRef.current = window.setTimeout(() => {
             wakeRestartTimerRef.current = null;
             void startWakeWord();
-          }, 900);
+          }, restartDelay);
         }
       };
 
@@ -1346,7 +1359,7 @@ const buildLeadReport = React.useCallback(() => {
 
     const timer = window.setTimeout(() => {
       void startWakeWord();
-    }, 700);
+    }, 3000);
 
     return () => window.clearTimeout(timer);
   }, [
@@ -1974,7 +1987,7 @@ const buildLeadReport = React.useCallback(() => {
                               : 'text-gray-500'
                         }`}>
                           {wakeWordListening
-                            ? '● Esperando la palabra F1'
+                            ? '● En espera silenciosa de “Oye F1”'
                             : wakeWordEnabled
                               ? voiceConnected || voiceConnecting
                                 ? 'En pausa mientras hablas con F1'

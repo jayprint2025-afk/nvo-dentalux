@@ -407,11 +407,16 @@ function setupF1Routes(app, q, deps) {
               model: process.env.F1_TRANSCRIBE_MODEL || 'gpt-4o-mini-transcribe',
               language: 'es',
             },
+            noise_reduction: {
+              type: 'far_field',
+            },
             turn_detection: {
               type: 'semantic_vad',
-              eagerness: 'medium',
+              eagerness: 'low',
               create_response: true,
-              interrupt_response: true,
+              // Evita que una silla, instrumental o conversación ambiental
+              // corte la respuesta que F1 está pronunciando.
+              interrupt_response: false,
             },
           },
           output: { voice: process.env.F1_VOICE || 'marin', speed: 1 },
