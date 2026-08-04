@@ -12,7 +12,7 @@ import type {
 } from "./types";
 
 const DEFAULT_MODEL_ROOT = "/models/hola-f1";
-const PILOT_THRESHOLD = 0.47;
+const PILOT_THRESHOLD = 0.35;
 
 export class F1VoiceEngine {
   private readonly options: F1VoiceEngineOptions;
@@ -47,8 +47,11 @@ export class F1VoiceEngine {
           windowFrames: 12,
           expectedSampleRate: 16000,
           preEmphasis: 0.97,
-          detectionThreshold: Number(options.threshold ?? PILOT_THRESHOLD),
-          consecutiveHits: 2,
+          detectionThreshold: Math.min(
+            Number(options.threshold ?? PILOT_THRESHOLD),
+            PILOT_THRESHOLD,
+          ),
+          consecutiveHits: 1,
           cooldownFrames,
         },
       })
@@ -95,6 +98,14 @@ export class F1VoiceEngine {
   private bindEvents(): void {
     this.core.on("statechange", ({ current }) => {
       this.options.onStatus?.(this.mapStatus(current));
+    });
+
+    this.core.on("score", ({ score, threshold, detected }) => {
+      console.debug("[F1 Voice Engine]", {
+        score: Number(score.toFixed(3)),
+        threshold,
+        detected,
+      });
     });
 
     this.core.on("wake", ({ score, timestampMs }) => {
