@@ -850,6 +850,11 @@ const buildLeadReport = React.useCallback(() => {
       setBriefingLoading(true);
       setF1Error(null);
 
+      // El briefing tiene exclusividad de salida de audio:
+      // no debe coexistir con Realtime ni con el micrófono wake.
+      disconnectVoice();
+      await f1VoiceEngineRef.current?.stop();
+
       const token = localStorage.getItem("dentalux_auth_token") || "";
       if (!token) throw new Error("Inicia sesión nuevamente para escuchar el resumen.");
 
@@ -898,10 +903,16 @@ const buildLeadReport = React.useCallback(() => {
           URL.revokeObjectURL(briefingObjectUrlRef.current);
           briefingObjectUrlRef.current = null;
         }
+        if (f1VoiceEngineEnabled) {
+          void f1VoiceEngineRef.current?.start();
+        }
       };
       audio.onerror = () => {
         setBriefingPlaying(false);
         setF1Error("No fue posible reproducir el resumen diario.");
+        if (f1VoiceEngineEnabled) {
+          void f1VoiceEngineRef.current?.start();
+        }
       };
 
       await audio.play();
@@ -921,7 +932,15 @@ const buildLeadReport = React.useCallback(() => {
     } finally {
       setBriefingLoading(false);
     }
-  }, [API_BASE, sucursalId, briefingPlaying, briefingLoading, stopDailyBriefing]);
+  }, [
+    API_BASE,
+    sucursalId,
+    briefingPlaying,
+    briefingLoading,
+    stopDailyBriefing,
+    disconnectVoice,
+    f1VoiceEngineEnabled,
+  ]);
 
   const toggleDailyBriefing = React.useCallback(() => {
     setDailyBriefingEnabled((current) => {
@@ -1073,9 +1092,12 @@ const buildLeadReport = React.useCallback(() => {
       disconnectVoice();
       return;
     }
+    stopDailyBriefing();
+    await f1VoiceEngineRef.current?.stop();
+
     setVoiceConnecting(true);
     setF1Error(null);
-    setVoiceTranscript('Conectando con F1…');
+    setVoiceTranscript("Conectando con F1…");
     try {
       const token = localStorage.getItem('dentalux_auth_token') || '';
       if (!token) throw new Error('Inicia sesión nuevamente para usar la voz.');
@@ -1095,7 +1117,18 @@ const buildLeadReport = React.useCallback(() => {
       dc.onopen = () => {
         setVoiceConnected(true);
         setVoiceConnecting(false);
-        setVoiceTranscript('F1 está escuchando…');
+        setVoiceTranscript("F1: Te escucho.");
+
+        // La frase de activación ya fue consumida por el Wake Engine.
+        // Realtime inicia con una respuesta breve y después espera
+        // una instrucción nueva del usuario.
+        dc.send(JSON.stringify({
+          type: "response.create",
+          response: {
+            modalities: ["audio", "text"],
+            instructions: "Responde únicamente: Te escucho.",
+          },
+        }));
       };
       dc.onclose = () => setVoiceConnected(false);
       dc.onmessage = async event => {
@@ -1144,7 +1177,15 @@ const buildLeadReport = React.useCallback(() => {
       setF1Error(error?.message || String(error));
       setVoiceTranscript('');
     }
-  }, [API_BASE, sucursalId, voiceConnected, voiceConnecting, disconnectVoice, executeRealtimeTool]);
+  }, [
+    API_BASE,
+    sucursalId,
+    voiceConnected,
+    voiceConnecting,
+    disconnectVoice,
+    executeRealtimeTool,
+    stopDailyBriefing,
+  ]);
 
   React.useEffect(() => {
     const modelUrl = String(
@@ -1155,17 +1196,27 @@ const buildLeadReport = React.useCallback(() => {
     const engine = new F1VoiceEngine({
       phrase: "Hola F1",
       modelUrl,
-      threshold: 0.78,
+      threshold: 0.35,
       cooldownMs: 5000,
       onStatus: (status, detail) => {
         setF1VoiceEngineStatus(status);
         setF1VoiceEngineDetail(String(detail || ""));
       },
       onWake: () => {
-        setOpen(true);
-        setTab("f1");
-        setVoiceTranscript("F1 activado. Te escucho…");
-        void connectVoice();
+        void (async () => {
+          // Candado exclusivo: el Wake Engine debe liberar completamente
+          // su micrófono antes de abrir OpenAI Realtime.
+          await f1VoiceEngineRef.current?.stop();
+
+          // Evita que el resumen diario sea capturado por Realtime.
+          stopDailyBriefing();
+
+          setOpen(true);
+          setTab("f1");
+          setVoiceTranscript("F1 activado. Preparando escucha…");
+
+          await connectVoice();
+        })();
       },
     });
 
@@ -1177,9 +1228,9 @@ const buildLeadReport = React.useCallback(() => {
 
     return () => {
       f1VoiceEngineRef.current = null;
-      void engine.stop();
+      void engine.dispose();
     };
-  }, [connectVoice, f1VoiceEngineEnabled]);
+  }, [connectVoice, f1VoiceEngineEnabled, stopDailyBriefing]);
 
   React.useEffect(() => {
     const engine = f1VoiceEngineRef.current;
@@ -1188,7 +1239,9 @@ const buildLeadReport = React.useCallback(() => {
     if (voiceConnected || voiceConnecting) {
       engine.pause();
     } else if (f1VoiceEngineEnabled) {
-      engine.resume();
+      // Si el wake engine fue detenido para entregar el micrófono a
+      // Realtime, start() vuelve a cargarlo y abre un micrófono limpio.
+      void engine.start();
     }
   }, [voiceConnected, voiceConnecting, f1VoiceEngineEnabled]);
 
