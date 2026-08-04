@@ -1148,7 +1148,8 @@ const buildLeadReport = React.useCallback(() => {
 
   React.useEffect(() => {
     const modelUrl = String(
-      (import.meta as any).env?.VITE_F1_WAKE_MODEL_URL || ""
+      (import.meta as any).env?.VITE_F1_WAKE_MODEL_URL ||
+      "/models/hola-f1/hola-f1.onnx"
     ).trim();
 
     const engine = new F1VoiceEngine({
