@@ -2,6 +2,7 @@ import React from "react";
 import { MessagesSquare, Send, X, Trash2, Mic, MicOff, Bell, CalendarDays, Volume2 } from "lucide-react";
 import { api } from "./lib/api";
 import { F1VoiceEngine, type F1VoiceEngineStatus } from "./services/f1-voice";
+import { F1AudioSessionController, F1RealtimeClient, type F1AudioSnapshot } from "./services/f1-realtime";
 
 /**
  * AIFloatingWidget
@@ -301,7 +302,7 @@ export default function AIFloatingWidget(props: { apiBase?: string; sucursalId?:
   const executedRealtimeCallsRef = React.useRef<Set<string>>(new Set());
   const audioRef = React.useRef<HTMLAudioElement | null>(null);
   const mediaRef = React.useRef<MediaStream | null>(null);
-  const connectVoiceRef = React.useRef<() => Promise<void>>(async () => {});
+  const sessionControllerRef = React.useRef<F1AudioSessionController | null>(null);
 
   const headers = React.useMemo(() => {
     const h: Record<string, string> = { "content-type": "application/json" };
@@ -834,6 +835,9 @@ const buildLeadReport = React.useCallback(() => {
     }
     setBriefingPlaying(false);
     setBriefingLoading(false);
+    if (sessionControllerRef.current?.snapshot.state === "BRIEFING_PLAYING") {
+      void sessionControllerRef.current.endBriefing();
+    }
   }, []);
 
   const playDailyBriefing = React.useCallback(async (options?: {
@@ -851,23 +855,7 @@ const buildLeadReport = React.useCallback(() => {
       setBriefingLoading(true);
       setF1Error(null);
 
-      // El briefing tiene exclusividad de salida de audio:
-      // no debe coexistir con Realtime ni con el micrófono wake.
-      // Cierra Realtime sin depender de la función declarada más abajo
-      // en el componente (evita Temporal Dead Zone durante el render).
-      try { dataChannelRef.current?.close(); } catch {}
-      try { peerRef.current?.close(); } catch {}
-      try {
-        mediaRef.current?.getTracks().forEach((track) => track.stop());
-      } catch {}
-      dataChannelRef.current = null;
-      executedRealtimeCallsRef.current.clear();
-      peerRef.current = null;
-      mediaRef.current = null;
-      setVoiceConnected(false);
-      setVoiceConnecting(false);
-
-      await f1VoiceEngineRef.current?.stop();
+      await sessionControllerRef.current?.beginBriefing();
 
       const token = localStorage.getItem("dentalux_auth_token") || "";
       if (!token) throw new Error("Inicia sesión nuevamente para escuchar el resumen.");
@@ -917,16 +905,12 @@ const buildLeadReport = React.useCallback(() => {
           URL.revokeObjectURL(briefingObjectUrlRef.current);
           briefingObjectUrlRef.current = null;
         }
-        if (f1VoiceEngineEnabled) {
-          void f1VoiceEngineRef.current?.start();
-        }
+        void sessionControllerRef.current?.endBriefing();
       };
       audio.onerror = () => {
         setBriefingPlaying(false);
         setF1Error("No fue posible reproducir el resumen diario.");
-        if (f1VoiceEngineEnabled) {
-          void f1VoiceEngineRef.current?.start();
-        }
+        void sessionControllerRef.current?.endBriefing();
       };
 
       await audio.play();
@@ -1051,178 +1035,25 @@ const buildLeadReport = React.useCallback(() => {
     }
   }, [f1Input, f1Sending, f1Messages, sucursalId, loadF1Dashboard, applyF1ClientActions]);
 
-  const executeRealtimeTool = React.useCallback(async (item: any) => {
-    const name = String(item?.name || '');
-    const callId = String(item?.call_id || item?.id || '');
-    if (!name || !callId) return;
-
-    // OpenAI puede publicar la misma function_call en dos eventos distintos.
-    // Marcarla antes de ejecutar evita dobles citas y dobles movimientos.
-    if (executedRealtimeCallsRef.current.has(callId)) return;
-    executedRealtimeCallsRef.current.add(callId);
-
+  const executeRealtimeTool = React.useCallback(async (name: string, callId: string, argumentsJson: string) => {
     let args: any = {};
-    try { args = JSON.parse(item?.arguments || '{}'); } catch {}
-    let output: any;
-    try {
-      output = await api('/f1/actions', {
-        method: 'POST',
-        body: JSON.stringify({
-          name,
-          arguments: args,
-          call_id: callId,
-          branch_key: sucursalId || 'sucursal_1',
-        }),
-      });
-      applyF1ClientActions([output]);
-      await loadF1Dashboard();
-    } catch (error: any) {
-      output = { ok: false, error: error?.message || String(error) };
-    }
-    const dc = dataChannelRef.current;
-    if (!dc || dc.readyState !== 'open') return;
-    dc.send(JSON.stringify({
-      type: 'conversation.item.create',
-      item: { type: 'function_call_output', call_id: callId, output: JSON.stringify(output) },
-    }));
-    dc.send(JSON.stringify({ type: 'response.create' }));
+    try { args = JSON.parse(argumentsJson || '{}'); } catch {}
+    const output: any = await api('/f1/actions', {
+      method: 'POST',
+      body: JSON.stringify({ name, arguments: args, call_id: callId, branch_key: sucursalId || 'sucursal_1' }),
+    });
+    applyF1ClientActions([output]);
+    await loadF1Dashboard();
+    return output;
   }, [sucursalId, loadF1Dashboard, applyF1ClientActions]);
 
-  const disconnectVoice = React.useCallback(() => {
-    try { dataChannelRef.current?.close(); } catch {}
-    try { peerRef.current?.close(); } catch {}
-    try { mediaRef.current?.getTracks().forEach(track => track.stop()); } catch {}
-    dataChannelRef.current = null;
-    executedRealtimeCallsRef.current.clear();
-    peerRef.current = null;
-    mediaRef.current = null;
-    setVoiceConnected(false);
-    setVoiceConnecting(false);
+  const connectVoice = React.useCallback(async () => {
+    await sessionControllerRef.current?.startManualConversation();
   }, []);
 
-  const connectVoice = React.useCallback(async () => {
-    if (voiceConnected || voiceConnecting) {
-      disconnectVoice();
-      return;
-    }
-    stopDailyBriefing();
-    await f1VoiceEngineRef.current?.stop();
-
-    setVoiceConnecting(true);
-    setF1Error(null);
-    setVoiceTranscript("Conectando con F1…");
-    try {
-      const token = localStorage.getItem('dentalux_auth_token') || '';
-      if (!token) throw new Error('Inicia sesión nuevamente para usar la voz.');
-      const pc = new RTCPeerConnection();
-      peerRef.current = pc;
-      const audio = audioRef.current || document.createElement('audio');
-      audio.autoplay = true;
-      audioRef.current = audio;
-      pc.ontrack = event => { audio.srcObject = event.streams[0]; };
-
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      mediaRef.current = stream;
-      stream.getTracks().forEach(track => pc.addTrack(track, stream));
-
-      const dc = pc.createDataChannel('oai-events');
-      dataChannelRef.current = dc;
-      dc.onopen = () => {
-        setVoiceConnected(true);
-        setVoiceConnecting(false);
-
-        const microphoneTrack = mediaRef.current?.getAudioTracks()[0] || null;
-
-        // Evita que Realtime capture su propio saludo.
-        if (microphoneTrack) microphoneTrack.enabled = false;
-
-        const enableMicrophone = () => {
-          if (microphoneTrack) microphoneTrack.enabled = true;
-          setVoiceTranscript("F1: Te escucho. Da tu instrucción.");
-        };
-
-        if ("speechSynthesis" in window) {
-          window.speechSynthesis.cancel();
-
-          const greeting = new SpeechSynthesisUtterance("Te escucho");
-          greeting.lang = "es-MX";
-          greeting.rate = 1;
-          greeting.onend = enableMicrophone;
-          greeting.onerror = enableMicrophone;
-
-          setVoiceTranscript("F1 activado…");
-          window.speechSynthesis.speak(greeting);
-        } else {
-          enableMicrophone();
-        }
-      };
-      dc.onclose = () => setVoiceConnected(false);
-      dc.onmessage = async event => {
-        let payload: any;
-        try { payload = JSON.parse(event.data); } catch { return; }
-        if (payload.type === 'conversation.item.input_audio_transcription.completed') {
-          const transcript = String(payload.transcript || '').trim();
-          if (transcript) {
-            setVoiceTranscript(`Tú: ${transcript}`);
-            setF1Messages(current => [...current, { role: 'user', content: transcript }]);
-          }
-        }
-        if (payload.type === 'response.output_audio_transcript.delta' || payload.type === 'response.audio_transcript.delta') {
-          setVoiceTranscript(current => current.startsWith('F1:') ? `${current}${payload.delta || ''}` : `F1: ${payload.delta || ''}`);
-        }
-        if (payload.type === 'response.output_audio_transcript.done' || payload.type === 'response.audio_transcript.done') {
-          const transcript = String(payload.transcript || '').trim();
-          if (transcript) {
-            setVoiceTranscript(`F1: ${transcript}`);
-            setF1Messages(current => [...current, { role: 'assistant', content: transcript }]);
-          }
-        }
-        if (payload.type === 'response.output_item.done' && payload.item?.type === 'function_call') {
-          await executeRealtimeTool(payload.item);
-        }
-        if (payload.type === 'response.done') {
-          for (const item of payload.response?.output || []) {
-            if (item?.type === 'function_call') await executeRealtimeTool(item);
-          }
-        }
-        if (payload.type === 'error') setF1Error(payload.error?.message || 'Error en la sesión de voz.');
-      };
-
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-      const response = await fetch(`${API_BASE}/api/f1/realtime/call?branch_key=${encodeURIComponent(sucursalId || 'sucursal_1')}`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/sdp', 'x-sucursal': sucursalId || 'sucursal_1' },
-        body: offer.sdp || '',
-      });
-      if (!response.ok) throw new Error(await response.text());
-      const answerSdp = await response.text();
-      await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
-    } catch (error: any) {
-      disconnectVoice();
-      setF1Error(error?.message || String(error));
-      setVoiceTranscript('');
-    }
-  }, [
-    API_BASE,
-    sucursalId,
-    voiceConnected,
-    voiceConnecting,
-    disconnectVoice,
-    executeRealtimeTool,
-    stopDailyBriefing,
-  ]);
-
-  // El Wake Engine conserva una referencia estable y no se recrea
-  // cada vez que cambia el estado de OpenAI Realtime.
-  connectVoiceRef.current = connectVoice;
-
   React.useEffect(() => {
-    const modelUrl = String(
-      (import.meta as any).env?.VITE_F1_WAKE_MODEL_URL ||
-      "/models/hola-f1/hola-f1.onnx"
-    ).trim();
-
+    const modelUrl = String((import.meta as any).env?.VITE_F1_WAKE_MODEL_URL || "/models/hola-f1/hola-f1.onnx").trim();
+    let controller: F1AudioSessionController;
     const engine = new F1VoiceEngine({
       phrase: "Hola F1",
       modelUrl,
@@ -1232,58 +1063,66 @@ const buildLeadReport = React.useCallback(() => {
         setF1VoiceEngineStatus(status);
         setF1VoiceEngineDetail(String(detail || ""));
       },
-      onWake: () => {
-        void (async () => {
-          // Candado exclusivo: el Wake Engine debe liberar completamente
-          // su micrófono antes de abrir OpenAI Realtime.
-          await f1VoiceEngineRef.current?.stop();
-
-          // Evita que el resumen diario sea capturado por Realtime.
-          stopDailyBriefing();
-
-          setOpen(true);
-          setTab("f1");
-          setVoiceTranscript("F1 activado. Preparando escucha…");
-
-          await connectVoiceRef.current();
-        })();
-      },
+      onWake: () => { void controller.wakeDetected(); },
     });
-
     f1VoiceEngineRef.current = engine;
 
-    if (f1VoiceEngineEnabled) {
-      void engine.start();
-    }
+    const handleSnapshot = (snapshot: F1AudioSnapshot) => {
+      const realtime = snapshot.state.startsWith("REALTIME_") && snapshot.state !== "REALTIME_DISCONNECTING";
+      setVoiceConnected(realtime && snapshot.state !== "REALTIME_CONNECTING");
+      setVoiceConnecting(snapshot.state === "REALTIME_CONNECTING");
+      if (snapshot.transcript) setVoiceTranscript(snapshot.transcript);
+      setF1VoiceEngineDetail(snapshot.detail);
+    };
+
+    controller = new F1AudioSessionController({
+      wakeEngine: engine,
+      onSnapshot: handleSnapshot,
+      onOpenWidget: () => { setOpen(true); setTab("f1"); },
+      followupTimeoutMs: 6000,
+      inactivityTimeoutMs: 15000,
+      maxSessionMs: 120000,
+      createRealtimeClient: () => new F1RealtimeClient({
+        apiBase: API_BASE,
+        branchKey: sucursalId || "sucursal_1",
+        getToken: () => localStorage.getItem("dentalux_auth_token") || "",
+        callbacks: {
+          onConnected: () => controller.onConnected(),
+          onGreetingDone: () => controller.onGreetingDone(),
+          onUserSpeechStarted: () => controller.onUserSpeechStarted(),
+          onUserTranscript: (text) => {
+            controller.onUserTranscript(text);
+            setF1Messages(current => [...current, { role: "user", content: text }]);
+          },
+          onAssistantSpeechStarted: () => controller.onAssistantSpeechStarted(),
+          onAssistantTranscriptDelta: (delta) => controller.onAssistantTranscriptDelta(delta),
+          onAssistantTranscriptDone: (text) => {
+            controller.onAssistantTranscriptDone(text);
+            setF1Messages(current => [...current, { role: "assistant", content: text }]);
+          },
+          onResponseDone: () => controller.onResponseDone(),
+          onToolCall: ({ name, callId, argumentsJson }) => executeRealtimeTool(name, callId, argumentsJson),
+          onError: (error) => { setF1Error(error.message); controller.onRealtimeError(error); },
+          onClosed: () => controller.onRealtimeClosed(),
+        },
+      }),
+    });
+    sessionControllerRef.current = controller;
+    if (f1VoiceEngineEnabled) void controller.enable();
 
     return () => {
+      sessionControllerRef.current = null;
       f1VoiceEngineRef.current = null;
-      void engine.dispose();
+      void controller.dispose();
     };
-  }, [f1VoiceEngineEnabled, stopDailyBriefing]);
-
-  React.useEffect(() => {
-    const engine = f1VoiceEngineRef.current;
-    if (!engine) return;
-
-    if (voiceConnected || voiceConnecting) {
-      engine.pause();
-    } else if (f1VoiceEngineEnabled) {
-      // Si el wake engine fue detenido para entregar el micrófono a
-      // Realtime, start() vuelve a cargarlo y abre un micrófono limpio.
-      void engine.start();
-    }
-  }, [voiceConnected, voiceConnecting, f1VoiceEngineEnabled]);
+  }, [API_BASE, sucursalId, executeRealtimeTool]);
 
   const toggleF1VoiceEngine = React.useCallback(() => {
     setF1VoiceEngineEnabled((current) => {
       const next = !current;
       localStorage.setItem("f1_voice_engine_enabled", next ? "1" : "0");
-
-      const engine = f1VoiceEngineRef.current;
-      if (next) void engine?.start();
-      else void engine?.stop();
-
+      if (next) void sessionControllerRef.current?.enable();
+      else void sessionControllerRef.current?.disable();
       return next;
     });
   }, []);
@@ -1313,7 +1152,6 @@ const buildLeadReport = React.useCallback(() => {
     };
   }, [loadF1Dashboard]);
 
-  React.useEffect(() => () => disconnectVoice(), [disconnectVoice]);
   React.useEffect(() => () => stopDailyBriefing(), [stopDailyBriefing]);
   React.useEffect(() => () => {
     f1StreamAbortRef.current?.abort();
