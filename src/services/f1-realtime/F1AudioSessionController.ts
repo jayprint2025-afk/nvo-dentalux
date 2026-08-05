@@ -10,6 +10,7 @@ export class F1AudioSessionController {
   private transcript = "";
   private followupTimer: number | null = null;
   private inactivityTimer: number | null = null;
+  private greetingTimer: number | null = null;
   private maxSessionTimer: number | null = null;
   private operation: Promise<void> = Promise.resolve();
   private disposed = false;
@@ -166,7 +167,12 @@ export class F1AudioSessionController {
   private async connectRealtime(): Promise<void> {
     this.clearTimers(); this.move("REALTIME_CONNECTING", "Conectando con F1…");
     const client = this.options.createRealtimeClient(); this.realtime = client;
-    try { await client.connect(); this.move("REALTIME_GREETING", "F1 activado…"); this.armMaxSession(); this.armInactivity(); }
+    try {
+      await client.connect();
+      this.move("REALTIME_GREETING", "F1 preparando saludo…");
+      this.armMaxSession();
+      this.armGreetingTimeout();
+    }
     catch (error) { this.detail = error instanceof Error ? error.message : String(error); this.move("ERROR", this.detail); await this.disconnectRealtime("error", true); }
   }
   private async disconnectRealtime(reason: DisconnectReason, restartWake: boolean): Promise<void> {
@@ -190,7 +196,12 @@ export class F1AudioSessionController {
   }
 
   onConnected(): void { this.move("REALTIME_GREETING", "F1 activado…"); }
-  onGreetingDone(): void { this.transcript = "F1: Te escucho"; this.move("REALTIME_LISTENING", "Escuchando instrucción"); this.armInactivity(); }
+  onGreetingDone(): void {
+    this.clearGreetingTimeout();
+    this.transcript = "F1: Te escucho";
+    this.move("REALTIME_LISTENING", "Escuchando instrucción");
+    this.armInactivity();
+  }
   onUserSpeechStarted(): void { this.clearFollowup(); this.move("REALTIME_PROCESSING", "Procesando instrucción"); this.armInactivity(); }
   onUserTranscript(text: string): void { this.transcript = `Tú: ${text}`; this.emit(); this.armInactivity(); }
   onAssistantSpeechStarted(): void { if (this.sm.state !== "REALTIME_GREETING") this.move("REALTIME_SPEAKING", "F1 respondiendo"); this.armInactivity(); }
@@ -200,11 +211,34 @@ export class F1AudioSessionController {
   onRealtimeError(error: Error): void { this.detail = error.message; this.move("ERROR", error.message); void this.enqueue(() => this.disconnectRealtime("error", true)); }
   onRealtimeClosed(): void { if (!this.disposed && this.realtime) void this.enqueue(() => this.disconnectRealtime("error", true)); }
 
+  private armGreetingTimeout(): void {
+    this.clearGreetingTimeout();
+    this.greetingTimer = window.setTimeout(() => {
+      void this.enqueue(() =>
+        this.disconnectRealtime("error", true)
+      );
+    }, 12000);
+  }
+
+  private clearGreetingTimeout(): void {
+    if (this.greetingTimer != null) {
+      window.clearTimeout(this.greetingTimer);
+    }
+    this.greetingTimer = null;
+  }
+
   private armFollowup(): void { this.clearFollowup(); this.followupTimer = window.setTimeout(() => { void this.enqueue(() => this.disconnectRealtime("followup-timeout", true)); }, this.options.followupTimeoutMs ?? 6000); }
   private armInactivity(): void { if (this.inactivityTimer != null) window.clearTimeout(this.inactivityTimer); this.inactivityTimer = window.setTimeout(() => { void this.enqueue(() => this.disconnectRealtime("idle-timeout", true)); }, this.options.inactivityTimeoutMs ?? 15000); }
   private armMaxSession(): void { if (this.maxSessionTimer != null) window.clearTimeout(this.maxSessionTimer); this.maxSessionTimer = window.setTimeout(() => { void this.enqueue(() => this.disconnectRealtime("max-session", true)); }, this.options.maxSessionMs ?? 120000); }
   private clearFollowup(): void { if (this.followupTimer != null) window.clearTimeout(this.followupTimer); this.followupTimer = null; }
-  private clearTimers(): void { this.clearFollowup(); if (this.inactivityTimer != null) window.clearTimeout(this.inactivityTimer); if (this.maxSessionTimer != null) window.clearTimeout(this.maxSessionTimer); this.inactivityTimer = null; this.maxSessionTimer = null; }
+  private clearTimers(): void {
+    this.clearFollowup();
+    this.clearGreetingTimeout();
+    if (this.inactivityTimer != null) window.clearTimeout(this.inactivityTimer);
+    if (this.maxSessionTimer != null) window.clearTimeout(this.maxSessionTimer);
+    this.inactivityTimer = null;
+    this.maxSessionTimer = null;
+  }
   private isRealtimeState(): boolean { return this.sm.state.startsWith("REALTIME_"); }
   private move(next: Parameters<F1AudioStateMachine["transition"]>[0], detail: string): void { if (this.sm.state !== next) this.sm.transition(next); this.detail = detail; this.emit(); }
   private emit(): void { this.options.onSnapshot(this.snapshot); }

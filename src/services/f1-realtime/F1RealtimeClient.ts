@@ -7,7 +7,8 @@ export class F1RealtimeClient {
   private dc: RTCDataChannel | null = null;
   private stream: MediaStream | null = null;
   private greetingPending = true;
-  private activeResponsePhase = "";
+  private greetingRequested = false;
+  private waitingForGreetingSessionUpdate = false;
   private closed = false;
   private readonly executedCalls = new Set<string>();
 
@@ -20,7 +21,8 @@ export class F1RealtimeClient {
     if (!token) throw new Error("Inicia sesión nuevamente para usar la voz.");
     this.closed = false;
     this.greetingPending = true;
-    this.activeResponsePhase = "";
+    this.greetingRequested = false;
+    this.waitingForGreetingSessionUpdate = false;
     this.executedCalls.clear();
     const pc = new RTCPeerConnection(); this.pc = pc;
     const audio = document.createElement("audio"); audio.autoplay = true;
@@ -49,10 +51,10 @@ export class F1RealtimeClient {
     await opened;
     this.options.callbacks.onConnected();
 
-    // Durante el saludo el micrófono permanece deshabilitado y el VAD no
-    // puede crear respuestas automáticas. Esto impide que las instrucciones
-    // generales de la sesión produzcan un saludo distinto antes de
-    // “Te escucho”.
+    // Handshake determinista:
+    // primero deshabilitamos las respuestas automáticas del VAD y esperamos
+    // la confirmación session.updated. Solo entonces solicitamos el saludo.
+    this.waitingForGreetingSessionUpdate = true;
     this.send({
       type: "session.update",
       session: {
@@ -70,18 +72,6 @@ export class F1RealtimeClient {
         },
       },
     });
-
-    this.send({
-      type: "response.create",
-      response: {
-        output_modalities: ["audio"],
-        instructions:
-          "Di exactamente estas dos palabras y nada más: Te escucho",
-        metadata: {
-          f1_phase: "wake_greeting",
-        },
-      },
-    });
   }
 
   private send(payload: unknown): void {
@@ -95,28 +85,28 @@ export class F1RealtimeClient {
     if (type === "conversation.item.input_audio_transcription.completed") {
       const text = String(payload.transcript || "").trim(); if (text) this.options.callbacks.onUserTranscript(text);
     }
-    if (type === "response.created") {
-      this.activeResponsePhase = String(
-        payload.response?.metadata?.f1_phase || ""
-      );
+    if (
+      type === "session.updated" &&
+      this.greetingPending &&
+      this.waitingForGreetingSessionUpdate &&
+      !this.greetingRequested
+    ) {
+      this.waitingForGreetingSessionUpdate = false;
+      this.greetingRequested = true;
 
-      // Si el servidor intentó crear una respuesta automática antes de
-      // nuestro saludo marcado, la cancelamos. El micrófono sigue apagado.
-      if (this.greetingPending && this.activeResponsePhase !== "wake_greeting") {
-        try {
-          this.send({ type: "response.cancel" });
-        } catch {}
-        return;
-      }
+      this.send({
+        type: "response.create",
+        response: {
+          output_modalities: ["audio"],
+          instructions:
+            "Di exactamente estas dos palabras y nada más: Te escucho",
+        },
+      });
+      return;
     }
 
     if (type === "output_audio_buffer.started") {
-      if (
-        !this.greetingPending ||
-        this.activeResponsePhase === "wake_greeting"
-      ) {
-        this.options.callbacks.onAssistantSpeechStarted();
-      }
+      this.options.callbacks.onAssistantSpeechStarted();
     }
     if (type === "response.output_audio_transcript.delta" || type === "response.audio_transcript.delta") this.options.callbacks.onAssistantTranscriptDelta(String(payload.delta || ""));
     if (type === "response.output_audio_transcript.done" || type === "response.audio_transcript.done") {
@@ -141,17 +131,17 @@ export class F1RealtimeClient {
       }
 
       if (this.greetingPending) {
-        // Una respuesta no marcada puede ser una respuesta automática creada
-        // por la configuración inicial del servidor. No abre el micrófono.
-        if (this.activeResponsePhase !== "wake_greeting") {
-          this.activeResponsePhase = "";
+        // Solo la respuesta solicitada después de session.updated puede
+        // completar el saludo.
+        if (!this.greetingRequested) {
           return;
         }
 
         this.greetingPending = false;
-        this.activeResponsePhase = "";
+        this.greetingRequested = false;
+        this.waitingForGreetingSessionUpdate = false;
 
-        // Después del saludo se habilita el flujo conversacional normal.
+        // Después del saludo reactivamos respuestas automáticas del VAD.
         this.send({
           type: "session.update",
           session: {
@@ -174,7 +164,6 @@ export class F1RealtimeClient {
         if (track) track.enabled = true;
         this.options.callbacks.onGreetingDone();
       } else {
-        this.activeResponsePhase = "";
         this.options.callbacks.onResponseDone();
       }
     }
@@ -207,7 +196,8 @@ export class F1RealtimeClient {
     this.dc = null;
     this.stream = null;
     this.greetingPending = true;
-    this.activeResponsePhase = "";
+    this.greetingRequested = false;
+    this.waitingForGreetingSessionUpdate = false;
     this.executedCalls.clear();
   }
 }
