@@ -7,6 +7,7 @@ export class F1RealtimeClient {
   private dc: RTCDataChannel | null = null;
   private stream: MediaStream | null = null;
   private greetingPending = true;
+  private activeResponsePhase = "";
   private closed = false;
   private readonly executedCalls = new Set<string>();
 
@@ -17,7 +18,10 @@ export class F1RealtimeClient {
     if (this.pc) return;
     const token = this.options.getToken();
     if (!token) throw new Error("Inicia sesión nuevamente para usar la voz.");
-    this.closed = false; this.greetingPending = true; this.executedCalls.clear();
+    this.closed = false;
+    this.greetingPending = true;
+    this.activeResponsePhase = "";
+    this.executedCalls.clear();
     const pc = new RTCPeerConnection(); this.pc = pc;
     const audio = document.createElement("audio"); audio.autoplay = true;
     pc.ontrack = event => { audio.srcObject = event.streams[0] || null; };
@@ -45,14 +49,37 @@ export class F1RealtimeClient {
     await opened;
     this.options.callbacks.onConnected();
 
-    // La API Realtime actual usa output_modalities. Para respuestas de voz,
-    // ["audio"] ya incluye la transcripción; no se puede solicitar audio y
-    // text simultáneamente en la misma respuesta.
+    // Durante el saludo el micrófono permanece deshabilitado y el VAD no
+    // puede crear respuestas automáticas. Esto impide que las instrucciones
+    // generales de la sesión produzcan un saludo distinto antes de
+    // “Te escucho”.
+    this.send({
+      type: "session.update",
+      session: {
+        audio: {
+          input: {
+            turn_detection: {
+              type: "server_vad",
+              threshold: 0.5,
+              prefix_padding_ms: 300,
+              silence_duration_ms: 650,
+              create_response: false,
+              interrupt_response: false,
+            },
+          },
+        },
+      },
+    });
+
     this.send({
       type: "response.create",
       response: {
         output_modalities: ["audio"],
-        instructions: "Di únicamente: Te escucho. No agregues ninguna otra palabra.",
+        instructions:
+          "Di exactamente estas dos palabras y nada más: Te escucho",
+        metadata: {
+          f1_phase: "wake_greeting",
+        },
       },
     });
   }
@@ -68,8 +95,28 @@ export class F1RealtimeClient {
     if (type === "conversation.item.input_audio_transcription.completed") {
       const text = String(payload.transcript || "").trim(); if (text) this.options.callbacks.onUserTranscript(text);
     }
+    if (type === "response.created") {
+      this.activeResponsePhase = String(
+        payload.response?.metadata?.f1_phase || ""
+      );
+
+      // Si el servidor intentó crear una respuesta automática antes de
+      // nuestro saludo marcado, la cancelamos. El micrófono sigue apagado.
+      if (this.greetingPending && this.activeResponsePhase !== "wake_greeting") {
+        try {
+          this.send({ type: "response.cancel" });
+        } catch {}
+        return;
+      }
+    }
+
     if (type === "output_audio_buffer.started") {
-      this.options.callbacks.onAssistantSpeechStarted();
+      if (
+        !this.greetingPending ||
+        this.activeResponsePhase === "wake_greeting"
+      ) {
+        this.options.callbacks.onAssistantSpeechStarted();
+      }
     }
     if (type === "response.output_audio_transcript.delta" || type === "response.audio_transcript.delta") this.options.callbacks.onAssistantTranscriptDelta(String(payload.delta || ""));
     if (type === "response.output_audio_transcript.done" || type === "response.audio_transcript.done") {
@@ -94,11 +141,40 @@ export class F1RealtimeClient {
       }
 
       if (this.greetingPending) {
+        // Una respuesta no marcada puede ser una respuesta automática creada
+        // por la configuración inicial del servidor. No abre el micrófono.
+        if (this.activeResponsePhase !== "wake_greeting") {
+          this.activeResponsePhase = "";
+          return;
+        }
+
         this.greetingPending = false;
+        this.activeResponsePhase = "";
+
+        // Después del saludo se habilita el flujo conversacional normal.
+        this.send({
+          type: "session.update",
+          session: {
+            audio: {
+              input: {
+                turn_detection: {
+                  type: "server_vad",
+                  threshold: 0.5,
+                  prefix_padding_ms: 300,
+                  silence_duration_ms: 650,
+                  create_response: true,
+                  interrupt_response: true,
+                },
+              },
+            },
+          },
+        });
+
         const track = this.stream?.getAudioTracks()[0];
         if (track) track.enabled = true;
         this.options.callbacks.onGreetingDone();
       } else {
+        this.activeResponsePhase = "";
         this.options.callbacks.onResponseDone();
       }
     }
@@ -127,6 +203,11 @@ export class F1RealtimeClient {
   async close(): Promise<void> {
     if (this.closed) return; this.closed = true;
     await this.resources.closeRealtime();
-    this.pc = null; this.dc = null; this.stream = null; this.executedCalls.clear();
+    this.pc = null;
+    this.dc = null;
+    this.stream = null;
+    this.greetingPending = true;
+    this.activeResponsePhase = "";
+    this.executedCalls.clear();
   }
 }

@@ -13,20 +13,40 @@ export class F1AudioSessionController {
   private maxSessionTimer: number | null = null;
   private operation: Promise<void> = Promise.resolve();
   private disposed = false;
+  private wakeArmedAt = 0;
+  private static readonly WAKE_STABILIZATION_MS = 1800;
 
   constructor(private readonly options: F1AudioSessionControllerOptions) { this.emit(); }
   get snapshot(): F1AudioSnapshot { return { state: this.sm.state, detail: this.detail, transcript: this.transcript, enabled: this.enabled, microphoneOwner: this.realtime?.microphoneOwner || (this.sm.state.startsWith("WAKE_") ? "wake" : "none") }; }
 
   enable(): Promise<void> { this.enabled = true; return this.enqueue(() => this.startWake()); }
   disable(): Promise<void> { this.enabled = false; return this.enqueue(async () => { await this.disconnectRealtime("disabled", false); await this.options.wakeEngine.stop(); this.move("DISABLED", "Motor desactivado"); }); }
-  wakeDetected(): Promise<void> { return this.enqueue(async () => {
-    if (!this.enabled || this.sm.state !== "WAKE_LISTENING") return;
-    this.move("WAKE_DETECTED", "Frase de activación detectada"); this.options.onOpenWidget?.();
-    await this.options.wakeEngine.stop();
-    await Promise.resolve();
-    if (this.options.wakeEngine.currentStatus !== "idle") throw new Error(`Wake Engine no liberó audio: ${this.options.wakeEngine.currentStatus}`);
-    await this.connectRealtime();
-  }); }
+  wakeDetected(): Promise<void> {
+    return this.enqueue(async () => {
+      if (!this.enabled || this.sm.state !== "WAKE_LISTENING") return;
+
+      // Evita falsos positivos producidos por la apertura del micrófono,
+      // sonidos residuales del briefing o el cambio de AudioContext.
+      if (Date.now() < this.wakeArmedAt) {
+        return;
+      }
+
+      this.wakeArmedAt = Number.POSITIVE_INFINITY;
+      this.move("WAKE_DETECTED", "Frase de activación detectada");
+      this.options.onOpenWidget?.();
+
+      await this.options.wakeEngine.stop();
+      await Promise.resolve();
+
+      if (this.options.wakeEngine.currentStatus !== "idle") {
+        throw new Error(
+          `Wake Engine no liberó audio: ${this.options.wakeEngine.currentStatus}`
+        );
+      }
+
+      await this.connectRealtime();
+    });
+  }
   startManualConversation(): Promise<void> {
     return this.enqueue(async () => {
       if (this.isRealtimeState()) {
@@ -103,6 +123,30 @@ export class F1AudioSessionController {
       throw new Error("Wake Engine no pudo reiniciar después del briefing");
     }
 
+    this.wakeArmedAt =
+      Date.now() + F1AudioSessionController.WAKE_STABILIZATION_MS;
+    this.move("WAKE_LISTENING", "Esperando “Hola F1”");
+  }
+
+  private async restartWakeAfterRealtime(): Promise<void> {
+    if (!this.enabled || this.disposed) {
+      this.move("DISABLED", "Motor desactivado");
+      return;
+    }
+
+    // REALTIME_DISCONNECTING es todavía un estado Realtime. No se debe
+    // llamar startWake() desde ahí porque su guardia lo rechaza.
+    this.transcript = "";
+    this.move("WAKE_STARTING", "Reactivando Wake Engine");
+
+    await this.options.wakeEngine.start();
+
+    if (this.options.wakeEngine.currentStatus === "error") {
+      throw new Error("Wake Engine no pudo reiniciar después de Realtime");
+    }
+
+    this.wakeArmedAt =
+      Date.now() + F1AudioSessionController.WAKE_STABILIZATION_MS;
     this.move("WAKE_LISTENING", "Esperando “Hola F1”");
   }
 
@@ -111,7 +155,12 @@ export class F1AudioSessionController {
     if (this.isRealtimeState() || this.sm.state === "BRIEFING_PLAYING") return;
     this.move("WAKE_STARTING", "Iniciando Wake Engine");
     await this.options.wakeEngine.start();
-    if (this.options.wakeEngine.currentStatus === "error") throw new Error("Wake Engine no pudo iniciar");
+    if (this.options.wakeEngine.currentStatus === "error") {
+      throw new Error("Wake Engine no pudo iniciar");
+    }
+
+    this.wakeArmedAt =
+      Date.now() + F1AudioSessionController.WAKE_STABILIZATION_MS;
     this.move("WAKE_LISTENING", "Esperando “Hola F1”");
   }
   private async connectRealtime(): Promise<void> {
@@ -129,8 +178,15 @@ export class F1AudioSessionController {
           : `Cerrando Realtime: ${reason}`;
       this.move("REALTIME_DISCONNECTING", closingDetail);
     }
-    const client = this.realtime; this.realtime = null; await client?.close();
-    if (restartWake && this.enabled && !this.disposed) await this.startWake(); else if (!this.enabled) this.move("DISABLED", "Motor desactivado");
+    const client = this.realtime;
+    this.realtime = null;
+    await client?.close();
+
+    if (restartWake && this.enabled && !this.disposed) {
+      await this.restartWakeAfterRealtime();
+    } else if (!this.enabled) {
+      this.move("DISABLED", "Motor desactivado");
+    }
   }
 
   onConnected(): void { this.move("REALTIME_GREETING", "F1 activado…"); }
