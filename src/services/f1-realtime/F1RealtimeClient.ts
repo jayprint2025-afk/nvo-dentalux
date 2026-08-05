@@ -207,7 +207,10 @@ export class F1RealtimeClient {
         // conversación ni provocar una continuación automática.
         conversation: "none",
         output_modalities: ["audio"],
-        max_output_tokens: 40,
+        // En Realtime este límite incluye tokens de audio. Un valor de 40
+        // corta el saludo antes de terminar el nombre. 192 deja margen
+        // suficiente para la frase completa sin permitir una respuesta larga.
+        max_output_tokens: 192,
         instructions: `Pronuncia completa y exactamente esta frase, con tono cálido y natural. No la acortes, no la reformules y no agregues nada más: ${this.options.greetingText}`,
         metadata: {
           f1_purpose: "identity_greeting",
