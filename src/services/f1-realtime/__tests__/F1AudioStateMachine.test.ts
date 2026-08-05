@@ -12,3 +12,19 @@ test("rechaza transición inválida", () => {
   const sm = new F1AudioStateMachine();
   assert.throws(() => sm.transition("REALTIME_SPEAKING"));
 });
+
+
+test("manual conversation corridor allows WAKE_STARTING or WAKE_LISTENING through WAKE_DETECTED", () => {
+  const starting = new F1AudioStateMachine();
+  starting.transition("WAKE_STARTING");
+  starting.transition("WAKE_DETECTED");
+  starting.transition("REALTIME_CONNECTING");
+  expect(starting.state).toBe("REALTIME_CONNECTING");
+
+  const listening = new F1AudioStateMachine();
+  listening.transition("WAKE_STARTING");
+  listening.transition("WAKE_LISTENING");
+  listening.transition("WAKE_DETECTED");
+  listening.transition("REALTIME_CONNECTING");
+  expect(listening.state).toBe("REALTIME_CONNECTING");
+});

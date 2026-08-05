@@ -27,10 +27,36 @@ export class F1AudioSessionController {
     if (this.options.wakeEngine.currentStatus !== "idle") throw new Error(`Wake Engine no liberó audio: ${this.options.wakeEngine.currentStatus}`);
     await this.connectRealtime();
   }); }
-  startManualConversation(): Promise<void> { return this.enqueue(async () => {
-    if (this.isRealtimeState()) { await this.disconnectRealtime("manual", true); return; }
-    await this.options.wakeEngine.stop(); await this.connectRealtime();
-  }); }
+  startManualConversation(): Promise<void> {
+    return this.enqueue(async () => {
+      if (this.isRealtimeState()) {
+        await this.disconnectRealtime("manual", true);
+        return;
+      }
+
+      if (this.sm.state === "BRIEFING_PLAYING") {
+        return;
+      }
+
+      // El inicio manual utiliza el mismo corredor de transición que el wake word.
+      // Así nunca saltamos de WAKE_LISTENING/WAKE_STARTING directamente a
+      // REALTIME_CONNECTING, transición que la máquina rechaza correctamente.
+      if (this.sm.state === "WAKE_LISTENING" || this.sm.state === "WAKE_STARTING") {
+        this.move("WAKE_DETECTED", "Conversación iniciada manualmente");
+      }
+
+      await this.options.wakeEngine.stop();
+      await Promise.resolve();
+
+      if (this.options.wakeEngine.currentStatus !== "idle") {
+        throw new Error(
+          `Wake Engine no liberó audio para conversación manual: ${this.options.wakeEngine.currentStatus}`
+        );
+      }
+
+      await this.connectRealtime();
+    });
+  }
   endConversation(): Promise<void> { return this.enqueue(() => this.disconnectRealtime("manual", true)); }
 
   beginBriefing(): Promise<void> { return this.enqueue(async () => {
