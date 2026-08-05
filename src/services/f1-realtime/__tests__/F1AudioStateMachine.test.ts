@@ -1,30 +1,31 @@
-import { strict as assert } from "node:assert";
-import { test } from "node:test";
+import { describe, expect, it } from "vitest";
 import { F1AudioStateMachine } from "../F1AudioStateMachine";
 
-test("recorre el flujo wake a followup", () => {
-  const sm = new F1AudioStateMachine();
-  for (const state of ["WAKE_STARTING","WAKE_LISTENING","WAKE_DETECTED","REALTIME_CONNECTING","REALTIME_GREETING","REALTIME_LISTENING","REALTIME_PROCESSING","REALTIME_SPEAKING","REALTIME_FOLLOWUP"] as const) sm.transition(state);
-  assert.equal(sm.state, "REALTIME_FOLLOWUP");
-});
+describe("F1AudioStateMachine", () => {
+  it("requires wake detection before automatic Realtime", () => {
+    const sm = new F1AudioStateMachine();
+    sm.transition("WAKE_STARTING");
+    sm.transition("WAKE_LISTENING");
+    expect(() => sm.transition("REALTIME_CONNECTING")).toThrow();
+    sm.transition("WAKE_DETECTED");
+    sm.transition("REALTIME_CONNECTING");
+    expect(sm.state).toBe("REALTIME_CONNECTING");
+  });
 
-test("rechaza transición inválida", () => {
-  const sm = new F1AudioStateMachine();
-  assert.throws(() => sm.transition("REALTIME_SPEAKING"));
-});
-
-
-test("manual conversation corridor allows WAKE_STARTING or WAKE_LISTENING through WAKE_DETECTED", () => {
-  const starting = new F1AudioStateMachine();
-  starting.transition("WAKE_STARTING");
-  starting.transition("WAKE_DETECTED");
-  starting.transition("REALTIME_CONNECTING");
-  expect(starting.state).toBe("REALTIME_CONNECTING");
-
-  const listening = new F1AudioStateMachine();
-  listening.transition("WAKE_STARTING");
-  listening.transition("WAKE_LISTENING");
-  listening.transition("WAKE_DETECTED");
-  listening.transition("REALTIME_CONNECTING");
-  expect(listening.state).toBe("REALTIME_CONNECTING");
+  it("returns to Wake after follow-up timeout cleanup", () => {
+    const sm = new F1AudioStateMachine();
+    sm.transition("WAKE_STARTING");
+    sm.transition("WAKE_LISTENING");
+    sm.transition("WAKE_DETECTED");
+    sm.transition("REALTIME_CONNECTING");
+    sm.transition("REALTIME_GREETING");
+    sm.transition("REALTIME_LISTENING");
+    sm.transition("REALTIME_PROCESSING");
+    sm.transition("REALTIME_SPEAKING");
+    sm.transition("REALTIME_FOLLOWUP");
+    sm.transition("REALTIME_DISCONNECTING");
+    sm.transition("WAKE_STARTING");
+    sm.transition("WAKE_LISTENING");
+    expect(sm.state).toBe("WAKE_LISTENING");
+  });
 });

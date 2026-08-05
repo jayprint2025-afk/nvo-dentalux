@@ -7,30 +7,57 @@ export class F1AudioResourceManager {
   private stream: MediaStream | null = null;
   private remoteAudio: HTMLAudioElement | null = null;
 
-  get microphoneOwner(): MicrophoneOwner { return this.owner; }
-  claim(owner: Exclude<MicrophoneOwner, "none">): void {
-    if (this.owner !== "none" && this.owner !== owner) throw new Error(`Micrófono ocupado por ${this.owner}`);
-    this.owner = owner;
+  get microphoneOwner(): MicrophoneOwner {
+    return this.owner;
   }
-  release(owner: Exclude<MicrophoneOwner, "none">): void { if (this.owner === owner) this.owner = "none"; }
-  attachRealtime(pc: RTCPeerConnection, dc: RTCDataChannel, stream: MediaStream, audio: HTMLAudioElement): void {
-    this.claim("realtime"); this.pc = pc; this.dc = dc; this.stream = stream; this.remoteAudio = audio;
+
+  attachRealtime(
+    pc: RTCPeerConnection,
+    dc: RTCDataChannel,
+    stream: MediaStream,
+    remoteAudio: HTMLAudioElement,
+  ): void {
+    if (this.owner !== "none") {
+      throw new Error(`Micrófono ocupado por ${this.owner}`);
+    }
+    this.owner = "realtime";
+    this.pc = pc;
+    this.dc = dc;
+    this.stream = stream;
+    this.remoteAudio = remoteAudio;
   }
+
   async closeRealtime(): Promise<void> {
-    const dc = this.dc; const pc = this.pc; const stream = this.stream; const audio = this.remoteAudio;
-    this.dc = null; this.pc = null; this.stream = null; this.remoteAudio = null;
+    const dc = this.dc;
+    const pc = this.pc;
+    const stream = this.stream;
+    const remoteAudio = this.remoteAudio;
+
+    this.dc = null;
+    this.pc = null;
+    this.stream = null;
+    this.remoteAudio = null;
+
     try { dc?.close(); } catch {}
-    try { pc?.getSenders().forEach(sender => sender.track?.stop()); } catch {}
-    try { stream?.getTracks().forEach(track => track.stop()); } catch {}
+    try { pc?.getSenders().forEach((sender) => sender.track?.stop()); } catch {}
+    try { stream?.getTracks().forEach((track) => track.stop()); } catch {}
     try { pc?.close(); } catch {}
-    if (audio) { try { audio.pause(); audio.srcObject = null; } catch {} }
-    this.release("realtime");
+
+    if (remoteAudio) {
+      try {
+        remoteAudio.pause();
+        remoteAudio.srcObject = null;
+        remoteAudio.removeAttribute("src");
+        remoteAudio.load();
+      } catch {}
+    }
+
+    this.owner = "none";
     await Promise.resolve();
-  }
-  async assertStreamStopped(stream: MediaStream | null): Promise<void> {
-    if (!stream) return;
-    await Promise.resolve();
-    const live = stream.getTracks().filter(track => track.readyState !== "ended");
-    if (live.length) throw new Error(`Quedaron ${live.length} pistas de audio activas`);
+
+    const liveTracks = stream?.getTracks().filter((track) => track.readyState !== "ended") ?? [];
+    if (liveTracks.length > 0) {
+      throw new Error(`Realtime dejó ${liveTracks.length} pistas activas`);
+    }
   }
 }

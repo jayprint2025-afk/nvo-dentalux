@@ -869,10 +869,7 @@ const buildLeadReport = React.useCallback(() => {
 
       // La reproducción automática ocurre una sola vez por
       // empresa + usuario + sucursal + fecha.
-      if (automatic && localStorage.getItem(playedKey) === "1") {
-        await sessionControllerRef.current?.endBriefing();
-        return;
-      }
+      if (automatic && localStorage.getItem(playedKey) === "1") return;
 
       setBriefingText(String(textData?.briefing || ""));
 
@@ -1060,13 +1057,13 @@ const buildLeadReport = React.useCallback(() => {
     const engine = new F1VoiceEngine({
       phrase: "Hola F1",
       modelUrl,
-      threshold: 0.35,
-      cooldownMs: 5000,
+      threshold: 0.55,
+      cooldownMs: 3000,
       onStatus: (status, detail) => {
         setF1VoiceEngineStatus(status);
         setF1VoiceEngineDetail(String(detail || ""));
       },
-      onWake: () => { void controller.wakeDetected(); },
+      onWake: (event) => { void controller.wakeDetected(event); },
     });
     f1VoiceEngineRef.current = engine;
 
@@ -1082,9 +1079,10 @@ const buildLeadReport = React.useCallback(() => {
       wakeEngine: engine,
       onSnapshot: handleSnapshot,
       onOpenWidget: () => { setOpen(true); setTab("f1"); },
-      followupTimeoutMs: 6000,
+      followupTimeoutMs: 5000,
       inactivityTimeoutMs: 15000,
       maxSessionMs: 120000,
+      wakeStabilizationMs: 2500,
       createRealtimeClient: () => new F1RealtimeClient({
         apiBase: API_BASE,
         branchKey: sucursalId || "sucursal_1",

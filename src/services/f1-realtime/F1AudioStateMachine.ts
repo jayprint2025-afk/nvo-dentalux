@@ -2,7 +2,7 @@ import type { F1AudioState } from "./types";
 
 const ALLOWED: Record<F1AudioState, ReadonlySet<F1AudioState>> = {
   DISABLED: new Set(["WAKE_STARTING", "REALTIME_CONNECTING", "BRIEFING_PLAYING"]),
-  WAKE_STARTING: new Set(["WAKE_LISTENING", "WAKE_DETECTED", "DISABLED", "ERROR", "BRIEFING_PLAYING"]),
+  WAKE_STARTING: new Set(["WAKE_LISTENING", "DISABLED", "BRIEFING_PLAYING", "ERROR"]),
   WAKE_LISTENING: new Set(["WAKE_DETECTED", "DISABLED", "BRIEFING_PLAYING", "ERROR"]),
   WAKE_DETECTED: new Set(["REALTIME_CONNECTING", "DISABLED", "ERROR"]),
   REALTIME_CONNECTING: new Set(["REALTIME_GREETING", "REALTIME_DISCONNECTING", "ERROR"]),
@@ -18,10 +18,19 @@ const ALLOWED: Record<F1AudioState, ReadonlySet<F1AudioState>> = {
 
 export class F1AudioStateMachine {
   private current: F1AudioState = "DISABLED";
-  get state(): F1AudioState { return this.current; }
-  canTransition(next: F1AudioState): boolean { return next === this.current || ALLOWED[this.current].has(next); }
+
+  get state(): F1AudioState {
+    return this.current;
+  }
+
+  canTransition(next: F1AudioState): boolean {
+    return next === this.current || ALLOWED[this.current].has(next);
+  }
+
   transition(next: F1AudioState): F1AudioState {
-    if (!this.canTransition(next)) throw new Error(`Transición F1 inválida: ${this.current} → ${next}`);
+    if (!this.canTransition(next)) {
+      throw new Error(`Transición F1 inválida: ${this.current} → ${next}`);
+    }
     this.current = next;
     return this.current;
   }

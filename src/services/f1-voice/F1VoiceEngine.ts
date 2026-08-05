@@ -12,7 +12,7 @@ import type {
 } from "./types";
 
 const DEFAULT_MODEL_ROOT = "/models/hola-f1";
-const PILOT_THRESHOLD = 0.35;
+const DEFAULT_WAKE_THRESHOLD = 0.55;
 
 export class F1VoiceEngine {
   private readonly options: F1VoiceEngineOptions;
@@ -47,11 +47,11 @@ export class F1VoiceEngine {
           windowFrames: 12,
           expectedSampleRate: 16000,
           preEmphasis: 0.97,
-          detectionThreshold: Math.min(
-            Number(options.threshold ?? PILOT_THRESHOLD),
-            PILOT_THRESHOLD,
+          detectionThreshold: Math.max(
+            0.45,
+            Math.min(Number(options.threshold ?? DEFAULT_WAKE_THRESHOLD), 0.9),
           ),
-          consecutiveHits: 1,
+          consecutiveHits: 2,
           cooldownFrames,
         },
       })
