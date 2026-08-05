@@ -44,7 +44,17 @@ export class F1RealtimeClient {
     await pc.setRemoteDescription({ type: "answer", sdp: await response.text() });
     await opened;
     this.options.callbacks.onConnected();
-    this.send({ type: "response.create", response: { modalities: ["audio", "text"], instructions: "Di únicamente: Te escucho. No agregues ninguna otra palabra." } });
+
+    // La API Realtime actual usa output_modalities. Para respuestas de voz,
+    // ["audio"] ya incluye la transcripción; no se puede solicitar audio y
+    // text simultáneamente en la misma respuesta.
+    this.send({
+      type: "response.create",
+      response: {
+        output_modalities: ["audio"],
+        instructions: "Di únicamente: Te escucho. No agregues ninguna otra palabra.",
+      },
+    });
   }
 
   private send(payload: unknown): void {
@@ -58,21 +68,51 @@ export class F1RealtimeClient {
     if (type === "conversation.item.input_audio_transcription.completed") {
       const text = String(payload.transcript || "").trim(); if (text) this.options.callbacks.onUserTranscript(text);
     }
-    if (type === "response.created") this.options.callbacks.onAssistantSpeechStarted();
+    if (type === "output_audio_buffer.started") {
+      this.options.callbacks.onAssistantSpeechStarted();
+    }
     if (type === "response.output_audio_transcript.delta" || type === "response.audio_transcript.delta") this.options.callbacks.onAssistantTranscriptDelta(String(payload.delta || ""));
     if (type === "response.output_audio_transcript.done" || type === "response.audio_transcript.done") {
       const text = String(payload.transcript || "").trim(); if (text) this.options.callbacks.onAssistantTranscriptDone(text);
     }
     if (type === "response.output_item.done" && payload.item?.type === "function_call") await this.handleTool(payload.item);
     if (type === "response.done") {
-      for (const item of payload.response?.output || []) if (item?.type === "function_call") await this.handleTool(item);
+      const status = String(payload.response?.status || "");
+      const statusDetails = payload.response?.status_details;
+
+      if (status === "failed") {
+        const message =
+          statusDetails?.error?.message ||
+          statusDetails?.reason ||
+          "La respuesta Realtime terminó con error";
+        this.options.callbacks.onError(new Error(String(message)));
+        return;
+      }
+
+      for (const item of payload.response?.output || []) {
+        if (item?.type === "function_call") await this.handleTool(item);
+      }
+
       if (this.greetingPending) {
         this.greetingPending = false;
-        const track = this.stream?.getAudioTracks()[0]; if (track) track.enabled = true;
+        const track = this.stream?.getAudioTracks()[0];
+        if (track) track.enabled = true;
         this.options.callbacks.onGreetingDone();
-      } else this.options.callbacks.onResponseDone();
+      } else {
+        this.options.callbacks.onResponseDone();
+      }
     }
-    if (type === "error") this.options.callbacks.onError(new Error(payload.error?.message || "Error en Realtime"));
+    if (type === "error") {
+      const details = [
+        payload.error?.message || "Error en Realtime",
+        payload.error?.code ? `code=${payload.error.code}` : "",
+        payload.error?.param ? `param=${payload.error.param}` : "",
+      ].filter(Boolean).join(" · ");
+
+      console.error("[F1 Realtime] Error de OpenAI:", payload);
+      this.options.callbacks.onError(new Error(details));
+      return;
+    }
   }
   private async handleTool(item: any): Promise<void> {
     const call: RealtimeToolCall = { name: String(item?.name || ""), callId: String(item?.call_id || item?.id || ""), argumentsJson: String(item?.arguments || "{}") };

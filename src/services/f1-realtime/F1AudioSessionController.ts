@@ -122,7 +122,13 @@ export class F1AudioSessionController {
   }
   private async disconnectRealtime(reason: DisconnectReason, restartWake: boolean): Promise<void> {
     this.clearTimers();
-    if (this.realtime || this.isRealtimeState() || this.sm.state === "ERROR") this.move("REALTIME_DISCONNECTING", `Cerrando Realtime: ${reason}`);
+    if (this.realtime || this.isRealtimeState() || this.sm.state === "ERROR") {
+      const closingDetail =
+        reason === "error" && this.detail
+          ? this.detail
+          : `Cerrando Realtime: ${reason}`;
+      this.move("REALTIME_DISCONNECTING", closingDetail);
+    }
     const client = this.realtime; this.realtime = null; await client?.close();
     if (restartWake && this.enabled && !this.disposed) await this.startWake(); else if (!this.enabled) this.move("DISABLED", "Motor desactivado");
   }
