@@ -194,10 +194,12 @@ export class F1RealtimeClient {
     this.send({
       type: "response.create",
       response: {
-        conversation: "auto",
+        // El saludo es fuera de banda: no debe convertirse en un turno de la
+        // conversación ni provocar una continuación automática.
+        conversation: "none",
         output_modalities: ["audio"],
         max_output_tokens: 40,
-        instructions: `Pronuncia exactamente esta frase, con tono cálido y natural, y no agregues nada más: ${this.options.greetingText}`,
+        instructions: `Pronuncia completa y exactamente esta frase, con tono cálido y natural. No la acortes, no la reformules y no agregues nada más: ${this.options.greetingText}`,
         metadata: {
           f1_purpose: "identity_greeting",
           speaker_name: this.options.speakerName ?? "",
@@ -309,41 +311,70 @@ export class F1RealtimeClient {
       return;
     }
 
-    // response.done indica que el modelo terminó de generar, pero el audio
-    // todavía puede estar reproduciéndose. Solo este evento confirma que el
-    // buffer remoto ya se drenó completamente.
+    // response.done indica que el modelo terminó de generar. El evento
+    // output_audio_buffer.stopped confirma que OpenAI dejó de enviar audio,
+    // pero el navegador todavía puede conservar una pequeña cola de
+    // reproducción. Durante esa cola el micrófono debe seguir cerrado para
+    // impedir que el propio saludo active el VAD.
     if (type === "output_audio_buffer.stopped") {
       if (this.greetingPending) {
-        this.greetingPending = false;
-
-        this.send({
-          type: "session.update",
-          session: {
-            type: "realtime",
-            audio: {
-              input: {
-                turn_detection: {
-                  type: "server_vad",
-                  threshold: 0.5,
-                  prefix_padding_ms: 300,
-                  silence_duration_ms: 750,
-                  create_response: true,
-                  interrupt_response: true,
-                },
-              },
-            },
-          },
-        });
-
-        const microphoneTrack = this.stream?.getAudioTracks()[0];
-        if (microphoneTrack) microphoneTrack.enabled = true;
-        this.options.callbacks.onGreetingDone();
+        await this.finishGreetingAndOpenMicrophone();
         return;
       }
 
       this.options.callbacks.onResponseDone();
       return;
     }
+  }
+
+  private async finishGreetingAndOpenMicrophone(): Promise<void> {
+    if (!this.greetingPending || this.closed) return;
+
+    // Evita procesar dos eventos stopped para el mismo saludo.
+    this.greetingPending = false;
+
+    const microphoneTrack = this.stream?.getAudioTracks()[0];
+    if (microphoneTrack) microphoneTrack.enabled = false;
+
+    // El buffer de OpenAI ya terminó, pero WebRTC/audio puede conservar entre
+    // 300 y 900 ms de audio local. Esta espera evita eco y respuestas
+    // automáticas antes de que Jonathan hable.
+    await new Promise((resolve) => window.setTimeout(resolve, 1_100));
+    if (this.closed) return;
+
+    // Descarta cualquier residuo que hubiese llegado al buffer de entrada.
+    try {
+      this.send({ type: "input_audio_buffer.clear" });
+    } catch {
+      // Algunas sesiones no crean buffer mientras la pista está deshabilitada.
+    }
+
+    // Primero habilitamos el modo conversacional sin abrir aún la pista.
+    this.send({
+      type: "session.update",
+      session: {
+        type: "realtime",
+        audio: {
+          input: {
+            turn_detection: {
+              type: "server_vad",
+              threshold: 0.5,
+              prefix_padding_ms: 300,
+              silence_duration_ms: 750,
+              create_response: true,
+              interrupt_response: true,
+            },
+          },
+        },
+      },
+    });
+
+    // Da tiempo a que session.update quede ordenado antes de entregar audio.
+    await new Promise((resolve) => window.setTimeout(resolve, 180));
+    if (this.closed) return;
+
+    if (microphoneTrack) microphoneTrack.enabled = true;
+    this.options.callbacks.onGreetingDone();
   }
 
   private async decodeMessage(raw: unknown): Promise<string> {
