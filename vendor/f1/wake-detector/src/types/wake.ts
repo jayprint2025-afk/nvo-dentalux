@@ -41,6 +41,9 @@ export interface WakeScore {
 
 export interface WakeEvent extends WakeScore {
   readonly cooldownFrames: number;
+  /** Exact PCM window that produced this wake decision. 16 kHz mono. */
+  readonly audioWindow: Float32Array;
+  readonly sampleRate: number;
 }
 
 export interface WakeProcessResult {
@@ -60,6 +63,7 @@ export interface WakeDetectorConfig {
   readonly maxSilentFramesBeforeReset?: number;
   readonly expectedSampleRate?: number;
   readonly preEmphasis?: number;
+  readonly captureWindowFrames?: number;
 }
 
 export interface WakeDetectorProcessor {

@@ -368,6 +368,7 @@ export default function AIFloatingWidget(props: { apiBase?: string; sucursalId?:
   const [voiceProfileMessage, setVoiceProfileMessage] = React.useState("");
   const [voiceProfileVerification, setVoiceProfileVerification] =
     React.useState<VoiceProfileVerification | null>(null);
+  const [lastWakeIdentity, setLastWakeIdentity] = React.useState<string>("");
   const f1VoiceEngineRef = React.useRef<F1VoiceEngine | null>(null);
   const [briefingPlaying, setBriefingPlaying] = React.useState(false);
   const [briefingLoading, setBriefingLoading] = React.useState(false);
@@ -1358,7 +1359,30 @@ const buildLeadReport = React.useCallback(() => {
       maxSessionMs: 120000,
       wakeStabilizationMs: wakeSettings.stabilizationMs,
       minimumWakeConfidence: wakeSettings.threshold,
-      createRealtimeClient: () => new F1RealtimeClient({
+      verifyWakeIdentity: async (event) => {
+        if (!voiceProfile?.enabled) {
+          return { accepted: true };
+        }
+        if (!event.audioWindow || !event.sampleRate) {
+          setLastWakeIdentity("No llegó la ventana de audio del Wake Engine");
+          return { accepted: false };
+        }
+        const result = await voiceProfileServiceRef.current.verifyWakeSamples(
+          voiceProfileScope,
+          event.audioWindow,
+          event.sampleRate,
+        );
+        const pct = Math.round(result.similarity * 100);
+        setLastWakeIdentity(
+          result.accepted
+            ? `Voz reconocida: ${result.displayName} (${pct}%)`
+            : `Voz no reconocida (${pct}%)`,
+        );
+        return result;
+      },
+      createRealtimeClient: ({ greetingText, speakerName }) => new F1RealtimeClient({
+        greetingText,
+        speakerName,
         apiBase: API_BASE,
         branchKey: sucursalId || "sucursal_1",
         getToken: () => localStorage.getItem("dentalux_auth_token") || "",
@@ -1398,6 +1422,8 @@ const buildLeadReport = React.useCallback(() => {
     sucursalId,
     executeRealtimeTool,
     wakeSettingsRevision,
+    voiceProfile,
+    voiceProfileScope,
   ]);
 
   const toggleF1VoiceEngine = React.useCallback(() => {
@@ -1985,6 +2011,11 @@ const buildLeadReport = React.useCallback(() => {
                               : "bg-gray-400"
                         }`} />
                         {realtimeStatus.label}
+              {lastWakeIdentity && (
+                <span className="ml-2 text-[10px] opacity-80">
+                  {lastWakeIdentity}
+                </span>
+              )}
                       </span>
                     </div>
                   </div>

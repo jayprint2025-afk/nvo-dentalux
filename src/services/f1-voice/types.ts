@@ -2,6 +2,8 @@ export type F1WakeEvent = {
   phrase: string;
   confidence: number;
   detectedAt: number;
+  audioWindow?: Float32Array;
+  sampleRate?: number;
 };
 
 export type F1VoiceEngineStatus =

@@ -111,11 +111,13 @@ export class F1VoiceEngine {
       });
     });
 
-    this.core.on("wake", ({ score, timestampMs }) => {
+    this.core.on("wake", ({ score, timestampMs, audioWindow, sampleRate }) => {
       const event: F1WakeEvent = {
         phrase: this.options.phrase || "Hola F1",
         confidence: score,
         detectedAt: timestampMs,
+        audioWindow,
+        sampleRate,
       };
 
       this.options.onWake?.(event);

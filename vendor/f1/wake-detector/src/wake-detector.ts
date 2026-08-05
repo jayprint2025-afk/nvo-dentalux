@@ -23,6 +23,7 @@ interface ResolvedWakeConfig {
   readonly maxSilentFramesBeforeReset: number;
   readonly expectedSampleRate: number;
   readonly preEmphasis: number;
+  readonly captureWindowFrames: number;
 }
 
 const DEFAULTS: ResolvedWakeConfig = {
@@ -34,6 +35,7 @@ const DEFAULTS: ResolvedWakeConfig = {
   maxSilentFramesBeforeReset: 5,
   expectedSampleRate: 16_000,
   preEmphasis: 0.97,
+  captureWindowFrames: 24,
 };
 
 export interface WakeDetectorDependencies {
@@ -54,6 +56,7 @@ export class WakeDetector implements WakeDetectorProcessor {
   #state: WakeDetectorState = "idle";
   #silentFrames = 0;
   #processing: Promise<unknown> = Promise.resolve();
+  #audioFrames: Float32Array[] = [];
 
   public constructor(model: WakeModelPort, config: WakeDetectorConfig = {}, dependencies: WakeDetectorDependencies = {}) {
     this.#config = { ...DEFAULTS, ...config };
@@ -111,6 +114,7 @@ export class WakeDetector implements WakeDetectorProcessor {
     this.#policy.reset();
     this.#cooldown.reset();
     this.#silentFrames = 0;
+    this.#audioFrames = [];
     if (this.#state !== "disposed" && this.#state !== "failed") this.#setState("ready");
   }
 
@@ -120,6 +124,7 @@ export class WakeDetector implements WakeDetectorProcessor {
     await this.#model.dispose();
     this.#features.reset();
     this.#window.reset();
+    this.#audioFrames = [];
     this.#events.clear();
     this.#state = "disposed";
   }
@@ -135,6 +140,11 @@ export class WakeDetector implements WakeDetectorProcessor {
       const error: WakeDetectorError = { code: "INVALID_FRAME", message: "Wake frame validation failed.", cause };
       this.#events.emit("error", error);
       throw cause;
+    }
+
+    this.#audioFrames.push(frame.samples.slice());
+    while (this.#audioFrames.length > this.#config.captureWindowFrames) {
+      this.#audioFrames.shift();
     }
 
     if (this.#cooldown.active) {
@@ -176,7 +186,12 @@ export class WakeDetector implements WakeDetectorProcessor {
       if (decision.detected) {
         this.#cooldown.enter();
         if (this.#cooldown.active) this.#setState("cooldown");
-        this.#events.emit("wake", { ...scoreEvent, cooldownFrames: this.#config.cooldownFrames });
+        this.#events.emit("wake", {
+          ...scoreEvent,
+          cooldownFrames: this.#config.cooldownFrames,
+          audioWindow: concatenateFrames(this.#audioFrames),
+          sampleRate: frame.sampleRate,
+        });
         this.#window.reset();
       }
       return {
@@ -206,7 +221,7 @@ export class WakeDetector implements WakeDetectorProcessor {
 }
 
 function validateConfig(config: ResolvedWakeConfig): void {
-  const integers = [config.featureBands, config.windowFrames, config.consecutiveHits, config.maxSilentFramesBeforeReset];
+  const integers = [config.featureBands, config.windowFrames, config.consecutiveHits, config.maxSilentFramesBeforeReset, config.captureWindowFrames];
   if (integers.some((value) => !Number.isInteger(value) || value < 1)) throw new RangeError("frame and feature counts must be positive integers.");
   if (!Number.isInteger(config.cooldownFrames) || config.cooldownFrames < 0) throw new RangeError("cooldownFrames must be a non-negative integer.");
   if (config.detectionThreshold < 0 || config.detectionThreshold > 1) throw new RangeError("detectionThreshold must be within [0, 1].");
@@ -220,4 +235,15 @@ function validateFrame(frame: WakeFrame, expectedSampleRate: number): void {
   if (!Number.isFinite(frame.durationMs) || frame.durationMs <= 0) throw new RangeError("durationMs must be positive.");
   if (!Number.isInteger(frame.sequence) || frame.sequence < 0) throw new RangeError("sequence must be a non-negative integer.");
   if (!Number.isFinite(frame.timestampMs) || frame.timestampMs < 0) throw new RangeError("timestampMs must be non-negative.");
+}
+
+function concatenateFrames(frames: readonly Float32Array[]): Float32Array {
+  const total = frames.reduce((sum, frame) => sum + frame.length, 0);
+  const output = new Float32Array(total);
+  let offset = 0;
+  for (const frame of frames) {
+    output.set(frame, offset);
+    offset += frame.length;
+  }
+  return output;
 }

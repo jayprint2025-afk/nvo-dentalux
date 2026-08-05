@@ -27,6 +27,15 @@ export class VoiceFingerprintExtractor {
     }
   }
 
+  fromSamples(samples: Float32Array, sampleRate = TARGET_SAMPLE_RATE): VoiceFingerprint {
+    const resampled = this.resample(samples, sampleRate, TARGET_SAMPLE_RATE);
+    return {
+      values: this.extract(resampled),
+      durationMs: Math.round((resampled.length / TARGET_SAMPLE_RATE) * 1000),
+      sampleRate: TARGET_SAMPLE_RATE,
+    };
+  }
+
   similarity(left: number[], right: number[]): number {
     if (!left.length || left.length !== right.length) return 0;
 

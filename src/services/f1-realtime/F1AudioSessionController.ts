@@ -17,6 +17,8 @@ export class F1AudioSessionController {
   private operation: Promise<void> = Promise.resolve();
   private wakeAcceptAfter = 0;
   private sessionGeneration = 0;
+  private activeSpeakerName: string | undefined;
+  private activeGreetingText = "Te escucho";
 
   private followupTimer: number | null = null;
   private inactivityTimer: number | null = null;
@@ -70,8 +72,35 @@ export class F1AudioSessionController {
       ) return;
 
       this.wakeAcceptAfter = Number.POSITIVE_INFINITY;
-      this.move("WAKE_DETECTED", "Hola F1 detectado");
-      this.options.onOpenWidget?.();
+      this.move("WAKE_DETECTED", "Validando perfil de voz");
+
+      const identity =
+        this.options.verifyWakeIdentity && event
+          ? await this.options.verifyWakeIdentity(event)
+          : { accepted: true };
+
+      if (!identity.accepted) {
+        const similarity = Math.round(Number(identity.similarity ?? 0) * 100);
+        this.wakeAcceptAfter = Date.now() + 1200;
+        this.move(
+          "WAKE_LISTENING",
+          similarity > 0
+            ? `Voz no reconocida (${similarity}% de coincidencia)`
+            : "Voz no reconocida",
+        );
+        return;
+      }
+
+      this.activeSpeakerName = identity.displayName?.trim() || undefined;
+      this.activeGreetingText = this.activeSpeakerName
+        ? `Hola ${this.activeSpeakerName}, ¿en qué puedo ayudarte?`
+        : "Te escucho";
+      this.move(
+        "WAKE_DETECTED",
+        this.activeSpeakerName
+          ? `Voz reconocida: ${this.activeSpeakerName}`
+          : "Hola F1 detectado",
+      );
 
       await this.stopWakeAndVerify();
       await this.openRealtime();
@@ -130,14 +159,14 @@ export class F1AudioSessionController {
 
   onConnected(): void {
     if (this.sm.state === "REALTIME_CONNECTING") {
-      this.move("REALTIME_GREETING", "F1 diciendo “Te escucho”");
+      this.move("REALTIME_GREETING", `F1 saludando${this.activeSpeakerName ? ` a ${this.activeSpeakerName}` : ""}`);
     }
   }
 
   onGreetingDone(): void {
     if (this.sm.state !== "REALTIME_GREETING") return;
     this.clearGreetingTimer();
-    this.transcript = "F1: Te escucho";
+    this.transcript = `F1: ${this.activeGreetingText}`;
     this.move("REALTIME_LISTENING", "Escuchando instrucción");
     this.armInactivity();
   }
@@ -213,13 +242,16 @@ export class F1AudioSessionController {
     this.sessionGeneration += 1;
     this.move("REALTIME_CONNECTING", "Conectando con F1");
 
-    const client = this.options.createRealtimeClient();
+    const client = this.options.createRealtimeClient({
+      greetingText: this.activeGreetingText,
+      speakerName: this.activeSpeakerName,
+    });
     this.realtime = client;
 
     try {
       await client.connect();
       if (this.sm.state === "REALTIME_CONNECTING") {
-        this.move("REALTIME_GREETING", "F1 diciendo “Te escucho”");
+        this.move("REALTIME_GREETING", `F1 saludando${this.activeSpeakerName ? ` a ${this.activeSpeakerName}` : ""}`);
       }
       this.armGreetingTimeout();
       this.armMaxSession();
@@ -242,6 +274,8 @@ export class F1AudioSessionController {
 
     await this.closeRealtimeOnly(reason);
     this.transcript = "";
+    this.activeSpeakerName = undefined;
+    this.activeGreetingText = "Te escucho";
 
     if (this.enabled && !this.disposed) {
       await this.startWake("Conversación finalizada");

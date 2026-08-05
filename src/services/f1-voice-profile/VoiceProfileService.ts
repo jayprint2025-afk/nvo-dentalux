@@ -73,6 +73,29 @@ export class VoiceProfileService {
     };
   }
 
+  async verifyWakeSamples(
+    scope: VoiceProfileScope,
+    samples: Float32Array,
+    sampleRate: number,
+  ): Promise<{ accepted: boolean; displayName?: string; similarity: number; requiredSimilarity: number; profileRequired: boolean }> {
+    const profile = await this.store.get(scope);
+    if (!profile || !profile.enabled) {
+      return { accepted: true, similarity: 0, requiredSimilarity: 0, profileRequired: false };
+    }
+    if (profile.samples.length < 3 || !profile.centroid.length) {
+      return { accepted: false, displayName: profile.displayName, similarity: 0, requiredSimilarity: profile.acceptanceThreshold, profileRequired: true };
+    }
+    const fingerprint = this.extractor.fromSamples(samples, sampleRate);
+    const similarity = this.extractor.similarity(fingerprint.values, profile.centroid);
+    return {
+      accepted: similarity >= profile.acceptanceThreshold,
+      displayName: profile.displayName,
+      similarity,
+      requiredSimilarity: profile.acceptanceThreshold,
+      profileRequired: true,
+    };
+  }
+
   async update(
     profile: VoiceProfile,
     patch: Partial<Pick<VoiceProfile, "displayName" | "enabled" | "acceptanceThreshold">>,

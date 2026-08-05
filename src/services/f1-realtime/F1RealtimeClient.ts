@@ -12,6 +12,8 @@ export class F1RealtimeClient {
   private greetingAttempts = 0;
   private remoteAudio: HTMLAudioElement | null = null;
   private closed = false;
+  private greetingRequested = false;
+  private greetingFallbackTimer: number | null = null;
 
   constructor(private readonly options: F1RealtimeClientOptions) {}
 
@@ -29,6 +31,8 @@ export class F1RealtimeClient {
     this.greetingPending = true;
     this.greetingAudioStarted = false;
     this.greetingAttempts = 0;
+    this.greetingRequested = false;
+    this.clearGreetingFallback();
     this.executedCalls.clear();
 
     const pc = new RTCPeerConnection();
@@ -171,26 +175,42 @@ export class F1RealtimeClient {
         },
       });
 
-      this.requestGreeting();
+      this.greetingFallbackTimer = window.setTimeout(() => {
+        this.requestGreetingOnce();
+      }, 900);
     } catch (error) {
       await this.close().catch(() => undefined);
       throw error;
     }
   }
 
-  private requestGreeting(): void {
+  private requestGreetingOnce(): void {
+    if (this.greetingRequested || this.closed) return;
+    this.greetingRequested = true;
+    this.clearGreetingFallback();
     this.greetingAttempts += 1;
     void this.remoteAudio?.play().catch(() => undefined);
 
     this.send({
       type: "response.create",
       response: {
-        conversation: "none",
+        conversation: "auto",
         output_modalities: ["audio"],
-        max_output_tokens: 16,
-        instructions: "Di exactamente: Te escucho. No digas nada más.",
+        max_output_tokens: 40,
+        instructions: `Pronuncia exactamente esta frase, con tono cálido y natural, y no agregues nada más: ${this.options.greetingText}`,
+        metadata: {
+          f1_purpose: "identity_greeting",
+          speaker_name: this.options.speakerName ?? "",
+        },
       },
     });
+  }
+
+  private clearGreetingFallback(): void {
+    if (this.greetingFallbackTimer != null) {
+      window.clearTimeout(this.greetingFallbackTimer);
+    }
+    this.greetingFallbackTimer = null;
   }
 
   private send(payload: unknown): void {
@@ -214,6 +234,11 @@ export class F1RealtimeClient {
 
     const type = String(payload?.type ?? "");
     console.debug("[F1 Realtime]", type);
+
+    if (type === "session.updated" && this.greetingPending) {
+      this.requestGreetingOnce();
+      return;
+    }
 
     if (type === "error") {
       const details = [
@@ -281,14 +306,6 @@ export class F1RealtimeClient {
         if (item?.type === "function_call") await this.handleTool(item);
       }
 
-      if (
-        this.greetingPending &&
-        !this.greetingAudioStarted &&
-        this.greetingAttempts < 2
-      ) {
-        await new Promise((resolve) => window.setTimeout(resolve, 300));
-        this.requestGreeting();
-      }
       return;
     }
 
@@ -385,6 +402,8 @@ export class F1RealtimeClient {
     this.greetingPending = true;
     this.greetingAudioStarted = false;
     this.greetingAttempts = 0;
+    this.greetingRequested = false;
+    this.clearGreetingFallback();
     this.remoteAudio = null;
     this.executedCalls.clear();
   }

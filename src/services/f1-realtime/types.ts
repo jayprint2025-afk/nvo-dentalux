@@ -62,6 +62,8 @@ export interface RealtimeCallbacks {
 }
 
 export interface F1RealtimeClientOptions {
+  greetingText: string;
+  speakerName?: string;
   apiBase: string;
   branchKey: string;
   getToken(): string;
@@ -71,7 +73,16 @@ export interface F1RealtimeClientOptions {
 
 export interface F1AudioSessionControllerOptions {
   wakeEngine: WakeEngineAdapter;
-  createRealtimeClient(): import("./F1RealtimeClient").F1RealtimeClient;
+  verifyWakeIdentity?(event: WakeActivation): Promise<{
+    accepted: boolean;
+    displayName?: string;
+    similarity?: number;
+    requiredSimilarity?: number;
+  }>;
+  createRealtimeClient(context: {
+    greetingText: string;
+    speakerName?: string;
+  }): import("./F1RealtimeClient").F1RealtimeClient;
   onSnapshot(snapshot: F1AudioSnapshot): void;
   onOpenWidget?(): void;
   followupTimeoutMs?: number;
@@ -81,4 +92,4 @@ export interface F1AudioSessionControllerOptions {
   minimumWakeConfidence?: number;
 }
 
-export type WakeActivation = Pick<F1WakeEvent, "confidence" | "detectedAt">;
+export type WakeActivation = Pick<F1WakeEvent, "confidence" | "detectedAt" | "audioWindow" | "sampleRate">;
