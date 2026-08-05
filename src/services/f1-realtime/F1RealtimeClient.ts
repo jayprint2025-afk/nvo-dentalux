@@ -27,12 +27,25 @@ export class F1RealtimeClient {
     this.executedCalls.clear();
 
     const pc = new RTCPeerConnection();
-    const remoteAudio = document.createElement("audio");
+    const remoteAudio =
+      this.options.getRemoteAudioElement() ?? document.createElement("audio");
+
     remoteAudio.autoplay = true;
+    remoteAudio.muted = false;
+    remoteAudio.volume = 1;
+    remoteAudio.setAttribute("playsinline", "");
 
     pc.ontrack = (event) => {
-      remoteAudio.srcObject = event.streams[0] ?? null;
-      void remoteAudio.play().catch(() => undefined);
+      const remoteStream = event.streams[0] ?? new MediaStream([event.track]);
+      remoteAudio.srcObject = remoteStream;
+
+      void remoteAudio.play().catch((error) => {
+        const message =
+          error instanceof Error ? error.message : String(error);
+        this.options.callbacks.onError(
+          new Error(`El navegador bloqueó el audio de F1: ${message}`),
+        );
+      });
     };
 
     const stream = await navigator.mediaDevices.getUserMedia({
@@ -219,53 +232,59 @@ export class F1RealtimeClient {
       return;
     }
 
-    if (type !== "response.done") return;
+    if (type === "response.done") {
+      const status = String(payload.response?.status ?? "");
+      if (status === "failed" || status === "cancelled") {
+        const details = payload.response?.status_details;
+        const message =
+          details?.error?.message ||
+          details?.reason ||
+          `La respuesta Realtime terminó con estado ${status}`;
+        this.options.callbacks.onError(new Error(String(message)));
+        return;
+      }
 
-    const status = String(payload.response?.status ?? "");
-    if (status === "failed" || status === "cancelled") {
-      const details = payload.response?.status_details;
-      const message =
-        details?.error?.message ||
-        details?.reason ||
-        `La respuesta Realtime terminó con estado ${status}`;
-      this.options.callbacks.onError(new Error(String(message)));
+      for (const item of payload.response?.output ?? []) {
+        if (item?.type === "function_call") await this.handleTool(item);
+      }
       return;
     }
 
-    for (const item of payload.response?.output ?? []) {
-      if (item?.type === "function_call") await this.handleTool(item);
-    }
+    // response.done indica que el modelo terminó de generar, pero el audio
+    // todavía puede estar reproduciéndose. Solo este evento confirma que el
+    // buffer remoto ya se drenó completamente.
+    if (type === "output_audio_buffer.stopped") {
+      if (this.greetingPending) {
+        this.greetingPending = false;
 
-    if (this.greetingPending) {
-      this.greetingPending = false;
-
-      // A partir de aquí y solo aquí OpenAI recibe audio del usuario.
-      this.send({
-        type: "session.update",
-        session: {
-          type: "realtime",
-          audio: {
-            input: {
-              turn_detection: {
-                type: "server_vad",
-                threshold: 0.5,
-                prefix_padding_ms: 300,
-                silence_duration_ms: 650,
-                create_response: true,
-                interrupt_response: true,
+        this.send({
+          type: "session.update",
+          session: {
+            type: "realtime",
+            audio: {
+              input: {
+                turn_detection: {
+                  type: "server_vad",
+                  threshold: 0.5,
+                  prefix_padding_ms: 300,
+                  silence_duration_ms: 750,
+                  create_response: true,
+                  interrupt_response: true,
+                },
               },
             },
           },
-        },
-      });
+        });
 
-      const microphoneTrack = this.stream?.getAudioTracks()[0];
-      if (microphoneTrack) microphoneTrack.enabled = true;
-      this.options.callbacks.onGreetingDone();
+        const microphoneTrack = this.stream?.getAudioTracks()[0];
+        if (microphoneTrack) microphoneTrack.enabled = true;
+        this.options.callbacks.onGreetingDone();
+        return;
+      }
+
+      this.options.callbacks.onResponseDone();
       return;
     }
-
-    this.options.callbacks.onResponseDone();
   }
 
   private async decodeMessage(raw: unknown): Promise<string> {

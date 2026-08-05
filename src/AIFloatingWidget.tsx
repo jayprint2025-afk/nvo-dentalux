@@ -1,5 +1,5 @@
 import React from "react";
-import { MessagesSquare, Send, X, Trash2, Mic, MicOff, Bell, CalendarDays, Volume2 } from "lucide-react";
+import { MessagesSquare, Send, X, Trash2, Mic, MicOff, Bell, CalendarDays, Volume2, Settings2 } from "lucide-react";
 import { api } from "./lib/api";
 import { F1VoiceEngine, type F1VoiceEngineStatus } from "./services/f1-voice";
 import { F1AudioSessionController, F1RealtimeClient, type F1AudioSnapshot } from "./services/f1-realtime";
@@ -67,6 +67,65 @@ type SalesMsg = {
 };
 
 const ROBOT_SRC = "/robot-ia.png"; // <-- poner en /public/robot-ia.png
+
+type F1WakeSettings = {
+  threshold: number;
+  consecutiveHits: number;
+  cooldownMs: number;
+  stabilizationMs: number;
+};
+
+const F1_WAKE_SETTINGS_KEY = "f1_wake_settings_v2";
+const DEFAULT_F1_WAKE_SETTINGS: F1WakeSettings = {
+  threshold: 0.48,
+  consecutiveHits: 2,
+  cooldownMs: 3000,
+  stabilizationMs: 2200,
+};
+
+function loadF1WakeSettings(): F1WakeSettings {
+  try {
+    const parsed = JSON.parse(
+      localStorage.getItem(F1_WAKE_SETTINGS_KEY) || "{}",
+    );
+    return {
+      threshold: clamp(
+        Number(parsed.threshold ?? DEFAULT_F1_WAKE_SETTINGS.threshold),
+        0.35,
+        0.75,
+      ),
+      consecutiveHits: Math.round(
+        clamp(
+          Number(
+            parsed.consecutiveHits ??
+              DEFAULT_F1_WAKE_SETTINGS.consecutiveHits,
+          ),
+          1,
+          4,
+        ),
+      ),
+      cooldownMs: Math.round(
+        clamp(
+          Number(parsed.cooldownMs ?? DEFAULT_F1_WAKE_SETTINGS.cooldownMs),
+          1000,
+          8000,
+        ),
+      ),
+      stabilizationMs: Math.round(
+        clamp(
+          Number(
+            parsed.stabilizationMs ??
+              DEFAULT_F1_WAKE_SETTINGS.stabilizationMs,
+          ),
+          500,
+          5000,
+        ),
+      ),
+    };
+  } catch {
+    return DEFAULT_F1_WAKE_SETTINGS;
+  }
+}
 
 function clamp(n: number, min: number, max: number) {
   return Math.min(Math.max(n, min), max);
@@ -287,6 +346,12 @@ export default function AIFloatingWidget(props: { apiBase?: string; sucursalId?:
   const [f1VoiceEngineStatus, setF1VoiceEngineStatus] =
     React.useState<F1VoiceEngineStatus>("idle");
   const [f1VoiceEngineDetail, setF1VoiceEngineDetail] = React.useState("");
+  const [showWakeSettings, setShowWakeSettings] = React.useState(false);
+  const [wakeSettings, setWakeSettings] =
+    React.useState<F1WakeSettings>(() => loadF1WakeSettings());
+  const [wakeSettingsDraft, setWakeSettingsDraft] =
+    React.useState<F1WakeSettings>(() => loadF1WakeSettings());
+  const [wakeSettingsRevision, setWakeSettingsRevision] = React.useState(0);
   const f1VoiceEngineRef = React.useRef<F1VoiceEngine | null>(null);
   const [briefingPlaying, setBriefingPlaying] = React.useState(false);
   const [briefingLoading, setBriefingLoading] = React.useState(false);
@@ -1047,6 +1112,53 @@ const buildLeadReport = React.useCallback(() => {
     return output;
   }, [sucursalId, loadF1Dashboard, applyF1ClientActions]);
 
+  const applyWakePreset = React.useCallback(
+    (preset: "sensitive" | "balanced" | "strict") => {
+      const next: F1WakeSettings =
+        preset === "sensitive"
+          ? {
+              threshold: 0.42,
+              consecutiveHits: 1,
+              cooldownMs: 2500,
+              stabilizationMs: 1800,
+            }
+          : preset === "strict"
+            ? {
+                threshold: 0.60,
+                consecutiveHits: 2,
+                cooldownMs: 4000,
+                stabilizationMs: 3000,
+              }
+            : DEFAULT_F1_WAKE_SETTINGS;
+      setWakeSettingsDraft(next);
+    },
+    [],
+  );
+
+  const saveWakeSettings = React.useCallback(async () => {
+    const next: F1WakeSettings = {
+      threshold: clamp(Number(wakeSettingsDraft.threshold), 0.35, 0.75),
+      consecutiveHits: Math.round(
+        clamp(Number(wakeSettingsDraft.consecutiveHits), 1, 4),
+      ),
+      cooldownMs: Math.round(
+        clamp(Number(wakeSettingsDraft.cooldownMs), 1000, 8000),
+      ),
+      stabilizationMs: Math.round(
+        clamp(Number(wakeSettingsDraft.stabilizationMs), 500, 5000),
+      ),
+    };
+
+    localStorage.setItem(F1_WAKE_SETTINGS_KEY, JSON.stringify(next));
+    setWakeSettings(next);
+    setWakeSettingsDraft(next);
+    setShowWakeSettings(false);
+
+    // La reconstrucción ocurre solamente por una acción explícita del usuario.
+    await sessionControllerRef.current?.disable();
+    setWakeSettingsRevision((current) => current + 1);
+  }, [wakeSettingsDraft]);
+
   const connectVoice = React.useCallback(async () => {
     await sessionControllerRef.current?.startManualConversation();
   }, []);
@@ -1057,8 +1169,9 @@ const buildLeadReport = React.useCallback(() => {
     const engine = new F1VoiceEngine({
       phrase: "Hola F1",
       modelUrl,
-      threshold: 0.55,
-      cooldownMs: 3000,
+      threshold: wakeSettings.threshold,
+      consecutiveHits: wakeSettings.consecutiveHits,
+      cooldownMs: wakeSettings.cooldownMs,
       onStatus: (status, detail) => {
         setF1VoiceEngineStatus(status);
         setF1VoiceEngineDetail(String(detail || ""));
@@ -1071,7 +1184,7 @@ const buildLeadReport = React.useCallback(() => {
       const realtime = snapshot.state.startsWith("REALTIME_") && snapshot.state !== "REALTIME_DISCONNECTING";
       setVoiceConnected(realtime && snapshot.state !== "REALTIME_CONNECTING");
       setVoiceConnecting(snapshot.state === "REALTIME_CONNECTING");
-      if (snapshot.transcript) setVoiceTranscript(snapshot.transcript);
+      setVoiceTranscript(snapshot.transcript);
       setF1VoiceEngineDetail(snapshot.detail);
     };
 
@@ -1082,11 +1195,13 @@ const buildLeadReport = React.useCallback(() => {
       followupTimeoutMs: 5000,
       inactivityTimeoutMs: 15000,
       maxSessionMs: 120000,
-      wakeStabilizationMs: 2500,
+      wakeStabilizationMs: wakeSettings.stabilizationMs,
+      minimumWakeConfidence: wakeSettings.threshold,
       createRealtimeClient: () => new F1RealtimeClient({
         apiBase: API_BASE,
         branchKey: sucursalId || "sucursal_1",
         getToken: () => localStorage.getItem("dentalux_auth_token") || "",
+        getRemoteAudioElement: () => audioRef.current,
         callbacks: {
           onConnected: () => controller.onConnected(),
           onGreetingDone: () => controller.onGreetingDone(),
@@ -1116,7 +1231,12 @@ const buildLeadReport = React.useCallback(() => {
       f1VoiceEngineRef.current = null;
       void controller.dispose();
     };
-  }, [API_BASE, sucursalId, executeRealtimeTool]);
+  }, [
+    API_BASE,
+    sucursalId,
+    executeRealtimeTool,
+    wakeSettingsRevision,
+  ]);
 
   const toggleF1VoiceEngine = React.useCallback(() => {
     setF1VoiceEngineEnabled((current) => {
@@ -1734,17 +1854,161 @@ const buildLeadReport = React.useCallback(() => {
                           Estado: {f1VoiceEngineStatus}
                           {f1VoiceEngineDetail ? ` · ${f1VoiceEngineDetail}` : ""}
                         </div>
+                        <div className="mt-1 text-[10px] text-gray-500">
+                          Sensibilidad: {wakeSettings.threshold.toFixed(2)}
+                          {" · "}
+                          Confirmaciones: {wakeSettings.consecutiveHits}
+                        </div>
                       </div>
-                      <button
-                        type="button"
-                        onClick={toggleF1VoiceEngine}
-                        className={`rounded-xl px-3 py-2 text-white ${
-                          f1VoiceEngineEnabled ? "bg-emerald-600" : "bg-gray-600"
-                        }`}
-                      >
-                        {f1VoiceEngineEnabled ? "Motor activo" : "Activar motor"}
-                      </button>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setWakeSettingsDraft(wakeSettings);
+                            setShowWakeSettings((current) => !current);
+                          }}
+                          className="rounded-xl border px-3 py-2 text-gray-700 hover:bg-gray-50"
+                          title="Configurar reconocimiento de voz"
+                        >
+                          <Settings2 className="w-4 h-4" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={toggleF1VoiceEngine}
+                          className={`rounded-xl px-3 py-2 text-white ${
+                            f1VoiceEngineEnabled ? "bg-emerald-600" : "bg-gray-600"
+                          }`}
+                        >
+                          {f1VoiceEngineEnabled ? "Motor activo" : "Activar motor"}
+                        </button>
+                      </div>
                     </div>
+
+                    {showWakeSettings && (
+                      <div className="mt-3 rounded-xl border bg-gray-50 p-3">
+                        <div className="mb-2 text-xs font-semibold">
+                          Calibración para tu voz
+                        </div>
+
+                        <div className="mb-3 flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            onClick={() => applyWakePreset("sensitive")}
+                            className="rounded-lg border bg-white px-2 py-1 text-xs"
+                          >
+                            Más sensible
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => applyWakePreset("balanced")}
+                            className="rounded-lg border bg-white px-2 py-1 text-xs"
+                          >
+                            Balanceado
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => applyWakePreset("strict")}
+                            className="rounded-lg border bg-white px-2 py-1 text-xs"
+                          >
+                            Menos falsos positivos
+                          </button>
+                        </div>
+
+                        <label className="block text-[11px] text-gray-600">
+                          Umbral: {wakeSettingsDraft.threshold.toFixed(2)}
+                          <input
+                            type="range"
+                            min="0.35"
+                            max="0.75"
+                            step="0.01"
+                            value={wakeSettingsDraft.threshold}
+                            onChange={(event) =>
+                              setWakeSettingsDraft((current) => ({
+                                ...current,
+                                threshold: Number(event.target.value),
+                              }))
+                            }
+                            className="mt-1 w-full"
+                          />
+                          <span className="text-[10px] text-gray-500">
+                            Menor = reconoce más fácil. Mayor = evita activaciones
+                            accidentales.
+                          </span>
+                        </label>
+
+                        <label className="mt-3 block text-[11px] text-gray-600">
+                          Confirmaciones consecutivas
+                          <select
+                            value={wakeSettingsDraft.consecutiveHits}
+                            onChange={(event) =>
+                              setWakeSettingsDraft((current) => ({
+                                ...current,
+                                consecutiveHits: Number(event.target.value),
+                              }))
+                            }
+                            className="mt-1 w-full rounded-lg border bg-white px-2 py-1"
+                          >
+                            <option value={1}>1 — respuesta rápida</option>
+                            <option value={2}>2 — recomendado</option>
+                            <option value={3}>3 — más estricto</option>
+                          </select>
+                        </label>
+
+                        <div className="mt-3 grid grid-cols-2 gap-2">
+                          <label className="text-[11px] text-gray-600">
+                            Espera después de una activación
+                            <input
+                              type="number"
+                              min={1000}
+                              max={8000}
+                              step={500}
+                              value={wakeSettingsDraft.cooldownMs}
+                              onChange={(event) =>
+                                setWakeSettingsDraft((current) => ({
+                                  ...current,
+                                  cooldownMs: Number(event.target.value),
+                                }))
+                              }
+                              className="mt-1 w-full rounded-lg border px-2 py-1"
+                            />
+                          </label>
+                          <label className="text-[11px] text-gray-600">
+                            Estabilización del micrófono
+                            <input
+                              type="number"
+                              min={500}
+                              max={5000}
+                              step={250}
+                              value={wakeSettingsDraft.stabilizationMs}
+                              onChange={(event) =>
+                                setWakeSettingsDraft((current) => ({
+                                  ...current,
+                                  stabilizationMs: Number(event.target.value),
+                                }))
+                              }
+                              className="mt-1 w-full rounded-lg border px-2 py-1"
+                            />
+                          </label>
+                        </div>
+
+                        <div className="mt-3 flex justify-end gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setShowWakeSettings(false)}
+                            className="rounded-lg border bg-white px-3 py-1.5 text-xs"
+                          >
+                            Cancelar
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void saveWakeSettings()}
+                            className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs text-white"
+                          >
+                            Guardar y reiniciar motor
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   <div className="bg-white border rounded-xl p-3 mb-3">
@@ -1756,7 +2020,7 @@ const buildLeadReport = React.useCallback(() => {
                       </button>
                     </div>
                     {!!voiceTranscript && <div className="mt-2 rounded-lg bg-gray-50 border p-2 text-xs text-gray-700 whitespace-pre-wrap">{voiceTranscript}</div>}
-                    <audio ref={audioRef} autoPlay />
+                    <audio ref={audioRef} autoPlay playsInline />
                   </div>
 
                   <div className="space-y-2">

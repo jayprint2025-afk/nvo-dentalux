@@ -64,6 +64,7 @@ export interface F1RealtimeClientOptions {
   apiBase: string;
   branchKey: string;
   getToken(): string;
+  getRemoteAudioElement(): HTMLAudioElement | null;
   callbacks: RealtimeCallbacks;
 }
 
@@ -76,6 +77,7 @@ export interface F1AudioSessionControllerOptions {
   inactivityTimeoutMs?: number;
   maxSessionMs?: number;
   wakeStabilizationMs?: number;
+  minimumWakeConfidence?: number;
 }
 
 export type WakeActivation = Pick<F1WakeEvent, "confidence" | "detectedAt">;

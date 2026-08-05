@@ -64,7 +64,10 @@ export class F1AudioSessionController {
       // Única puerta automática a Realtime.
       if (!this.enabled || this.sm.state !== "WAKE_LISTENING") return;
       if (Date.now() < this.wakeAcceptAfter) return;
-      if (event && event.confidence < 0.55) return;
+      if (
+        event &&
+        event.confidence < (this.options.minimumWakeConfidence ?? 0)
+      ) return;
 
       this.wakeAcceptAfter = Number.POSITIVE_INFINITY;
       this.move("WAKE_DETECTED", "Hola F1 detectado");
@@ -146,14 +149,13 @@ export class F1AudioSessionController {
     ) return;
 
     this.clearFollowupTimer();
+    this.clearInactivityTimer();
     this.move("REALTIME_PROCESSING", "Procesando instrucción");
-    this.armInactivity();
   }
 
   onUserTranscript(text: string): void {
     this.transcript = `Tú: ${text}`;
     this.emit();
-    this.armInactivity();
   }
 
   onAssistantSpeechStarted(): void {
@@ -164,7 +166,7 @@ export class F1AudioSessionController {
     ) {
       this.move("REALTIME_SPEAKING", "F1 respondiendo");
     }
-    this.armInactivity();
+    this.clearInactivityTimer();
   }
 
   onAssistantTranscriptDelta(delta: string): void {
@@ -187,7 +189,6 @@ export class F1AudioSessionController {
       this.move("REALTIME_FOLLOWUP", "Esperando otra instrucción");
     }
     this.armFollowup();
-    this.armInactivity();
   }
 
   onRealtimeError(error: Error): void {
@@ -261,10 +262,18 @@ export class F1AudioSessionController {
       return;
     }
 
-    if (this.realtime || this.isRealtimeState()) {
+    if (this.realtime) {
       throw new Error("No se puede iniciar Wake mientras Realtime está activo");
     }
 
+    if (
+      this.isRealtimeState() &&
+      this.sm.state !== "REALTIME_DISCONNECTING"
+    ) {
+      throw new Error("No se puede iniciar Wake mientras Realtime está activo");
+    }
+
+    this.transcript = "";
     if (this.sm.state !== "WAKE_STARTING") {
       this.move("WAKE_STARTING", detail);
     }
@@ -329,6 +338,13 @@ export class F1AudioSessionController {
     }, this.options.maxSessionMs ?? 120_000);
   }
 
+  private clearInactivityTimer(): void {
+    if (this.inactivityTimer != null) {
+      window.clearTimeout(this.inactivityTimer);
+    }
+    this.inactivityTimer = null;
+  }
+
   private clearGreetingTimer(): void {
     if (this.greetingTimer != null) window.clearTimeout(this.greetingTimer);
     this.greetingTimer = null;
@@ -342,9 +358,8 @@ export class F1AudioSessionController {
   private clearTimers(): void {
     this.clearGreetingTimer();
     this.clearFollowupTimer();
-    if (this.inactivityTimer != null) window.clearTimeout(this.inactivityTimer);
+    this.clearInactivityTimer();
     if (this.maxSessionTimer != null) window.clearTimeout(this.maxSessionTimer);
-    this.inactivityTimer = null;
     this.maxSessionTimer = null;
   }
 

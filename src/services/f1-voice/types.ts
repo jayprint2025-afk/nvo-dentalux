@@ -16,6 +16,7 @@ export type F1VoiceEngineStatus =
 export type F1VoiceEngineOptions = {
   phrase?: string;
   threshold?: number;
+  consecutiveHits?: number;
   cooldownMs?: number;
   modelUrl?: string;
   workletUrl?: string;

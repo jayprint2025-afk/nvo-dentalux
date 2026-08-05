@@ -51,7 +51,10 @@ export class F1VoiceEngine {
             0.45,
             Math.min(Number(options.threshold ?? DEFAULT_WAKE_THRESHOLD), 0.9),
           ),
-          consecutiveHits: 2,
+          consecutiveHits: Math.max(
+            1,
+            Math.min(Math.round(Number(options.consecutiveHits ?? 2)), 4),
+          ),
           cooldownFrames,
         },
       })
