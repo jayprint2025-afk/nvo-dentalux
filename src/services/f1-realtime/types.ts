@@ -52,6 +52,7 @@ export interface RealtimeCallbacks {
   onUserSpeechStarted(): void;
   onUserTranscript(text: string): void;
   onAssistantSpeechStarted(): void;
+  onRemoteAudioReady?(): void;
   onAssistantTranscriptDelta(delta: string): void;
   onAssistantTranscriptDone(text: string): void;
   onResponseDone(): void;

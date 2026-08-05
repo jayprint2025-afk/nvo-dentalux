@@ -340,6 +340,9 @@ export default function AIFloatingWidget(props: { apiBase?: string; sucursalId?:
   const [voiceConnected, setVoiceConnected] = React.useState(false);
   const [voiceConnecting, setVoiceConnecting] = React.useState(false);
   const [voiceTranscript, setVoiceTranscript] = React.useState("");
+  const [audioSessionState, setAudioSessionState] =
+    React.useState<F1AudioSnapshot["state"]>("DISABLED");
+  const [remoteAudioReady, setRemoteAudioReady] = React.useState(false);
   const [f1VoiceEngineEnabled, setF1VoiceEngineEnabled] = React.useState(() => {
     return localStorage.getItem("f1_voice_engine_enabled") === "1";
   });
@@ -1159,9 +1162,26 @@ const buildLeadReport = React.useCallback(() => {
     setWakeSettingsRevision((current) => current + 1);
   }, [wakeSettingsDraft]);
 
-  const connectVoice = React.useCallback(async () => {
-    await sessionControllerRef.current?.startManualConversation();
+  const unlockF1Audio = React.useCallback(async () => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    try {
+      audio.muted = true;
+      await audio.play();
+      audio.pause();
+      audio.currentTime = 0;
+    } catch {
+      // pc.ontrack vuelve a intentar cuando exista una pista remota.
+    } finally {
+      audio.muted = false;
+      audio.volume = 1;
+    }
   }, []);
+
+  const connectVoice = React.useCallback(async () => {
+    await unlockF1Audio();
+    await sessionControllerRef.current?.startManualConversation();
+  }, [unlockF1Audio]);
 
   React.useEffect(() => {
     const modelUrl = String((import.meta as any).env?.VITE_F1_WAKE_MODEL_URL || "/models/hola-f1/hola-f1.onnx").trim();
@@ -1181,11 +1201,15 @@ const buildLeadReport = React.useCallback(() => {
     f1VoiceEngineRef.current = engine;
 
     const handleSnapshot = (snapshot: F1AudioSnapshot) => {
-      const realtime = snapshot.state.startsWith("REALTIME_") && snapshot.state !== "REALTIME_DISCONNECTING";
+      const realtime =
+        snapshot.state.startsWith("REALTIME_") &&
+        snapshot.state !== "REALTIME_DISCONNECTING";
+      setAudioSessionState(snapshot.state);
       setVoiceConnected(realtime && snapshot.state !== "REALTIME_CONNECTING");
       setVoiceConnecting(snapshot.state === "REALTIME_CONNECTING");
       setVoiceTranscript(snapshot.transcript);
       setF1VoiceEngineDetail(snapshot.detail);
+      if (!realtime) setRemoteAudioReady(false);
     };
 
     controller = new F1AudioSessionController({
@@ -1211,6 +1235,7 @@ const buildLeadReport = React.useCallback(() => {
             setF1Messages(current => [...current, { role: "user", content: text }]);
           },
           onAssistantSpeechStarted: () => controller.onAssistantSpeechStarted(),
+          onRemoteAudioReady: () => setRemoteAudioReady(true),
           onAssistantTranscriptDelta: (delta) => controller.onAssistantTranscriptDelta(delta),
           onAssistantTranscriptDone: (text) => {
             controller.onAssistantTranscriptDone(text);
@@ -1239,6 +1264,7 @@ const buildLeadReport = React.useCallback(() => {
   ]);
 
   const toggleF1VoiceEngine = React.useCallback(() => {
+    void unlockF1Audio();
     setF1VoiceEngineEnabled((current) => {
       const next = !current;
       localStorage.setItem("f1_voice_engine_enabled", next ? "1" : "0");
@@ -1246,7 +1272,7 @@ const buildLeadReport = React.useCallback(() => {
       else void sessionControllerRef.current?.disable();
       return next;
     });
-  }, []);
+  }, [unlockF1Audio]);
 
   React.useEffect(() => {
     loadF1Dashboard();
@@ -1280,6 +1306,23 @@ const buildLeadReport = React.useCallback(() => {
       window.clearTimeout(f1StreamRetryRef.current);
     }
   }, []);
+
+  const realtimeStatus = React.useMemo(() => {
+    switch (audioSessionState) {
+      case "WAKE_STARTING": return { label: "Preparando detector", tone: "bg-amber-100 text-amber-800" };
+      case "WAKE_LISTENING": return { label: "Di: Hola F1", tone: "bg-emerald-100 text-emerald-800" };
+      case "WAKE_DETECTED": return { label: "Hola F1 detectado", tone: "bg-indigo-100 text-indigo-800" };
+      case "REALTIME_CONNECTING": return { label: "Conectando F1…", tone: "bg-indigo-100 text-indigo-800" };
+      case "REALTIME_GREETING": return { label: remoteAudioReady ? "F1 activado · diciendo Te escucho" : "Preparando audio de F1…", tone: "bg-indigo-100 text-indigo-800" };
+      case "REALTIME_LISTENING": return { label: "F1 te escucha", tone: "bg-green-100 text-green-800" };
+      case "REALTIME_PROCESSING": return { label: "F1 procesando", tone: "bg-violet-100 text-violet-800" };
+      case "REALTIME_SPEAKING": return { label: "F1 respondiendo", tone: "bg-blue-100 text-blue-800" };
+      case "REALTIME_FOLLOWUP": return { label: "Puedes continuar hablando", tone: "bg-cyan-100 text-cyan-800" };
+      case "REALTIME_DISCONNECTING": return { label: "Cerrando conversación", tone: "bg-gray-100 text-gray-700" };
+      case "ERROR": return { label: "Error de voz", tone: "bg-red-100 text-red-800" };
+      default: return { label: f1VoiceEngineEnabled ? "Motor activo" : "Motor desactivado", tone: f1VoiceEngineEnabled ? "bg-emerald-100 text-emerald-800" : "bg-gray-100 text-gray-700" };
+    }
+  }, [audioSessionState, f1VoiceEngineEnabled, remoteAudioReady]);
 
   // ===== Effects IA =====
   React.useEffect(() => {
@@ -1792,6 +1835,21 @@ const buildLeadReport = React.useCallback(() => {
                     </div>
                     {f1Notifications.length ? f1Notifications.map(n => <div key={n.id} className="mt-2 text-xs text-gray-700"><b>{n.title}:</b> {n.message}</div>) : <div className="mt-2 text-xs text-gray-500">Sin avisos pendientes.</div>}
                     {f1Summary?.first_appointment && <div className="mt-2 text-xs text-gray-600">Primera cita: {String(f1Summary.first_appointment.start_time || '').slice(0,5)} · {f1Summary.first_appointment.patient}</div>}
+                  </div>
+
+                  <div className="sticky top-0 z-20 mb-3 flex justify-center pointer-events-none">
+                    <div className={`rounded-full border px-3 py-1.5 text-xs font-semibold shadow-sm ${realtimeStatus.tone}`}>
+                      <span className="inline-flex items-center gap-2">
+                        <span className={`h-2 w-2 rounded-full ${
+                          audioSessionState.startsWith("REALTIME_")
+                            ? "bg-indigo-500 animate-pulse"
+                            : audioSessionState === "WAKE_LISTENING"
+                              ? "bg-emerald-500"
+                              : "bg-gray-400"
+                        }`} />
+                        {realtimeStatus.label}
+                      </span>
+                    </div>
                   </div>
 
                   <div className="mb-3 flex items-center justify-between rounded-xl border bg-white px-3 py-2">

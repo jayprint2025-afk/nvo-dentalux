@@ -35,9 +35,16 @@ export class F1RealtimeClient {
     remoteAudio.volume = 1;
     remoteAudio.setAttribute("playsinline", "");
 
+    let resolveRemoteTrack!: () => void;
+    const remoteTrackReady = new Promise<void>((resolve) => {
+      resolveRemoteTrack = resolve;
+    });
+
     pc.ontrack = (event) => {
       const remoteStream = event.streams[0] ?? new MediaStream([event.track]);
       remoteAudio.srcObject = remoteStream;
+      resolveRemoteTrack();
+      this.options.callbacks.onRemoteAudioReady?.();
 
       void remoteAudio.play().catch((error) => {
         const message =
@@ -124,6 +131,18 @@ export class F1RealtimeClient {
       });
       await dataChannelOpened;
 
+      // Esperar la pista remota evita perder el primer audio “Te escucho”.
+      await Promise.race([
+        remoteTrackReady,
+        new Promise<void>((_, reject) =>
+          window.setTimeout(
+            () => reject(new Error("La pista de audio remota no estuvo lista")),
+            6_000,
+          ),
+        ),
+      ]);
+
+      await remoteAudio.play().catch(() => undefined);
       this.options.callbacks.onConnected();
 
       // Eventos sobre el mismo DataChannel son ordenados: primero se impide
