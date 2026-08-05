@@ -38,9 +38,9 @@ export class F1AudioSessionController {
     await this.options.wakeEngine.stop();
     this.move("BRIEFING_PLAYING", "Reproduciendo briefing");
   }); }
-  endBriefing(): Promise<void> { return this.enqueue(async () => {
-    if (this.enabled && !this.disposed) await this.startWake(); else this.move("DISABLED", "Motor desactivado");
-  }); }
+  endBriefing(): Promise<void> {
+    return this.enqueue(() => this.resumeWakeAfterBriefing());
+  }
 
   async playBriefing(play: () => Promise<void>): Promise<void> {
     return this.enqueue(async () => {
@@ -48,11 +48,37 @@ export class F1AudioSessionController {
       await this.options.wakeEngine.stop();
       this.move("BRIEFING_PLAYING", "Reproduciendo briefing");
       try { await play(); } catch (error) { this.detail = error instanceof Error ? error.message : String(error); this.move("ERROR", this.detail); }
-      finally { if (this.enabled && !this.disposed) await this.startWake(); else this.move("DISABLED", "Motor desactivado"); }
+      finally { await this.resumeWakeAfterBriefing(); }
     });
   }
 
   async dispose(): Promise<void> { this.disposed = true; this.enabled = false; await this.enqueue(async () => { this.clearTimers(); await this.disconnectRealtime("disabled", false); await this.options.wakeEngine.dispose(); this.move("DISABLED", "Controlador liberado"); }); }
+
+  private async resumeWakeAfterBriefing(): Promise<void> {
+    if (!this.enabled || this.disposed) {
+      this.move("DISABLED", "Motor desactivado");
+      return;
+    }
+
+    // Idempotencia: audio.onended, audio.onerror y la limpieza del componente
+    // pueden solicitar la reanudación casi al mismo tiempo.
+    if (this.sm.state === "WAKE_LISTENING" || this.sm.state === "WAKE_STARTING") {
+      return;
+    }
+
+    if (this.sm.state !== "BRIEFING_PLAYING" && this.sm.state !== "ERROR") {
+      return;
+    }
+
+    this.move("WAKE_STARTING", "Reiniciando Wake Engine después del briefing");
+    await this.options.wakeEngine.start();
+
+    if (this.options.wakeEngine.currentStatus === "error") {
+      throw new Error("Wake Engine no pudo reiniciar después del briefing");
+    }
+
+    this.move("WAKE_LISTENING", "Esperando “Hola F1”");
+  }
 
   private async startWake(): Promise<void> {
     if (!this.enabled || this.disposed) { this.move("DISABLED", "Motor desactivado"); return; }

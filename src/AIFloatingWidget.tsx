@@ -869,7 +869,10 @@ const buildLeadReport = React.useCallback(() => {
 
       // La reproducción automática ocurre una sola vez por
       // empresa + usuario + sucursal + fecha.
-      if (automatic && localStorage.getItem(playedKey) === "1") return;
+      if (automatic && localStorage.getItem(playedKey) === "1") {
+        await sessionControllerRef.current?.endBriefing();
+        return;
+      }
 
       setBriefingText(String(textData?.briefing || ""));
 
