@@ -15,9 +15,10 @@ export class F1RealtimeClient {
   private greetingRequested = false;
   private greetingFallbackTimer: number | null = null;
   private greetingTranscript = "";
-  private remoteAudioContext: AudioContext | null = null;
-  private remoteAudioSource: MediaStreamAudioSourceNode | null = null;
-  private remoteAudioAnalyser: AnalyserNode | null = null;
+  private greetingResponseDone = false;
+  private greetingAudioStopped = false;
+  private greetingFinalizing = false;
+  private waitingForConversationSessionUpdate = false;
 
   constructor(private readonly options: F1RealtimeClientOptions) {}
 
@@ -37,8 +38,11 @@ export class F1RealtimeClient {
     this.greetingAttempts = 0;
     this.greetingRequested = false;
     this.greetingTranscript = "";
+    this.greetingResponseDone = false;
+    this.greetingAudioStopped = false;
+    this.greetingFinalizing = false;
+    this.waitingForConversationSessionUpdate = false;
     this.clearGreetingFallback();
-    await this.closeRemoteAudioAnalysis();
     this.executedCalls.clear();
 
     const pc = new RTCPeerConnection();
@@ -59,7 +63,6 @@ export class F1RealtimeClient {
     pc.ontrack = (event) => {
       const remoteStream = event.streams[0] ?? new MediaStream([event.track]);
       remoteAudio.srcObject = remoteStream;
-      void this.initializeRemoteAudioAnalysis(remoteStream);
       resolveRemoteTrack();
       this.options.callbacks.onRemoteAudioReady?.();
 
@@ -196,6 +199,9 @@ export class F1RealtimeClient {
     this.greetingRequested = true;
     this.greetingTranscript = "";
     this.greetingAudioStarted = false;
+    this.greetingResponseDone = false;
+    this.greetingAudioStopped = false;
+    this.greetingFinalizing = false;
     this.clearGreetingFallback();
     this.greetingAttempts += 1;
     void this.remoteAudio?.play().catch(() => undefined);
@@ -249,8 +255,16 @@ export class F1RealtimeClient {
     const type = String(payload?.type ?? "");
     console.debug("[F1 Realtime]", type);
 
-    if (type === "session.updated" && this.greetingPending) {
-      this.requestGreetingOnce();
+    if (type === "session.updated") {
+      if (this.waitingForConversationSessionUpdate) {
+        this.waitingForConversationSessionUpdate = false;
+        await this.enableMicrophoneAfterGreeting();
+        return;
+      }
+
+      if (this.greetingPending && !this.greetingRequested) {
+        this.requestGreetingOnce();
+      }
       return;
     }
 
@@ -325,17 +339,17 @@ export class F1RealtimeClient {
         if (item?.type === "function_call") await this.handleTool(item);
       }
 
+      if (this.greetingPending) {
+        this.greetingResponseDone = true;
+        await this.tryFinalizeGreeting();
+      }
       return;
     }
 
-    // response.done indica que el modelo terminó de generar. El evento
-    // output_audio_buffer.stopped confirma que OpenAI dejó de enviar audio,
-    // pero el navegador todavía puede conservar una pequeña cola de
-    // reproducción. Durante esa cola el micrófono debe seguir cerrado para
-    // impedir que el propio saludo active el VAD.
     if (type === "output_audio_buffer.stopped") {
       if (this.greetingPending) {
-        await this.finishGreetingAndOpenMicrophone();
+        this.greetingAudioStopped = true;
+        await this.tryFinalizeGreeting();
         return;
       }
 
@@ -344,39 +358,30 @@ export class F1RealtimeClient {
     }
   }
 
-  private async finishGreetingAndOpenMicrophone(): Promise<void> {
-    if (!this.greetingPending || this.closed) return;
+  private async tryFinalizeGreeting(): Promise<void> {
+    if (
+      !this.greetingPending ||
+      this.greetingFinalizing ||
+      !this.greetingResponseDone ||
+      !this.greetingAudioStopped ||
+      this.closed
+    ) {
+      return;
+    }
+
+    this.greetingFinalizing = true;
+    this.clearGreetingFallback();
 
     const microphoneTrack = this.stream?.getAudioTracks()[0];
     if (microphoneTrack) microphoneTrack.enabled = false;
 
-    if (!this.isGreetingTranscriptComplete()) {
-      if (this.greetingAttempts < 3) {
-        this.greetingRequested = false;
-        await new Promise((resolve) => window.setTimeout(resolve, 300));
-        this.requestGreetingOnce();
-        return;
-      }
-
-      this.options.callbacks.onError(
-        new Error(
-          `F1 no completó el saludo personalizado. Transcripción recibida: ${
-            this.greetingTranscript || "(vacía)"
-          }`,
-        ),
-      );
-      return;
-    }
-
-    await this.waitForRemotePlaybackSilence();
-    if (this.closed || !this.greetingPending) return;
-
-    this.greetingPending = false;
-
+    // El saludo ya terminó de generarse y de reproducirse. Se limpia cualquier
+    // residuo antes de habilitar el VAD conversacional.
     try {
       this.send({ type: "input_audio_buffer.clear" });
     } catch {}
 
+    this.waitingForConversationSessionUpdate = true;
     this.send({
       type: "session.update",
       session: {
@@ -395,126 +400,22 @@ export class F1RealtimeClient {
         },
       },
     });
+  }
 
-    await new Promise((resolve) => window.setTimeout(resolve, 250));
+  private async enableMicrophoneAfterGreeting(): Promise<void> {
+    if (!this.greetingPending || this.closed) return;
+
+    // Pequeña guarda contra eco físico, después de que OpenAI confirmó la
+    // configuración conversacional. No se solicita ni repite otro saludo.
+    await new Promise((resolve) => window.setTimeout(resolve, 450));
     if (this.closed) return;
 
+    const microphoneTrack = this.stream?.getAudioTracks()[0];
     if (microphoneTrack) microphoneTrack.enabled = true;
+
+    this.greetingPending = false;
+    this.greetingFinalizing = false;
     this.options.callbacks.onGreetingDone();
-  }
-
-  private isGreetingTranscriptComplete(): boolean {
-    const normalize = (value: string) =>
-      value
-        .normalize("NFD")
-        .replace(/[\u0300-\u036f]/g, "")
-        .toLowerCase()
-        .replace(/[^a-z0-9ñ ]/g, " ")
-        .replace(/\s+/g, " ")
-        .trim();
-
-    const actual = normalize(this.greetingTranscript);
-    const speaker = normalize(this.options.speakerName ?? "");
-
-    if (!actual.includes("hola")) return false;
-    if (speaker && !actual.includes(speaker)) return false;
-
-    return (
-      actual.includes("en que puedo ayudarte") ||
-      actual.includes("como puedo ayudarte") ||
-      actual.includes("en que te puedo ayudar") ||
-      actual.includes("como te puedo ayudar")
-    );
-  }
-
-  private async initializeRemoteAudioAnalysis(
-    remoteStream: MediaStream,
-  ): Promise<void> {
-    await this.closeRemoteAudioAnalysis();
-
-    try {
-      const context = new AudioContext();
-      const source = context.createMediaStreamSource(remoteStream);
-      const analyser = context.createAnalyser();
-      analyser.fftSize = 1024;
-      analyser.smoothingTimeConstant = 0.15;
-      source.connect(analyser);
-
-      this.remoteAudioContext = context;
-      this.remoteAudioSource = source;
-      this.remoteAudioAnalyser = analyser;
-
-      if (context.state === "suspended") {
-        await context.resume().catch(() => undefined);
-      }
-    } catch (error) {
-      console.warn("[F1 Realtime] No se pudo analizar audio remoto", error);
-      await this.closeRemoteAudioAnalysis();
-    }
-  }
-
-  private async waitForRemotePlaybackSilence(): Promise<void> {
-    const analyser = this.remoteAudioAnalyser;
-    const context = this.remoteAudioContext;
-
-    if (!analyser || !context || context.state === "closed") {
-      await new Promise((resolve) => window.setTimeout(resolve, 2_800));
-      return;
-    }
-
-    if (context.state === "suspended") {
-      await context.resume().catch(() => undefined);
-    }
-
-    const samples = new Float32Array(analyser.fftSize);
-    const startedAt = performance.now();
-    let silenceStartedAt: number | null = null;
-    let observedAudibleAudio = false;
-
-    while (!this.closed && performance.now() - startedAt < 8_000) {
-      analyser.getFloatTimeDomainData(samples);
-
-      let energy = 0;
-      for (let index = 0; index < samples.length; index += 1) {
-        const sample = samples[index] || 0;
-        energy += sample * sample;
-      }
-
-      const rms = Math.sqrt(energy / samples.length);
-      const audible = rms >= 0.006;
-
-      if (audible) {
-        observedAudibleAudio = true;
-        silenceStartedAt = null;
-      } else if (observedAudibleAudio) {
-        silenceStartedAt ??= performance.now();
-        if (performance.now() - silenceStartedAt >= 850) return;
-      }
-
-      await new Promise((resolve) => window.setTimeout(resolve, 50));
-    }
-
-    if (!observedAudibleAudio) {
-      await new Promise((resolve) => window.setTimeout(resolve, 2_200));
-    }
-  }
-
-  private async closeRemoteAudioAnalysis(): Promise<void> {
-    try {
-      this.remoteAudioSource?.disconnect();
-    } catch {}
-    try {
-      this.remoteAudioAnalyser?.disconnect();
-    } catch {}
-
-    this.remoteAudioSource = null;
-    this.remoteAudioAnalyser = null;
-
-    const context = this.remoteAudioContext;
-    this.remoteAudioContext = null;
-    if (context && context.state !== "closed") {
-      await context.close().catch(() => undefined);
-    }
   }
 
   private async decodeMessage(raw: unknown): Promise<string> {
@@ -566,7 +467,6 @@ export class F1RealtimeClient {
     if (this.closed) return;
     this.closed = true;
 
-    await this.closeRemoteAudioAnalysis();
     await this.resources.closeRealtime();
     this.pc = null;
     this.dc = null;
@@ -576,6 +476,10 @@ export class F1RealtimeClient {
     this.greetingAttempts = 0;
     this.greetingRequested = false;
     this.greetingTranscript = "";
+    this.greetingResponseDone = false;
+    this.greetingAudioStopped = false;
+    this.greetingFinalizing = false;
+    this.waitingForConversationSessionUpdate = false;
     this.clearGreetingFallback();
     this.remoteAudio = null;
     this.executedCalls.clear();
