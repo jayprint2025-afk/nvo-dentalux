@@ -8,6 +8,9 @@ export class F1RealtimeClient {
   private dc: RTCDataChannel | null = null;
   private stream: MediaStream | null = null;
   private greetingPending = true;
+  private greetingAudioStarted = false;
+  private greetingAttempts = 0;
+  private remoteAudio: HTMLAudioElement | null = null;
   private closed = false;
 
   constructor(private readonly options: F1RealtimeClientOptions) {}
@@ -24,6 +27,8 @@ export class F1RealtimeClient {
 
     this.closed = false;
     this.greetingPending = true;
+    this.greetingAudioStarted = false;
+    this.greetingAttempts = 0;
     this.executedCalls.clear();
 
     const pc = new RTCPeerConnection();
@@ -34,6 +39,7 @@ export class F1RealtimeClient {
     remoteAudio.muted = false;
     remoteAudio.volume = 1;
     remoteAudio.setAttribute("playsinline", "");
+    this.remoteAudio = remoteAudio;
 
     let resolveRemoteTrack!: () => void;
     const remoteTrackReady = new Promise<void>((resolve) => {
@@ -143,10 +149,9 @@ export class F1RealtimeClient {
       ]);
 
       await remoteAudio.play().catch(() => undefined);
+      await new Promise((resolve) => window.setTimeout(resolve, 450));
       this.options.callbacks.onConnected();
 
-      // Eventos sobre el mismo DataChannel son ordenados: primero se impide
-      // que VAD cree respuestas; después se solicita el único saludo.
       this.send({
         type: "session.update",
         session: {
@@ -166,19 +171,26 @@ export class F1RealtimeClient {
         },
       });
 
-      this.send({
-        type: "response.create",
-        response: {
-          conversation: "none",
-          output_modalities: ["audio"],
-          max_output_tokens: 16,
-          instructions: "Di exactamente: Te escucho. No digas nada más.",
-        },
-      });
+      this.requestGreeting();
     } catch (error) {
       await this.close().catch(() => undefined);
       throw error;
     }
+  }
+
+  private requestGreeting(): void {
+    this.greetingAttempts += 1;
+    void this.remoteAudio?.play().catch(() => undefined);
+
+    this.send({
+      type: "response.create",
+      response: {
+        conversation: "none",
+        output_modalities: ["audio"],
+        max_output_tokens: 16,
+        instructions: "Di exactamente: Te escucho. No digas nada más.",
+      },
+    });
   }
 
   private send(payload: unknown): void {
@@ -225,6 +237,8 @@ export class F1RealtimeClient {
     }
 
     if (type === "output_audio_buffer.started") {
+      if (this.greetingPending) this.greetingAudioStarted = true;
+      void this.remoteAudio?.play().catch(() => undefined);
       this.options.callbacks.onAssistantSpeechStarted();
       return;
     }
@@ -265,6 +279,15 @@ export class F1RealtimeClient {
 
       for (const item of payload.response?.output ?? []) {
         if (item?.type === "function_call") await this.handleTool(item);
+      }
+
+      if (
+        this.greetingPending &&
+        !this.greetingAudioStarted &&
+        this.greetingAttempts < 2
+      ) {
+        await new Promise((resolve) => window.setTimeout(resolve, 300));
+        this.requestGreeting();
       }
       return;
     }
@@ -360,6 +383,9 @@ export class F1RealtimeClient {
     this.dc = null;
     this.stream = null;
     this.greetingPending = true;
+    this.greetingAudioStarted = false;
+    this.greetingAttempts = 0;
+    this.remoteAudio = null;
     this.executedCalls.clear();
   }
 }

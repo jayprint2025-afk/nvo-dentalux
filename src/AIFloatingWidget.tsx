@@ -3,6 +3,12 @@ import { MessagesSquare, Send, X, Trash2, Mic, MicOff, Bell, CalendarDays, Volum
 import { api } from "./lib/api";
 import { F1VoiceEngine, type F1VoiceEngineStatus } from "./services/f1-voice";
 import { F1AudioSessionController, F1RealtimeClient, type F1AudioSnapshot } from "./services/f1-realtime";
+import {
+  VoiceProfileService,
+  type VoiceProfile,
+  type VoiceProfileScope,
+  type VoiceProfileVerification,
+} from "./services/f1-voice-profile";
 
 /**
  * AIFloatingWidget
@@ -355,6 +361,13 @@ export default function AIFloatingWidget(props: { apiBase?: string; sucursalId?:
   const [wakeSettingsDraft, setWakeSettingsDraft] =
     React.useState<F1WakeSettings>(() => loadF1WakeSettings());
   const [wakeSettingsRevision, setWakeSettingsRevision] = React.useState(0);
+  const voiceProfileServiceRef = React.useRef(new VoiceProfileService());
+  const [voiceProfile, setVoiceProfile] = React.useState<VoiceProfile | null>(null);
+  const [voiceProfileName, setVoiceProfileName] = React.useState("Jonathan");
+  const [voiceProfileBusy, setVoiceProfileBusy] = React.useState(false);
+  const [voiceProfileMessage, setVoiceProfileMessage] = React.useState("");
+  const [voiceProfileVerification, setVoiceProfileVerification] =
+    React.useState<VoiceProfileVerification | null>(null);
   const f1VoiceEngineRef = React.useRef<F1VoiceEngine | null>(null);
   const [briefingPlaying, setBriefingPlaying] = React.useState(false);
   const [briefingLoading, setBriefingLoading] = React.useState(false);
@@ -382,6 +395,39 @@ export default function AIFloatingWidget(props: { apiBase?: string; sucursalId?:
     if (waPhoneNumberId) h["x-wa-phone-number-id"] = String(waPhoneNumberId);
     return h;
   }, [sucursalId, dbKey, appId, waPhoneNumberId]);
+
+  const voiceProfileScope = React.useMemo<VoiceProfileScope>(() => {
+    const token = localStorage.getItem("dentalux_auth_token") || "";
+    const identity = decodeJwtIdentity(token);
+    return {
+      tenantId: identity.tenant,
+      userId: identity.user,
+      branchKey: sucursalId || "sucursal_1",
+    };
+  }, [sucursalId]);
+
+  React.useEffect(() => {
+    let cancelled = false;
+
+    void voiceProfileServiceRef.current
+      .load(voiceProfileScope)
+      .then((profile) => {
+        if (cancelled) return;
+        setVoiceProfile(profile);
+        if (profile?.displayName) setVoiceProfileName(profile.displayName);
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setVoiceProfileMessage(
+            error instanceof Error ? error.message : String(error),
+          );
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [voiceProfileScope]);
 
   const loadConvs = React.useCallback(async () => {
     try {
@@ -1178,6 +1224,97 @@ const buildLeadReport = React.useCallback(() => {
     }
   }, []);
 
+  const recordVoiceProfileSample = React.useCallback(async () => {
+    try {
+      setVoiceProfileBusy(true);
+      setVoiceProfileMessage('Di “Hola F1” con tu voz normal…');
+      setVoiceProfileVerification(null);
+
+      const shouldRestart = f1VoiceEngineEnabled;
+      if (shouldRestart) await sessionControllerRef.current?.disable();
+
+      const profile = await voiceProfileServiceRef.current.addEnrollmentSample(
+        voiceProfileScope,
+        voiceProfileName,
+      );
+      setVoiceProfile(profile);
+      setVoiceProfileMessage(
+        `Muestra ${profile.samples.length} guardada para ${profile.displayName}.`,
+      );
+
+      if (shouldRestart) await sessionControllerRef.current?.enable();
+    } catch (error) {
+      setVoiceProfileMessage(
+        error instanceof Error ? error.message : String(error),
+      );
+      if (f1VoiceEngineEnabled) {
+        await sessionControllerRef.current?.enable().catch(() => undefined);
+      }
+    } finally {
+      setVoiceProfileBusy(false);
+    }
+  }, [f1VoiceEngineEnabled, voiceProfileName, voiceProfileScope]);
+
+  const testVoiceProfile = React.useCallback(async () => {
+    try {
+      setVoiceProfileBusy(true);
+      setVoiceProfileMessage('Di “Hola F1” para comparar tu voz…');
+
+      const shouldRestart = f1VoiceEngineEnabled;
+      if (shouldRestart) await sessionControllerRef.current?.disable();
+
+      const result = await voiceProfileServiceRef.current.test(voiceProfileScope);
+      setVoiceProfileVerification(result);
+      setVoiceProfileMessage(
+        result.matched
+          ? `Voz reconocida: ${voiceProfile?.displayName || voiceProfileName}.`
+          : "La muestra no coincidió con el perfil guardado.",
+      );
+
+      if (shouldRestart) await sessionControllerRef.current?.enable();
+    } catch (error) {
+      setVoiceProfileMessage(
+        error instanceof Error ? error.message : String(error),
+      );
+      if (f1VoiceEngineEnabled) {
+        await sessionControllerRef.current?.enable().catch(() => undefined);
+      }
+    } finally {
+      setVoiceProfileBusy(false);
+    }
+  }, [
+    f1VoiceEngineEnabled,
+    voiceProfile?.displayName,
+    voiceProfileName,
+    voiceProfileScope,
+  ]);
+
+  const saveVoiceProfileSettings = React.useCallback(async () => {
+    if (!voiceProfile) {
+      setVoiceProfileMessage("Primero registra una muestra de voz.");
+      return;
+    }
+
+    const updated = await voiceProfileServiceRef.current.update(voiceProfile, {
+      displayName: voiceProfileName,
+      enabled: voiceProfile.enabled,
+      acceptanceThreshold: voiceProfile.acceptanceThreshold,
+    });
+    setVoiceProfile(updated);
+    setVoiceProfileMessage("Perfil de voz actualizado.");
+  }, [voiceProfile, voiceProfileName]);
+
+  const removeVoiceProfile = React.useCallback(async () => {
+    if (!window.confirm("¿Eliminar todas las muestras de este perfil de voz?")) {
+      return;
+    }
+
+    await voiceProfileServiceRef.current.remove(voiceProfileScope);
+    setVoiceProfile(null);
+    setVoiceProfileVerification(null);
+    setVoiceProfileMessage("Perfil de voz eliminado.");
+  }, [voiceProfileScope]);
+
   const connectVoice = React.useCallback(async () => {
     await unlockF1Audio();
     await sessionControllerRef.current?.startManualConversation();
@@ -1215,7 +1352,7 @@ const buildLeadReport = React.useCallback(() => {
     controller = new F1AudioSessionController({
       wakeEngine: engine,
       onSnapshot: handleSnapshot,
-      onOpenWidget: () => { setOpen(true); setTab("f1"); },
+      // La activación por voz no abre el panel flotante.
       followupTimeoutMs: 5000,
       inactivityTimeoutMs: 15000,
       maxSessionMs: 120000,
@@ -2047,6 +2184,132 @@ const buildLeadReport = React.useCallback(() => {
                               className="mt-1 w-full rounded-lg border px-2 py-1"
                             />
                           </label>
+                        </div>
+
+                        <div className="mt-4 border-t pt-3">
+                          <div className="text-xs font-semibold">
+                            Perfil de voz del usuario
+                          </div>
+                          <div className="mt-1 text-[10px] text-gray-500">
+                            Guardado por empresa, usuario y sucursal en este
+                            dispositivo. Registra al menos 3 muestras.
+                          </div>
+
+                          <label className="mt-3 block text-[11px] text-gray-600">
+                            Nombre
+                            <input
+                              value={voiceProfileName}
+                              onChange={(event) =>
+                                setVoiceProfileName(event.target.value)
+                              }
+                              className="mt-1 w-full rounded-lg border bg-white px-2 py-1.5"
+                              placeholder="Jonathan"
+                            />
+                          </label>
+
+                          <div className="mt-3 rounded-lg border bg-white p-2 text-[11px] text-gray-600">
+                            Muestras registradas: {voiceProfile?.samples.length ?? 0}
+                            {voiceProfile?.updatedAt
+                              ? ` · Actualizado ${new Date(
+                                  voiceProfile.updatedAt,
+                                ).toLocaleDateString()}`
+                              : ""}
+                          </div>
+
+                          <div className="mt-2 grid grid-cols-2 gap-2">
+                            <button
+                              type="button"
+                              disabled={voiceProfileBusy}
+                              onClick={() => void recordVoiceProfileSample()}
+                              className="rounded-lg bg-emerald-600 px-2 py-2 text-xs text-white disabled:opacity-50"
+                            >
+                              {voiceProfileBusy
+                                ? "Grabando…"
+                                : 'Grabar “Hola F1”'}
+                            </button>
+                            <button
+                              type="button"
+                              disabled={
+                                voiceProfileBusy ||
+                                (voiceProfile?.samples.length ?? 0) < 3
+                              }
+                              onClick={() => void testVoiceProfile()}
+                              className="rounded-lg bg-indigo-600 px-2 py-2 text-xs text-white disabled:opacity-50"
+                            >
+                              Probar mi voz
+                            </button>
+                          </div>
+
+                          {voiceProfile && (
+                            <label className="mt-3 block text-[11px] text-gray-600">
+                              Coincidencia requerida:{" "}
+                              {Math.round(
+                                voiceProfile.acceptanceThreshold * 100,
+                              )}
+                              %
+                              <input
+                                type="range"
+                                min="0.75"
+                                max="0.98"
+                                step="0.01"
+                                value={voiceProfile.acceptanceThreshold}
+                                onChange={(event) =>
+                                  setVoiceProfile((current) =>
+                                    current
+                                      ? {
+                                          ...current,
+                                          acceptanceThreshold: Number(
+                                            event.target.value,
+                                          ),
+                                        }
+                                      : current,
+                                  )
+                                }
+                                className="mt-1 w-full"
+                              />
+                            </label>
+                          )}
+
+                          {voiceProfileVerification && (
+                            <div
+                              className={`mt-2 rounded-lg border p-2 text-xs ${
+                                voiceProfileVerification.matched
+                                  ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                                  : "border-amber-200 bg-amber-50 text-amber-800"
+                              }`}
+                            >
+                              Coincidencia:{" "}
+                              {Math.round(
+                                voiceProfileVerification.similarity * 100,
+                              )}
+                              %
+                            </div>
+                          )}
+
+                          {!!voiceProfileMessage && (
+                            <div className="mt-2 text-[11px] text-gray-600">
+                              {voiceProfileMessage}
+                            </div>
+                          )}
+
+                          <div className="mt-2 flex justify-between gap-2">
+                            <button
+                              type="button"
+                              disabled={!voiceProfile || voiceProfileBusy}
+                              onClick={() => void removeVoiceProfile()}
+                              className="rounded-lg border border-red-200 bg-white px-2 py-1.5 text-xs text-red-600 disabled:opacity-40"
+                            >
+                              Eliminar perfil
+                            </button>
+                            <button
+                              type="button"
+                              disabled={!voiceProfile || voiceProfileBusy}
+                              onClick={() => void saveVoiceProfileSettings()}
+                              className="rounded-lg border bg-white px-2 py-1.5 text-xs"
+                            >
+                              Guardar perfil
+                            </button>
+                          </div>
                         </div>
 
                         <div className="mt-3 flex justify-end gap-2">
