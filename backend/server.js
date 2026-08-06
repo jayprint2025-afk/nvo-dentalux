@@ -5242,7 +5242,7 @@ async function uniqueCompanySlug(client, name, excludeId = null) {
 }
 
 const companySelectSql = `
-  SELECT t.id, t.name, t.slug, t.plan, t.status,
+  SELECT t.id, t.name, t.slug, t.plan, t.status, t.whatsapp_enabled,
          COALESCE(owner_u.name, '') AS owner_name,
          COALESCE(owner_u.email, '') AS owner_email,
          COALESCE(first_b.name, '') AS branch_name,
@@ -5259,9 +5259,19 @@ const companySelectSql = `
   ) first_b ON TRUE`;
 
 function mapCompany(row) {
-  return { id: row.id, name: row.name, slug: row.slug, plan: row.plan, status: row.status,
-    ownerName: row.owner_name, ownerEmail: row.owner_email, branchName: row.branch_name,
-    phone: row.phone, address: row.address };
+  return {
+    id: row.id,
+    name: row.name,
+    slug: row.slug,
+    plan: row.plan,
+    status: row.status,
+    whatsappEnabled: row.whatsapp_enabled !== false,
+    ownerName: row.owner_name,
+    ownerEmail: row.owner_email,
+    branchName: row.branch_name,
+    phone: row.phone,
+    address: row.address
+  };
 }
 
 app.get('/api/companies', authRequired, companiesSuperAdminOnly, ah(async (_req, res) => {
@@ -5743,6 +5753,35 @@ app.patch('/api/companies/:id/suspend', authRequired, companiesSuperAdminOnly, a
   const { rows } = await poolDB1.query("UPDATE tenants SET status='suspended',updated_at=NOW() WHERE id=$1 RETURNING id,status", [req.params.id]);
   if (!rows[0]) return res.status(404).json({ error: 'Empresa no encontrada' });
   res.json({ ok:true, ...rows[0] });
+}));
+
+app.patch('/api/companies/:id/services/whatsapp', authRequired, companiesSuperAdminOnly, ah(async (req, res) => {
+  const enabled = req.body?.enabled;
+
+  if (typeof enabled !== 'boolean') {
+    return res.status(400).json({
+      error: 'El campo enabled debe ser booleano'
+    });
+  }
+
+  const { rows } = await poolDB1.query(
+    `UPDATE tenants
+        SET whatsapp_enabled = $1,
+            updated_at = NOW()
+      WHERE id = $2::uuid
+      RETURNING id, whatsapp_enabled`,
+    [enabled, req.params.id]
+  );
+
+  if (!rows[0]) {
+    return res.status(404).json({ error: 'Empresa no encontrada' });
+  }
+
+  res.json({
+    ok: true,
+    id: rows[0].id,
+    whatsappEnabled: rows[0].whatsapp_enabled
+  });
 }));
 // ===============================================================================
 
