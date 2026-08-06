@@ -224,9 +224,21 @@ function F1MultichannelCenter({
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [sending, setSending] = React.useState<ChannelKey | null>(null);
+  const [isMobile, setIsMobile] = React.useState(() => typeof window !== "undefined" && window.matchMedia("(max-width: 720px)").matches);
+  const [mobilePortal, setMobilePortal] = React.useState<ChannelKey>(initialChannel === "portals" ? "messenger" : initialChannel);
+  const [mobileView, setMobileView] = React.useState<Record<ChannelKey, "list" | "chat">>({ messenger: "list", whatsapp: "list", instagram: "list" });
   const chatScrollRefs = React.useRef<Record<ChannelKey, HTMLDivElement | null>>({ messenger: null, whatsapp: null, instagram: null });
   const messageSignatureRefs = React.useRef<Record<ChannelKey, string>>({ messenger: "", whatsapp: "", instagram: "" });
   const selectedIdRefs = React.useRef<Record<ChannelKey, number | null>>({ messenger: null, whatsapp: null, instagram: null });
+  const pendingScrollRefs = React.useRef<Record<ChannelKey, boolean>>({ messenger: false, whatsapp: false, instagram: false });
+
+  React.useEffect(() => {
+    const media = window.matchMedia("(max-width: 720px)");
+    const update = () => setIsMobile(media.matches);
+    update();
+    media.addEventListener?.("change", update);
+    return () => media.removeEventListener?.("change", update);
+  }, []);
 
   const scrollChatToBottom = React.useCallback((channel: ChannelKey, behavior: ScrollBehavior = "smooth") => {
     window.requestAnimationFrame(() => {
@@ -288,13 +300,21 @@ function F1MultichannelCenter({
       messageSignatureRefs.current[channel] = signature;
 
       if (conversationChanged || messagesChanged) {
+        pendingScrollRefs.current[channel] = true;
         setMessages(current => ({ ...current, [channel]: nextMessages }));
-        scrollChatToBottom(channel, conversationChanged ? "auto" : "smooth");
       }
     } catch (e: any) {
       setError(e?.message || String(e));
     }
   }, [API_BASE, headers, scrollChatToBottom]);
+
+  React.useLayoutEffect(() => {
+    (["messenger", "whatsapp"] as ChannelKey[]).forEach(channel => {
+      if (!pendingScrollRefs.current[channel]) return;
+      pendingScrollRefs.current[channel] = false;
+      scrollChatToBottom(channel, "auto");
+    });
+  }, [messages, scrollChatToBottom]);
 
   React.useEffect(() => { void loadConversations(); }, [loadConversations]);
   React.useEffect(() => {
@@ -372,43 +392,48 @@ function F1MultichannelCenter({
     const current = selected[channel];
     const paused = Boolean(current?.ai_paused ?? current?.state?.ai_paused);
     const Icon = channel === "messenger" ? MessageCircle : channel === "whatsapp" ? MessagesSquare : Instagram;
-    return <section className={`min-w-0 flex-1 rounded-xl border-2 ${theme.border} bg-white overflow-hidden flex flex-col`}>
+    const showMobileChat = isMobile && mobileView[channel] === "chat" && Boolean(current);
+    return <section className={`min-w-0 flex-1 rounded-xl border-2 ${theme.border} bg-white overflow-hidden flex flex-col h-full`}>
       <header className={`px-3 py-2 ${theme.soft} border-b flex items-center justify-between gap-2`}>
         <div className="flex items-center gap-2 min-w-0"><Icon className="w-4 h-4"/><b className="text-xs truncate">{theme.label}</b><span className={`text-[10px] text-white rounded-full px-1.5 ${theme.strong}`}>{counts[channel]}</span></div>
         <button disabled={!current || channel === "instagram"} onClick={() => current && pauseConversation(channel, current)} className="text-[10px] bg-white border rounded-md px-2 py-1 inline-flex items-center gap-1 disabled:opacity-40">
           {paused ? <Unlock className="w-3 h-3"/> : <Lock className="w-3 h-3"/>}{paused ? "Activar AI" : "Pause AI"}
         </button>
       </header>
-      {channel === "instagram" ? <div className="flex-1 grid place-items-center p-6 text-center bg-gradient-to-b from-white to-fuchsia-50"><div><Instagram className="w-10 h-10 mx-auto mb-3 text-fuchsia-500"/><b className="text-sm">Instagram AI</b><p className="text-xs text-gray-500 mt-1">Sin configurar</p><p className="text-[11px] text-gray-400 mt-3">Portal preparado para conectarse más adelante.</p></div></div> : <div className="flex-1 min-h-0 grid grid-cols-[42%_58%]">
-        <div className="border-r min-w-0 flex flex-col">
+      {channel === "instagram" ? <div className="flex-1 grid place-items-center p-6 text-center bg-gradient-to-b from-white to-fuchsia-50"><div><Instagram className="w-10 h-10 mx-auto mb-3 text-fuchsia-500"/><b className="text-sm">Instagram AI</b><p className="text-xs text-gray-500 mt-1">Sin configurar</p><p className="text-[11px] text-gray-400 mt-3">Portal preparado para conectarse más adelante.</p></div></div> : <div className="flex-1 min-h-0 grid grid-cols-[42%_58%] max-[720px]:grid-cols-1">
+        <div className={`border-r min-w-0 flex flex-col min-h-0 ${showMobileChat ? "max-[720px]:hidden" : ""}`}>
           <div className="p-2 border-b"><div className="relative"><Search className="absolute left-2 top-2 w-3.5 h-3.5 text-gray-400"/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder={`Buscar en ${theme.label}...`} className="w-full pl-7 pr-2 py-1.5 border rounded-md text-[10px]"/></div></div>
           <div className="flex-1 overflow-auto">
-            {rows.map(row => { const rowPaused=Boolean(row.ai_paused ?? row.state?.ai_paused); return <button key={row.id} onClick={()=>setSelected(c=>({...c,[channel]:row}))} className={`w-full text-left p-2 border-b hover:${theme.soft} ${current?.id===row.id?theme.soft:""}`}>
+            {rows.map(row => { const rowPaused=Boolean(row.ai_paused ?? row.state?.ai_paused); return <button key={row.id} onClick={()=>{ setSelected(c=>({...c,[channel]:row})); pendingScrollRefs.current[channel]=true; if(isMobile) setMobileView(v=>({...v,[channel]:"chat"})); }} className={`w-full text-left p-2 border-b hover:${theme.soft} ${current?.id===row.id?theme.soft:""}`}>
               <div className="flex gap-2"><div className={`w-7 h-7 rounded-full ${theme.strong} text-white grid place-items-center text-[10px] shrink-0`}><User className="w-3.5 h-3.5"/></div><div className="min-w-0 flex-1"><div className="flex justify-between gap-1"><b className="text-[10px] truncate">{row.title || `Conversación #${row.id}`}</b><span className="text-[8px] text-gray-400">{row.last_message_at ? new Date(row.last_message_at).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"}) : ""}</span></div><p className="text-[9px] text-gray-500 truncate">{row.last_message || "Sin mensajes"}</p><span className={`text-[8px] ${rowPaused?"text-amber-600":"text-emerald-600"}`}>● {rowPaused?"AI en pausa":"AI activa"}</span></div>{Number(row.unread_count)>0&&<span className={`${theme.strong} text-white text-[8px] rounded-full min-w-4 h-4 grid place-items-center`}>{row.unread_count}</span>}</div>
             </button>})}
             {!rows.length && <div className="p-4 text-center text-[10px] text-gray-400">Sin conversaciones</div>}
           </div>
         </div>
-        <div className="min-w-0 flex flex-col bg-gray-50/40">
-          <div className="px-2 py-1.5 border-b bg-white flex justify-between items-center"><span className="text-[10px] font-semibold truncate">{current?.title || "Selecciona una conversación"}</span>{current&&<span className={`text-[8px] px-2 py-0.5 rounded-full ${paused?"bg-amber-100 text-amber-700":"bg-emerald-100 text-emerald-700"}`}>{paused?"AI en pausa":"AI activa"}</span>}</div>
-          <div ref={el => { chatScrollRefs.current[channel] = el; }} className="flex-1 min-h-0 overflow-auto p-2">
+        <div className={`min-w-0 flex flex-col min-h-0 bg-gray-50/40 ${isMobile && !showMobileChat ? "max-[720px]:hidden" : ""}`}>
+          <div className="px-2 py-1.5 border-b bg-white flex justify-between items-center gap-2">
+            <div className="min-w-0 flex items-center gap-2">{isMobile && <button type="button" onClick={()=>setMobileView(v=>({...v,[channel]:"list"}))} className="border rounded-md px-2 py-1 text-[10px]">← Chats</button>}<span className="text-[10px] font-semibold truncate">{current?.title || "Selecciona una conversación"}</span></div>{current&&<span className={`text-[8px] px-2 py-0.5 rounded-full ${paused?"bg-amber-100 text-amber-700":"bg-emerald-100 text-emerald-700"}`}>{paused?"AI en pausa":"AI activa"}</span>}</div>
+          <div ref={el => { chatScrollRefs.current[channel] = el; }} className="flex-1 min-h-0 overflow-y-auto overscroll-contain touch-pan-y p-2" style={{ WebkitOverflowScrolling: "touch", touchAction: "pan-y" }}>
             {(messages[channel]||[]).map(m=><div key={m.id} className={`mb-1.5 flex ${m.role==="user"?"justify-start":"justify-end"}`}><div className={`max-w-[88%] px-2 py-1.5 rounded-xl text-[10px] shadow-sm ${m.role==="user"?"bg-white border text-gray-700":`${theme.strong} text-white`}`}><div className="whitespace-pre-wrap">{stripInternalJson(m.content)}</div><div className={`text-[8px] mt-1 ${m.role==="user"?"text-gray-400":"text-white/70"}`}>{new Date(m.created_at).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"})}</div></div></div>)}
           </div>
-          <div className="p-2 border-t bg-white"><div className="text-[8px] mb-1 text-emerald-600">● {paused ? "AI en pausa · respuesta manual habilitada" : "AI respondiendo"}</div><div className="flex gap-1"><input disabled={!current} value={drafts[channel]} onChange={e=>setDrafts(d=>({...d,[channel]:e.target.value}))} onKeyDown={e=>{if(e.key==="Enter") void sendManual(channel)}} placeholder="Escribe un mensaje..." className="min-w-0 flex-1 border rounded-md px-2 py-1.5 text-[10px]"/><button disabled={!current||sending===channel||!drafts[channel].trim()} onClick={()=>void sendManual(channel)} className={`${theme.strong} text-white rounded-md px-2 disabled:opacity-40`}><Send className="w-3.5 h-3.5"/></button></div></div>
+          <div className="shrink-0 p-2 border-t bg-white sticky bottom-0 z-10"><div className="text-[8px] mb-1 text-emerald-600">● {paused ? "AI en pausa · respuesta manual habilitada" : "AI respondiendo"}</div><div className="flex gap-1"><input disabled={!current} value={drafts[channel]} onChange={e=>setDrafts(d=>({...d,[channel]:e.target.value}))} onKeyDown={e=>{if(e.key==="Enter") void sendManual(channel)}} placeholder="Escribe un mensaje..." className="min-w-0 flex-1 border rounded-md px-2 py-1.5 text-[10px]"/><button disabled={!current||sending===channel||!drafts[channel].trim()} onClick={()=>void sendManual(channel)} className={`${theme.strong} text-white rounded-md px-2 disabled:opacity-40`}><Send className="w-3.5 h-3.5"/></button></div></div>
         </div>
       </div>}
     </section>;
   };
 
-  const channels: ChannelKey[] = initialChannel === "portals" ? ["messenger","whatsapp","instagram"] : [initialChannel];
-  return <div className="h-full min-h-0 bg-slate-50 p-2 flex gap-2 overflow-hidden">
-    <aside className="w-40 shrink-0 rounded-xl border bg-white p-2 overflow-auto">
+  const channels: ChannelKey[] = initialChannel === "portals" ? (isMobile ? [mobilePortal] : ["messenger","whatsapp","instagram"]) : [initialChannel];
+  return <div className="h-full min-h-0 bg-slate-50 p-2 flex flex-col gap-2 overflow-hidden">
+    {isMobile && initialChannel === "portals" && <div className="shrink-0 grid grid-cols-3 gap-1">{(["messenger","whatsapp","instagram"] as ChannelKey[]).map(channel => <button key={channel} onClick={()=>{setMobilePortal(channel); setMobileView(v=>({...v,[channel]:"list"}));}} className={`rounded-lg border px-2 py-2 text-[10px] font-semibold ${mobilePortal===channel ? palette[channel].soft + " " + palette[channel].border : "bg-white"}`}>{palette[channel].label}</button>)}</div>}
+    <div className="flex flex-1 min-h-0 gap-2 overflow-hidden">
+    <aside className="w-40 shrink-0 max-[720px]:hidden rounded-xl border bg-white p-2 overflow-auto">
       <b className="text-[11px]">Todos los portales</b><div className="mt-2 space-y-1 text-[10px]"><button onClick={()=>setStatus("all")} className="w-full flex justify-between rounded px-2 py-1.5 bg-blue-50"><span>Todos</span><b>{conversations.length}</b></button><div className="flex justify-between px-2 py-1"><span>Messenger AI</span><b>{counts.messenger}</b></div><div className="flex justify-between px-2 py-1"><span>WhatsApp AI</span><b>{counts.whatsapp}</b></div><div className="flex justify-between px-2 py-1"><span>Instagram AI</span><b>0</b></div></div>
       <div className="border-t mt-3 pt-3"><b className="text-[11px]">Estados</b><div className="mt-2 space-y-1 text-[10px]"><button onClick={()=>setStatus("active")} className="w-full flex justify-between px-2 py-1"><span className="text-emerald-600">● Activos</span><b>{activeCount}</b></button><button onClick={()=>setStatus("paused")} className="w-full flex justify-between px-2 py-1"><span className="text-amber-600">● En pausa</span><b>{pausedCount}</b></button><button onClick={()=>setStatus("unassigned")} className="w-full flex justify-between px-2 py-1"><span>● Sin asignar</span><b>{conversations.filter(c=>!c.state?.assigned_to).length}</b></button></div></div>
       <div className="border-t mt-3 pt-3"><b className="text-[11px]">Filtros</b><select value={status} onChange={e=>setStatus(e.target.value as any)} className="w-full mt-2 border rounded px-2 py-1.5 text-[10px]"><option value="all">Todos los estados</option><option value="active">Activos</option><option value="paused">En pausa</option><option value="unassigned">Sin asignar</option></select></div>
       <button onClick={()=>void loadConversations()} className="mt-4 w-full border rounded px-2 py-1.5 text-[10px] inline-flex items-center justify-center gap-1"><RefreshCw className={`w-3 h-3 ${loading?"animate-spin":""}`}/>Actualizar</button>
     </aside>
-    <main className="min-w-0 flex-1 flex gap-2">{channels.map(channel=><Portal key={channel} channel={channel}/>)}</main>
+    <main className="min-w-0 flex-1 min-h-0 flex gap-2">{channels.map(channel=><Portal key={channel} channel={channel}/>)}</main>
+    </div>
     {error&&<div className="absolute bottom-3 left-1/2 -translate-x-1/2 bg-red-600 text-white text-xs px-3 py-2 rounded-lg shadow">{error}</div>}
   </div>;
 }
