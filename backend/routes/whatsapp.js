@@ -1211,6 +1211,59 @@ async function markProcessed(wamid) {
   await qBypass(`INSERT INTO wa_processed (wamid) VALUES ($1) ON CONFLICT DO NOTHING`, [wamid]);
 }
 
+
+async function resolveRegisteredWhatsappReceptionist(phoneNumberId) {
+  const pid = String(phoneNumberId || '').trim();
+  if (!pid) return null;
+
+  const { rows } = await qBypass(
+    `SELECT
+       cc.tenant_id,
+       cc.active,
+       cc.is_active,
+       cc.config,
+       cc.metadata,
+       t.status AS tenant_status,
+       COALESCE(t.whatsapp_enabled, TRUE) AS whatsapp_enabled
+     FROM clinic_channels cc
+     JOIN tenants t ON t.id = cc.tenant_id
+     WHERE cc.channel = 'whatsapp'
+       AND (
+         cc.phone_number_id = $1
+         OR cc.external_id = $1
+         OR cc.config->>'phoneNumberId' = $1
+         OR cc.config->>'phone_number_id' = $1
+       )
+     ORDER BY cc.updated_at DESC NULLS LAST, cc.id DESC
+     LIMIT 1`,
+    [pid]
+  );
+
+  const row = rows[0];
+  if (!row) return null;
+
+  const config = row.config && typeof row.config === 'object' ? row.config : {};
+  const metadata = row.metadata && typeof row.metadata === 'object' ? row.metadata : {};
+
+  return {
+    tenantId: String(row.tenant_id || '').trim(),
+    phoneNumberId: pid,
+    accessToken: String(
+      config.accessToken ||
+      config.access_token ||
+      metadata.accessToken ||
+      metadata.access_token ||
+      process.env.WHATSAPP_ACCESS_TOKEN ||
+      ''
+    ).trim(),
+    active:
+      row.active !== false &&
+      row.is_active !== false &&
+      String(row.tenant_status || '').toLowerCase() === 'active',
+    mode: String(config.mode || metadata.mode || 'receptionist').toLowerCase()
+  };
+}
+
 // --- WhatsApp / Config ---
 const PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID;
 const ACCESS_TOKEN    = process.env.WHATSAPP_ACCESS_TOKEN;
@@ -1249,14 +1302,19 @@ const CONTACTS_PHONE_COLUMN = process.env.CONTACTS_PHONE_COLUMN || process.env.A
 
 // --- WhatsApp senders ---
 async function waPost(payload, { context = '' } = {}) {
-  if (!PHONE_NUMBER_ID || !ACCESS_TOKEN) {
-    throw new Error('WHATSAPP env vars missing (PHONE_NUMBER_ID / ACCESS_TOKEN)');
+  const store = als.getStore();
+  const outboundPhoneNumberId = String(store?.waPhoneNumberId || PHONE_NUMBER_ID || '').trim();
+  const outboundAccessToken = String(store?.waAccessToken || ACCESS_TOKEN || '').trim();
+
+  if (!outboundPhoneNumberId || !outboundAccessToken) {
+    throw new Error('WhatsApp credentials missing (phone_number_id / access token)');
   }
-  const url = `https://graph.facebook.com/v20.0/${PHONE_NUMBER_ID}/messages`;
+
+  const url = `https://graph.facebook.com/v20.0/${outboundPhoneNumberId}/messages`;
 
   const r = await fetch(url, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${ACCESS_TOKEN}`, 'Content-Type': 'application/json' },
+    headers: { Authorization: `Bearer ${outboundAccessToken}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   });
 
@@ -1617,10 +1675,15 @@ router.post('/webhook', async (req, res) => {
     const a = entry?.changes?.[0]?.value;
     const phoneNumberId = String(a?.metadata?.phone_number_id || '').trim() || null;
     const aiPhoneNumberId = phoneNumberId || process.env.WHATSAPP_PHONE_NUMBER_ID || process.env.AI_DEFAULT_PHONE_NUMBER_ID || null;
+    const registeredReceptionist = phoneNumberId
+      ? await resolveRegisteredWhatsappReceptionist(phoneNumberId)
+      : null;
 
     console.log('📱 PHONE_NUMBER_ID:', {
       received: phoneNumberId,
-      env_allowed: process.env.WA_ALLOWED_PHONE_NUMBER_IDS
+      env_allowed: process.env.WA_ALLOWED_PHONE_NUMBER_IDS,
+      registered_receptionist: Boolean(registeredReceptionist),
+      tenant_id: registeredReceptionist?.tenantId || null
     });
 
     // ✅ Aislamiento por phone_number_id con auto-allow del ID actual
@@ -1638,6 +1701,10 @@ router.post('/webhook', async (req, res) => {
         // O si está en la lista explícita
         else if (allowed.includes(phoneNumberId)) {
           console.log('✅ PHONE_NUMBER_ID IN ALLOWED LIST - ALLOWING');
+        }
+        // Los canales guardados desde Empresas > Canales se autorizan desde PostgreSQL.
+        else if (registeredReceptionist) {
+          console.log('✅ PHONE_NUMBER_ID REGISTERED IN clinic_channels - ALLOWING');
         }
         // De lo contrario, rechazar con mensaje útil
         else {
@@ -1742,6 +1809,117 @@ router.post('/webhook', async (req, res) => {
     }
     
     console.log('📝 TEXT AFTER BUTTON MAPPING:', text);
+
+
+    // =========================================================
+    // RECEPCIONISTA WHATSAPP SAAS
+    // Un Phone Number ID registrado en Empresas > Canales usa V5.
+    // El número global de Render conserva el flujo legacy de recordatorios.
+    // =========================================================
+    const legacyReminderNumberId = String(process.env.WHATSAPP_PHONE_NUMBER_ID || '').trim();
+    const isDedicatedReceptionistNumber =
+      registeredReceptionist &&
+      phoneNumberId &&
+      phoneNumberId !== legacyReminderNumberId;
+
+    if (isDedicatedReceptionistNumber) {
+      if (!registeredReceptionist.active) {
+        console.log('⏸️ Recepcionista WhatsApp suspendida; mensaje ignorado', {
+          phoneNumberId,
+          tenantId: registeredReceptionist.tenantId
+        });
+        await markProcessed(wamid);
+        return res.sendStatus(200);
+      }
+
+      if (!registeredReceptionist.tenantId) {
+        console.error('🚫 Canal WhatsApp registrado sin tenant_id', { phoneNumberId });
+        await markProcessed(wamid);
+        return res.sendStatus(200);
+      }
+
+      const waStore = als.getStore();
+      if (waStore) {
+        waStore.tenantId = registeredReceptionist.tenantId;
+        waStore.dbKey = 'db1';
+        waStore.pool = poolDB1;
+        waStore.waPhoneNumberId = phoneNumberId;
+        waStore.waAccessToken = registeredReceptionist.accessToken;
+      }
+
+      console.log('🧭 WhatsApp receptionist route', {
+        phoneNumberId,
+        tenantId: registeredReceptionist.tenantId,
+        type: 'clinic',
+        engine: 'v5',
+        source: 'clinic_channels'
+      });
+
+      try {
+        const conversationId = await ensureAiConversationForPhone({
+          phone: from,
+          sucursalId: null,
+          phoneNumberId,
+          dbKey: 'db1'
+        });
+
+        if (!conversationId) {
+          await safeReply(from, 'No pude iniciar la conversación. Intenta de nuevo por favor.');
+          await markProcessed(wamid);
+          return res.sendStatus(200);
+        }
+
+        await logAiMessage(conversationId, 'user', text, {
+          source: 'whatsapp',
+          wa_phone: from,
+          phone_number_id: phoneNumberId,
+          wamid
+        }).catch(() => {});
+
+        const convNow = await getAiConversationById(conversationId).catch(() => null);
+        const sucForAi = convNow?.state?.wa_sucursal || convNow?.sucursal_id || null;
+
+        const ai = await callAiChatInternal({
+          conversationId,
+          message: text,
+          phone: from,
+          sucursalId: sucForAi,
+          dbKey: 'db1',
+          phoneNumberId
+        });
+
+        await safeReply(from, ai.reply);
+
+        await logWa({
+          direction: 'outgoing',
+          phone: from,
+          message: ai.reply,
+          status: ai.ok ? 'sent' : 'failed',
+          sucursalId: sucForAi,
+          appointmentId: null,
+          waMessageId: null,
+          manual: false,
+          tenantId: registeredReceptionist.tenantId
+        });
+
+        await logAiMessage(conversationId, 'assistant', ai.reply, {
+          source: 'whatsapp',
+          used: 'receptionist_v5',
+          phone_number_id: phoneNumberId
+        }).catch(() => {});
+
+        await markProcessed(wamid);
+        return res.sendStatus(200);
+      } catch (error) {
+        console.error('❌ Recepcionista WhatsApp V5:', error?.message || error);
+        await safeReply(
+          from,
+          'Estoy teniendo un problema técnico. Intenta nuevamente en un momento.'
+        ).catch(() => {});
+        await markProcessed(wamid);
+        return res.sendStatus(200);
+      }
+    }
 
     const tenantResolution = await resolveIncomingTenant({ from, contextId, text });
     if (!tenantResolution.tenantId) {

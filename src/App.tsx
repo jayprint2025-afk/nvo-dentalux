@@ -1393,6 +1393,33 @@ function EmpresasModule() {
     }
   };
 
+
+  const toggleWhatsappReceptionist = async (empresa: Empresa, enabled: boolean) => {
+    setChannelsLoading(true);
+    setChannelMessage('');
+
+    try {
+      await api(`/companies/${empresa.id}/services/whatsapp-receptionist`, {
+        method: 'PATCH',
+        body: JSON.stringify({ enabled })
+      });
+
+      setChannelMessage(
+        enabled
+          ? `Recepcionista virtual de WhatsApp activada para ${empresa.name}.`
+          : `Recepcionista virtual de WhatsApp suspendida para ${empresa.name}.`
+      );
+
+      await loadChannels(empresa);
+    } catch (e: any) {
+      setChannelMessage(
+        `Error: ${e?.message || 'No se pudo cambiar el estado de la recepcionista de WhatsApp'}`
+      );
+    } finally {
+      setChannelsLoading(false);
+    }
+  };
+
   const toggleMessengerService = async (empresa: Empresa, enabled: boolean) => {
     setChannelsLoading(true);
     setChannelMessage('');
@@ -1839,7 +1866,9 @@ function EmpresasModule() {
                 </label>
 
                 <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-xs text-blue-800">
-                  Messenger usa el Page ID para escoger la empresa, sus doctores, servicios y agenda. El token se guarda sólo en el backend y nunca vuelve a mostrarse en pantalla.
+                  {channelForm.channel === 'messenger'
+                        ? 'Messenger usa el Page ID para escoger la empresa, sus doctores, servicios y agenda. El token se guarda sólo en el backend y nunca vuelve a mostrarse en pantalla.'
+                        : 'Este WhatsApp se usará exclusivamente para la Recepcionista V5. El número actual de recordatorios y su cronjob no se modifican.'}
                 </div>
 
                 <div className="flex justify-end gap-2">

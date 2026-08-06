@@ -5580,7 +5580,11 @@ function mapCompanyChannel(row) {
       config.pageAccessToken ||
       config.page_access_token ||
       metadata.pageAccessToken ||
-      metadata.page_access_token
+      metadata.page_access_token ||
+      config.accessToken ||
+      config.access_token ||
+      metadata.accessToken ||
+      metadata.access_token
     ),
 
     wabaId:
@@ -5590,12 +5594,7 @@ function mapCompanyChannel(row) {
       metadata.waba_id ||
       '',
 
-    accessToken:
-      config.accessToken ||
-      config.access_token ||
-      metadata.accessToken ||
-      metadata.access_token ||
-      '',
+    accessToken: '',
 
     config,
     metadata,
@@ -5741,7 +5740,9 @@ app.post(
         if (duplicate.rows[0]) {
           await client.query('ROLLBACK');
           return res.status(409).json({
-            error: `Este Page ID ya está conectado a la empresa ${duplicate.rows[0].tenant_name || duplicate.rows[0].tenant_id}.`
+            error: channel === 'messenger'
+              ? `Este Page ID ya está conectado a la empresa ${duplicate.rows[0].tenant_name || duplicate.rows[0].tenant_id}.`
+              : `Este Phone Number ID ya está conectado a la empresa ${duplicate.rows[0].tenant_name || duplicate.rows[0].tenant_id}.`
           });
         }
       }
@@ -5765,6 +5766,8 @@ app.post(
         if (accessToken) config.pageAccessToken = accessToken;
       } else {
         config.phoneNumberId = externalId;
+        config.mode = 'receptionist';
+        metadata.mode = 'receptionist';
         if (accessToken) config.accessToken = accessToken;
       }
 
@@ -6119,6 +6122,74 @@ app.patch(
       id: rows[0].id,
       whatsappEnabled: rows[0].whatsapp_enabled
     });
+  })
+);
+
+
+app.patch(
+  '/api/companies/:id/services/whatsapp-receptionist',
+  authRequired,
+  companiesSuperAdminOnly,
+  ah(async (req, res) => {
+    const enabled = req.body?.enabled;
+
+    if (typeof enabled !== 'boolean') {
+      return res.status(400).json({
+        error: 'El campo enabled debe ser booleano'
+      });
+    }
+
+    const tenantId = req.params.id;
+    const client = await poolDB1.connect();
+
+    try {
+      await client.query('BEGIN');
+      await client.query(`SELECT set_config('app.tenant_bypass', 'on', true)`);
+
+      const { rows: tenantRows } = await client.query(
+        `SELECT id
+           FROM tenants
+          WHERE id = $1::uuid
+          LIMIT 1`,
+        [tenantId]
+      );
+
+      if (!tenantRows[0]) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({ error: 'Empresa no encontrada' });
+      }
+
+      const { rows } = await client.query(
+        `UPDATE clinic_channels
+            SET active = $1,
+                is_active = $1,
+                updated_at = NOW()
+          WHERE tenant_id = $2::uuid
+            AND channel = 'whatsapp'
+          RETURNING id, tenant_id, channel, active, is_active`,
+        [enabled, tenantId]
+      );
+
+      if (!rows.length) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({
+          error: 'Esta empresa todavía no tiene un canal de WhatsApp para la recepcionista configurado'
+        });
+      }
+
+      await client.query('COMMIT');
+
+      res.json({
+        ok: true,
+        whatsappReceptionistEnabled: enabled,
+        updatedChannels: rows.length
+      });
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
   })
 );
 
