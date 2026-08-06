@@ -6520,6 +6520,27 @@ app.get('/api/f1/channels/conversations', authRequired, ah(async (req, res) => {
   res.json(result.rows);
 }));
 
+app.get('/api/f1/channels/conversations/:id/messages', authRequired, ah(async (req, res) => {
+  const tenantId = getTenantId(req);
+  const conversationId = Number(req.params.id);
+  if (!conversationId) return res.status(400).json({ error: 'Conversación inválida' });
+
+  const conversation = await q(
+    `SELECT id FROM ai_conversations WHERE id=$1 AND tenant_id=$2 LIMIT 1`,
+    [conversationId, tenantId]
+  );
+  if (!conversation.rows[0]) return res.status(404).json({ error: 'Conversación no encontrada' });
+
+  const result = await q(`
+    SELECT id, conversation_id, role, content, created_at, meta
+      FROM ai_messages
+     WHERE conversation_id=$1 AND tenant_id=$2
+     ORDER BY created_at ASC, id ASC
+     LIMIT 1000`, [conversationId, tenantId]);
+
+  res.json(result.rows);
+}));
+
 app.patch('/api/f1/channels/conversations/:id/pause', authRequired, ah(async (req, res) => {
   const tenantId = getTenantId(req);
   const conversationId = Number(req.params.id);

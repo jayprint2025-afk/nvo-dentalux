@@ -265,7 +265,7 @@ function F1MultichannelCenter({
       return;
     }
     try {
-      const response = await fetch(`${API_BASE}/api/ai/conversations/${conversation.id}/messages`, { headers });
+      const response = await fetch(`${API_BASE}/api/f1/channels/conversations/${conversation.id}/messages`, { headers });
       const data = await response.json().catch(() => []);
       if (!response.ok) throw new Error(data?.error || `HTTP ${response.status}`);
       setMessages(current => ({ ...current, [channel]: Array.isArray(data) ? data : [] }));
@@ -1694,28 +1694,28 @@ const buildLeadReport = React.useCallback(() => {
 
   // ===== Effects IA =====
   React.useEffect(() => {
-    if (!open) return;
+    if (!open || (tab !== "convs" && tab !== "chat")) return;
     loadConvs();
-  }, [open, loadConvs]);
+  }, [open, tab, loadConvs]);
 
   React.useEffect(() => {
-    if (!open) return;
+    if (!open || (tab !== "convs" && tab !== "chat")) return;
     const t = setInterval(() => loadConvsSilent(), 3000);
     return () => clearInterval(t);
-  }, [open, loadConvsSilent]);
+  }, [open, tab, loadConvsSilent]);
 
   React.useEffect(() => {
-    if (!open) return;
+    if (!open || tab !== "chat") return;
     if (selectedConv?.id) loadMsgs(selectedConv.id);
-  }, [open, selectedConv?.id, loadMsgs]);
+  }, [open, tab, selectedConv?.id, loadMsgs]);
 
   React.useEffect(() => {
-    if (!open) return;
+    if (!open || tab !== "chat") return;
     const id = selectedConv?.id;
     if (!id) return;
     const t = setInterval(() => loadMsgsSilent(id), 2000);
     return () => clearInterval(t);
-  }, [open, selectedConv?.id, loadMsgsSilent]);
+  }, [open, tab, selectedConv?.id, loadMsgsSilent]);
 
   // ===== Effects Ventas =====
   React.useEffect(() => {
