@@ -224,7 +224,17 @@ function F1MultichannelCenter({
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [sending, setSending] = React.useState<ChannelKey | null>(null);
-  const bottomRefs = React.useRef<Record<ChannelKey, HTMLDivElement | null>>({ messenger: null, whatsapp: null, instagram: null });
+  const chatScrollRefs = React.useRef<Record<ChannelKey, HTMLDivElement | null>>({ messenger: null, whatsapp: null, instagram: null });
+  const messageSignatureRefs = React.useRef<Record<ChannelKey, string>>({ messenger: "", whatsapp: "", instagram: "" });
+  const selectedIdRefs = React.useRef<Record<ChannelKey, number | null>>({ messenger: null, whatsapp: null, instagram: null });
+
+  const scrollChatToBottom = React.useCallback((channel: ChannelKey, behavior: ScrollBehavior = "smooth") => {
+    window.requestAnimationFrame(() => {
+      const container = chatScrollRefs.current[channel];
+      if (!container) return;
+      container.scrollTo({ top: container.scrollHeight, behavior });
+    });
+  }, []);
 
   const normalizeChannel = (value: unknown): ChannelKey => {
     const c = String(value || "").toLowerCase();
@@ -268,11 +278,23 @@ function F1MultichannelCenter({
       const response = await fetch(`${API_BASE}/api/f1/channels/conversations/${conversation.id}/messages`, { headers });
       const data = await response.json().catch(() => []);
       if (!response.ok) throw new Error(data?.error || `HTTP ${response.status}`);
-      setMessages(current => ({ ...current, [channel]: Array.isArray(data) ? data : [] }));
+      const nextMessages: Msg[] = Array.isArray(data) ? data : [];
+      const last = nextMessages[nextMessages.length - 1];
+      const signature = `${nextMessages.length}:${last?.id ?? ""}:${last?.created_at ?? ""}:${last?.content ?? ""}`;
+      const conversationChanged = selectedIdRefs.current[channel] !== conversation.id;
+      const messagesChanged = messageSignatureRefs.current[channel] !== signature;
+
+      selectedIdRefs.current[channel] = conversation.id;
+      messageSignatureRefs.current[channel] = signature;
+
+      if (conversationChanged || messagesChanged) {
+        setMessages(current => ({ ...current, [channel]: nextMessages }));
+        scrollChatToBottom(channel, conversationChanged ? "auto" : "smooth");
+      }
     } catch (e: any) {
       setError(e?.message || String(e));
     }
-  }, [API_BASE, headers]);
+  }, [API_BASE, headers, scrollChatToBottom]);
 
   React.useEffect(() => { void loadConversations(); }, [loadConversations]);
   React.useEffect(() => {
@@ -288,11 +310,6 @@ function F1MultichannelCenter({
     }, 2500);
     return () => window.clearInterval(timer);
   }, [selected.messenger, selected.whatsapp, loadMessages]);
-  React.useEffect(() => {
-    (["messenger", "whatsapp", "instagram"] as ChannelKey[]).forEach(channel => {
-      bottomRefs.current[channel]?.scrollIntoView({ behavior: "smooth", block: "end" });
-    });
-  }, [messages]);
 
   const byChannel = React.useCallback((channel: ChannelKey) => conversations.filter(row => normalizeChannel(row.channel) === channel), [conversations]);
   const filtered = React.useCallback((channel: ChannelKey) => byChannel(channel).filter(row => {
@@ -374,9 +391,8 @@ function F1MultichannelCenter({
         </div>
         <div className="min-w-0 flex flex-col bg-gray-50/40">
           <div className="px-2 py-1.5 border-b bg-white flex justify-between items-center"><span className="text-[10px] font-semibold truncate">{current?.title || "Selecciona una conversación"}</span>{current&&<span className={`text-[8px] px-2 py-0.5 rounded-full ${paused?"bg-amber-100 text-amber-700":"bg-emerald-100 text-emerald-700"}`}>{paused?"AI en pausa":"AI activa"}</span>}</div>
-          <div className="flex-1 min-h-0 overflow-auto p-2">
+          <div ref={el => { chatScrollRefs.current[channel] = el; }} className="flex-1 min-h-0 overflow-auto p-2">
             {(messages[channel]||[]).map(m=><div key={m.id} className={`mb-1.5 flex ${m.role==="user"?"justify-start":"justify-end"}`}><div className={`max-w-[88%] px-2 py-1.5 rounded-xl text-[10px] shadow-sm ${m.role==="user"?"bg-white border text-gray-700":`${theme.strong} text-white`}`}><div className="whitespace-pre-wrap">{stripInternalJson(m.content)}</div><div className={`text-[8px] mt-1 ${m.role==="user"?"text-gray-400":"text-white/70"}`}>{new Date(m.created_at).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"})}</div></div></div>)}
-            <div ref={el => { bottomRefs.current[channel]=el; }}/>
           </div>
           <div className="p-2 border-t bg-white"><div className="text-[8px] mb-1 text-emerald-600">● {paused ? "AI en pausa · respuesta manual habilitada" : "AI respondiendo"}</div><div className="flex gap-1"><input disabled={!current} value={drafts[channel]} onChange={e=>setDrafts(d=>({...d,[channel]:e.target.value}))} onKeyDown={e=>{if(e.key==="Enter") void sendManual(channel)}} placeholder="Escribe un mensaje..." className="min-w-0 flex-1 border rounded-md px-2 py-1.5 text-[10px]"/><button disabled={!current||sending===channel||!drafts[channel].trim()} onClick={()=>void sendManual(channel)} className={`${theme.strong} text-white rounded-md px-2 disabled:opacity-40`}><Send className="w-3.5 h-3.5"/></button></div></div>
         </div>
