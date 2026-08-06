@@ -4232,18 +4232,69 @@ const FB_PAGE_TOKENS_JSON = process.env.FB_PAGE_TOKENS_JSON || '';
 // (Compatibilidad) Token único - evita usarlo si manejas varias páginas
 const FB_PAGE_ACCESS_TOKEN = process.env.FB_PAGE_ACCESS_TOKEN || '';
 
-function getFbPageToken(pageId) {
+async function getFbPageToken(pageId) {
   const pid = String(pageId || '').trim();
+  if (!pid) return '';
+
+  // Fuente principal: token guardado por empresa desde Empresas > Canales.
+  // Se usa bypass controlado porque el webhook todavía no conoce el tenant.
+  const client = await poolDB1.connect();
+
+  try {
+    await client.query('BEGIN');
+    await client.query(`SELECT set_config('app.tenant_bypass', 'on', true)`);
+
+    const { rows } = await client.query(
+      `SELECT
+         COALESCE(
+           NULLIF(config->>'pageAccessToken', ''),
+           NULLIF(config->>'page_access_token', ''),
+           NULLIF(metadata->>'pageAccessToken', ''),
+           NULLIF(metadata->>'page_access_token', '')
+         ) AS page_access_token
+       FROM clinic_channels
+       WHERE channel IN ('messenger', 'facebook')
+         AND COALESCE(active, TRUE) = TRUE
+         AND COALESCE(is_active, TRUE) = TRUE
+         AND (
+           external_id = $1
+           OR phone_number_id = $1
+           OR config->>'pageId' = $1
+           OR config->>'page_id' = $1
+           OR metadata->>'pageId' = $1
+           OR metadata->>'page_id' = $1
+         )
+       ORDER BY updated_at DESC NULLS LAST, id DESC
+       LIMIT 1`,
+      [pid]
+    );
+
+    await client.query('COMMIT');
+
+    const databaseToken = String(rows?.[0]?.page_access_token || '').trim();
+    if (databaseToken) return databaseToken;
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.warn(
+      '⚠️ No se pudo obtener el token de Messenger desde clinic_channels:',
+      error.message
+    );
+  } finally {
+    client.release();
+  }
+
+  // Compatibilidad temporal con instalaciones antiguas.
   if (FB_PAGE_TOKENS_JSON) {
     try {
       const map = JSON.parse(FB_PAGE_TOKENS_JSON);
-      const tok = map && map[pid];
-      if (tok) return String(tok);
-    } catch (e) {
+      const token = String(map?.[pid] || '').trim();
+      if (token) return token;
+    } catch (error) {
       console.warn('⚠️ FB_PAGE_TOKENS_JSON inválido; debe ser JSON.');
     }
   }
-  return FB_PAGE_ACCESS_TOKEN || '';
+
+  return String(FB_PAGE_ACCESS_TOKEN || '').trim();
 }
 
 const MESSENGER_CONSULTORIO_PAGE_IDS = String(process.env.MESSENGER_CONSULTORIO_PAGE_IDS || '')
@@ -4262,7 +4313,7 @@ function getPublicBaseUrl(req) {
 }
 
 async function fbSendText(psid, text, pageId) {
-  const token = getFbPageToken(pageId);
+  const token = await getFbPageToken(pageId);
   if (!token) {
     console.warn('⚠️ No hay token para responder Messenger (FB_PAGE_TOKENS_JSON/FB_PAGE_ACCESS_TOKEN). pageId=', String(pageId||''));
     return;
@@ -5415,12 +5466,13 @@ function mapCompanyChannel(row) {
       metadata.page_id ||
       '',
 
-    pageAccessToken:
+    pageAccessToken: '',
+    hasAccessToken: Boolean(
       config.pageAccessToken ||
       config.page_access_token ||
       metadata.pageAccessToken ||
-      metadata.page_access_token ||
-      '',
+      metadata.page_access_token
+    ),
 
     wabaId:
       config.wabaId ||
