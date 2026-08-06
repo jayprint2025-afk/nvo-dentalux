@@ -70,6 +70,19 @@ function isSuperAdminSession(): boolean {
   );
 }
 
+const F1_ALLOWED_EMAILS = new Set([
+  SUPERADMIN_EMAIL_FALLBACK.toLowerCase(),
+  'yaneth_90_93@hotmail.com',
+]);
+
+function isF1AllowedSession(): boolean {
+  return readJwtPayloadsFromStorage().some((payload) => {
+    const role = String(payload?.role || '').toLowerCase();
+    const email = String(payload?.email || '').trim().toLowerCase();
+    return role === 'superadmin' || F1_ALLOWED_EMAILS.has(email);
+  });
+}
+
 // === Hoisted helpers to avoid TDZ for lab summaries ===
 function totalAbonado(t: any) {
   try { return (t?.abonos ?? []).reduce((s: number, a: any) => s + Number(a?.monto ?? 0), 0); }
@@ -1964,6 +1977,7 @@ function EmpresasModule() {
 
 export default function App(){
   const isSuperAdmin = React.useMemo(() => isSuperAdminSession(), []);
+  const canUseF1 = React.useMemo(() => isF1AllowedSession(), []);
   // Connection status
   const [isOnline, setIsOnline] = useState(true);
   const [isLoading, setIsLoading] = useState(true);
@@ -6590,8 +6604,8 @@ const [to, setTo] = useState<string>(defaultTo);
     sucursalId={getSucursalActual() || 'sucursal_1'}
   />
 )}
-{/* 🤖 F1 Copilot: visible únicamente para el usuario principal / superadministrador */}
-{isSuperAdmin && (
+{/* 🤖 F1 Copilot: habilitado para superadministración y usuarios autorizados */}
+{canUseF1 && (
   <AIFloatingWidget
     sucursalId={getSucursalActual() || 'sucursal_1'}
     dbKey="db2"
