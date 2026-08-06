@@ -6078,6 +6078,44 @@ app.put('/api/companies/:id', authRequired, companiesSuperAdminOnly, ah(async (r
   } finally { client.release(); }
 }));
 
+
+
+app.delete(
+  '/api/companies/:id/channels/:channelId',
+  authRequired,
+  companiesSuperAdminOnly,
+  ah(async (req,res)=>{
+    const tenantId=req.params.id;
+    const channelId=Number(req.params.channelId);
+    if(!Number.isInteger(channelId)){
+      return res.status(400).json({error:'Canal inválido'});
+    }
+    const client=await poolDB1.connect();
+    try{
+      await client.query('BEGIN');
+      await client.query(`SELECT set_config('app.tenant_bypass','on',true)`);
+      const {rows}=await client.query(
+        `DELETE FROM clinic_channels
+          WHERE id=$1
+            AND tenant_id=$2::uuid
+          RETURNING id,channel,name`,
+        [channelId,tenantId]
+      );
+      if(!rows.length){
+        await client.query('ROLLBACK');
+        return res.status(404).json({error:'Canal no encontrado para esta empresa'});
+      }
+      await client.query('COMMIT');
+      res.json({ok:true,deleted:rows[0]});
+    }catch(e){
+      await client.query('ROLLBACK').catch(()=>{});
+      throw e;
+    }finally{
+      client.release();
+    }
+  })
+);
+
 app.patch('/api/companies/:id/activate', authRequired, companiesSuperAdminOnly, ah(async (req, res) => {
   const { rows } = await poolDB1.query("UPDATE tenants SET status='active',updated_at=NOW() WHERE id=$1 RETURNING id,status", [req.params.id]);
   if (!rows[0]) return res.status(404).json({ error: 'Empresa no encontrada' });
