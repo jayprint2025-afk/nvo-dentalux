@@ -294,6 +294,20 @@ async function requireSucursalSelection({ from, text, conversationId }) {
 
 // Llama al handler IA del mismo backend (usa booking flow real con BD)
 async function callAiChatInternal({ conversationId, message, phone, sucursalId, dbKey, phoneNumberId }) {
+  // Pause AI es por conversación: los mensajes siguen llegando, pero V5 no responde.
+  try {
+    const pausedCheck = await q(
+      `SELECT COALESCE((state->>'ai_paused')::boolean, false) AS ai_paused
+         FROM ai_conversations WHERE id = $1 LIMIT 1`,
+      [Number(conversationId)]
+    );
+    if (pausedCheck.rows[0]?.ai_paused === true) {
+      console.log('⏸️ [WhatsApp] AI pausada para conversación', conversationId);
+      return { ok: true, paused: true, reply: '' };
+    }
+  } catch (pauseError) {
+    console.warn('⚠️ No se pudo consultar Pause AI:', pauseError.message);
+  }
   const url = `${INTERNAL_BASE_URL}/api/ai/chat`;
   const payload = {
     conversationId,
@@ -1888,7 +1902,9 @@ router.post('/webhook', async (req, res) => {
           phoneNumberId
         });
 
-        await safeReply(from, ai.reply);
+        if (ai.paused) { await markProcessed(wamid); return res.sendStatus(200); }
+        if (ai.paused) { await markProcessed(wamid); return res.sendStatus(200); }
+    await safeReply(from, ai.reply);
 
         await logWa({
           direction: 'outgoing',
@@ -2090,6 +2106,7 @@ router.post('/webhook', async (req, res) => {
           phoneNumberId
         });
 
+        if (aiResp?.paused) { await markProcessed(wamid); return res.sendStatus(200); }
         const reply = (aiResp && aiResp.reply) ? aiResp.reply : 'Perfecto 😊 ¿En qué puedo ayudarte?';
         await safeReply(from, reply);
         console.log('✅ AI RESPONSE SENT');

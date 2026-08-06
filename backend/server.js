@@ -4988,6 +4988,17 @@ async function resolveMessengerAssistantRoute(pageId) {
 
 async function callAiChatForMessenger(senderId, pageId, msgText, req) {
   const pid = String(pageId || '').trim();
+  try {
+    const tenantId = await resolveMessengerTenantId(pid, poolDB1);
+    const conversationId = await getOrCreateAiConversationIdForMessenger(pid, senderId, 'db1', tenantId);
+    const paused = await q(`SELECT COALESCE((state->>'ai_paused')::boolean, false) AS value FROM ai_conversations WHERE id=$1 AND tenant_id=$2`, [conversationId, tenantId]);
+    if (paused.rows[0]?.value === true) {
+      console.log('⏸️ [Messenger] AI pausada para conversación', conversationId);
+      return { disabled: true, paused: true, reply: '' };
+    }
+  } catch (pauseError) {
+    console.warn('⚠️ No se pudo consultar Pause AI de Messenger:', pauseError.message);
+  }
   const route = await resolveMessengerAssistantRoute(pid);
 
   console.log('🧭 Messenger assistant route', {
@@ -6480,6 +6491,83 @@ async function ensureWhatsAppTenantIsolationSchema() {
     client.release();
   }
 }
+
+
+// ===============================================================================
+// F1 CENTRO MULTICANAL AI — conversaciones reales, pausa individual y respuesta manual
+app.get('/api/f1/channels/conversations', authRequired, ah(async (req, res) => {
+  const tenantId = getTenantId(req);
+  const result = await q(`
+    SELECT c.id, c.title, c.created_at, c.updated_at, c.sucursal_id,
+           COALESCE(c.channel, c.state->>'source', 'web') AS channel,
+           c.external_id, c.phone_number_id, c.state,
+           COALESCE((c.state->>'ai_paused')::boolean, false) AS ai_paused,
+           COALESCE((c.state->>'unread_count')::int, 0) AS unread_count,
+           lm.content AS last_message,
+           lm.created_at AS last_message_at
+      FROM ai_conversations c
+      LEFT JOIN LATERAL (
+        SELECT m.content, m.created_at
+          FROM ai_messages m
+         WHERE m.conversation_id = c.id
+         ORDER BY m.created_at DESC, m.id DESC
+         LIMIT 1
+      ) lm ON TRUE
+     WHERE c.tenant_id = $1
+       AND COALESCE(c.channel, c.state->>'source', 'web') IN ('messenger','facebook','whatsapp')
+     ORDER BY COALESCE(lm.created_at, c.updated_at, c.created_at) DESC
+     LIMIT 500`, [tenantId]);
+  res.json(result.rows);
+}));
+
+app.patch('/api/f1/channels/conversations/:id/pause', authRequired, ah(async (req, res) => {
+  const tenantId = getTenantId(req);
+  const conversationId = Number(req.params.id);
+  const paused = req.body?.paused === true;
+  if (!conversationId) return res.status(400).json({ error: 'Conversación inválida' });
+  const result = await q(`
+    UPDATE ai_conversations
+       SET state = jsonb_set(COALESCE(state, '{}'::jsonb), '{ai_paused}', to_jsonb($3::boolean), true),
+           updated_at = NOW()
+     WHERE id = $1 AND tenant_id = $2
+     RETURNING id, state, COALESCE((state->>'ai_paused')::boolean, false) AS ai_paused`,
+    [conversationId, tenantId, paused]);
+  if (!result.rows[0]) return res.status(404).json({ error: 'Conversación no encontrada' });
+  res.json(result.rows[0]);
+}));
+
+app.post('/api/f1/channels/conversations/:id/messages', authRequired, ah(async (req, res) => {
+  const tenantId = getTenantId(req);
+  const conversationId = Number(req.params.id);
+  const message = String(req.body?.message || '').trim();
+  if (!conversationId || !message) return res.status(400).json({ error: 'Mensaje requerido' });
+  const convResult = await q(`SELECT id, channel, external_id, phone_number_id, sucursal_id, state FROM ai_conversations WHERE id=$1 AND tenant_id=$2 LIMIT 1`, [conversationId, tenantId]);
+  const conversation = convResult.rows[0];
+  if (!conversation) return res.status(404).json({ error: 'Conversación no encontrada' });
+  const channel = String(conversation.channel || conversation.state?.source || '').toLowerCase();
+  if (channel === 'whatsapp') {
+    const phone = conversation.state?.wa_phone || conversation.state?.phone;
+    if (!phone) return res.status(400).json({ error: 'La conversación no tiene teléfono asociado' });
+    const response = await fetch(`http://127.0.0.1:${PORT}/api/whatsapp/send-message`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: req.headers.authorization, 'x-sucursal': conversation.sucursal_id || getSucursal(req) },
+      body: JSON.stringify({ phone, message })
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) return res.status(response.status).json({ error: data?.error || 'No se pudo enviar por WhatsApp' });
+  } else if (channel === 'messenger' || channel === 'facebook') {
+    const psid = conversation.state?.psid || conversation.external_id;
+    const pageId = conversation.state?.page_id || conversation.phone_number_id;
+    if (!psid || !pageId) return res.status(400).json({ error: 'La conversación no tiene PSID/Page ID asociados' });
+    await fbSendText(String(psid), message, String(pageId));
+  } else {
+    return res.status(400).json({ error: 'Canal no compatible con respuesta manual' });
+  }
+  const saved = await q(`INSERT INTO ai_messages(conversation_id, role, content, meta, tenant_id) VALUES($1,'assistant',$2,$3::jsonb,$4) RETURNING *`, [conversationId, message, JSON.stringify({ manual: true, source: channel }), tenantId]);
+  await q(`UPDATE ai_conversations SET updated_at=NOW() WHERE id=$1 AND tenant_id=$2`, [conversationId, tenantId]);
+  res.json({ ok: true, message: saved.rows[0] });
+}));
+// ===============================================================================
 
 // ===============================================================================
 // F1 COPILOT — gestión por texto y voz OpenAI Realtime

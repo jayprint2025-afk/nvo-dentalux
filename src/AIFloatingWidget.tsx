@@ -1,5 +1,6 @@
 import React from "react";
-import { MessagesSquare, Send, X, Trash2, Mic, MicOff, Bell, CalendarDays, Volume2, Settings2 } from "lucide-react";
+import { MessagesSquare, Send, X, Trash2, Mic, MicOff, Bell, CalendarDays, Volume2, Settings2,
+  Search, Filter, Lock, Unlock, MessageCircle, Instagram, RefreshCw, User, Inbox } from "lucide-react";
 import { api } from "./lib/api";
 import { F1VoiceEngine, type F1VoiceEngineStatus } from "./services/f1-voice";
 import { F1AudioSessionController, F1RealtimeClient, type F1AudioSnapshot } from "./services/f1-realtime";
@@ -192,6 +193,210 @@ function stripInternalJson(content: string): string {
 }
 
 
+
+type ChannelKey = "messenger" | "whatsapp" | "instagram";
+type ChannelConversation = Conversation & {
+  channel?: string | null;
+  external_id?: string | null;
+  phone_number_id?: string | null;
+  state?: Record<string, any> | null;
+  ai_paused?: boolean;
+  unread_count?: number;
+  last_message?: string | null;
+  last_message_at?: string | null;
+};
+
+function F1MultichannelCenter({
+  API_BASE,
+  headers,
+  initialChannel = "portals",
+}: {
+  API_BASE: string;
+  headers: Record<string, string>;
+  initialChannel?: "portals" | ChannelKey;
+}) {
+  const [conversations, setConversations] = React.useState<ChannelConversation[]>([]);
+  const [selected, setSelected] = React.useState<Record<ChannelKey, ChannelConversation | null>>({ messenger: null, whatsapp: null, instagram: null });
+  const [messages, setMessages] = React.useState<Record<ChannelKey, Msg[]>>({ messenger: [], whatsapp: [], instagram: [] });
+  const [drafts, setDrafts] = React.useState<Record<ChannelKey, string>>({ messenger: "", whatsapp: "", instagram: "" });
+  const [query, setQuery] = React.useState("");
+  const [status, setStatus] = React.useState<"all" | "active" | "paused" | "unassigned">("all");
+  const [loading, setLoading] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+  const [sending, setSending] = React.useState<ChannelKey | null>(null);
+  const bottomRefs = React.useRef<Record<ChannelKey, HTMLDivElement | null>>({ messenger: null, whatsapp: null, instagram: null });
+
+  const normalizeChannel = (value: unknown): ChannelKey => {
+    const c = String(value || "").toLowerCase();
+    if (c === "facebook" || c === "messenger") return "messenger";
+    if (c === "whatsapp") return "whatsapp";
+    return "instagram";
+  };
+
+  const loadConversations = React.useCallback(async () => {
+    if (!API_BASE) return;
+    try {
+      setLoading(true);
+      setError(null);
+      const response = await fetch(`${API_BASE}/api/f1/channels/conversations`, { headers });
+      const data = await response.json().catch(() => []);
+      if (!response.ok) throw new Error(data?.error || `HTTP ${response.status}`);
+      const rows = Array.isArray(data) ? data : [];
+      setConversations(rows);
+      setSelected(current => {
+        const next = { ...current };
+        (["messenger", "whatsapp"] as ChannelKey[]).forEach(channel => {
+          const available = rows.filter((row: ChannelConversation) => normalizeChannel(row.channel) === channel);
+          const currentStillExists = current[channel] && available.some((row: ChannelConversation) => row.id === current[channel]?.id);
+          if (!currentStillExists) next[channel] = available[0] || null;
+        });
+        return next;
+      });
+    } catch (e: any) {
+      setError(e?.message || String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, [API_BASE, headers]);
+
+  const loadMessages = React.useCallback(async (channel: ChannelKey, conversation: ChannelConversation | null) => {
+    if (!conversation || channel === "instagram") {
+      setMessages(current => ({ ...current, [channel]: [] }));
+      return;
+    }
+    try {
+      const response = await fetch(`${API_BASE}/api/ai/conversations/${conversation.id}/messages`, { headers });
+      const data = await response.json().catch(() => []);
+      if (!response.ok) throw new Error(data?.error || `HTTP ${response.status}`);
+      setMessages(current => ({ ...current, [channel]: Array.isArray(data) ? data : [] }));
+    } catch (e: any) {
+      setError(e?.message || String(e));
+    }
+  }, [API_BASE, headers]);
+
+  React.useEffect(() => { void loadConversations(); }, [loadConversations]);
+  React.useEffect(() => {
+    const timer = window.setInterval(() => void loadConversations(), 3500);
+    return () => window.clearInterval(timer);
+  }, [loadConversations]);
+  React.useEffect(() => { void loadMessages("messenger", selected.messenger); }, [selected.messenger, loadMessages]);
+  React.useEffect(() => { void loadMessages("whatsapp", selected.whatsapp); }, [selected.whatsapp, loadMessages]);
+  React.useEffect(() => {
+    const timer = window.setInterval(() => {
+      void loadMessages("messenger", selected.messenger);
+      void loadMessages("whatsapp", selected.whatsapp);
+    }, 2500);
+    return () => window.clearInterval(timer);
+  }, [selected.messenger, selected.whatsapp, loadMessages]);
+  React.useEffect(() => {
+    (["messenger", "whatsapp", "instagram"] as ChannelKey[]).forEach(channel => {
+      bottomRefs.current[channel]?.scrollIntoView({ behavior: "smooth", block: "end" });
+    });
+  }, [messages]);
+
+  const byChannel = React.useCallback((channel: ChannelKey) => conversations.filter(row => normalizeChannel(row.channel) === channel), [conversations]);
+  const filtered = React.useCallback((channel: ChannelKey) => byChannel(channel).filter(row => {
+    const paused = Boolean(row.ai_paused ?? row.state?.ai_paused);
+    if (status === "active" && paused) return false;
+    if (status === "paused" && !paused) return false;
+    if (status === "unassigned" && row.state?.assigned_to) return false;
+    const haystack = `${row.title || ""} ${row.external_id || ""} ${row.last_message || ""}`.toLowerCase();
+    return haystack.includes(query.trim().toLowerCase());
+  }), [byChannel, query, status]);
+
+  const pauseConversation = async (channel: ChannelKey, conversation: ChannelConversation) => {
+    const paused = Boolean(conversation.ai_paused ?? conversation.state?.ai_paused);
+    try {
+      const response = await fetch(`${API_BASE}/api/f1/channels/conversations/${conversation.id}/pause`, {
+        method: "PATCH", headers, body: JSON.stringify({ paused: !paused }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data?.error || `HTTP ${response.status}`);
+      await loadConversations();
+      setSelected(current => ({ ...current, [channel]: { ...conversation, ai_paused: !paused, state: { ...(conversation.state || {}), ai_paused: !paused } } }));
+    } catch (e: any) { setError(e?.message || String(e)); }
+  };
+
+  const sendManual = async (channel: ChannelKey) => {
+    const conversation = selected[channel];
+    const text = drafts[channel].trim();
+    if (!conversation || !text || channel === "instagram") return;
+    try {
+      setSending(channel);
+      const response = await fetch(`${API_BASE}/api/f1/channels/conversations/${conversation.id}/messages`, {
+        method: "POST", headers, body: JSON.stringify({ message: text }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data?.error || `HTTP ${response.status}`);
+      setDrafts(current => ({ ...current, [channel]: "" }));
+      await loadMessages(channel, conversation);
+      await loadConversations();
+    } catch (e: any) { setError(e?.message || String(e)); }
+    finally { setSending(null); }
+  };
+
+  const counts = {
+    messenger: byChannel("messenger").length,
+    whatsapp: byChannel("whatsapp").length,
+    instagram: 0,
+  };
+  const pausedCount = conversations.filter(c => Boolean(c.ai_paused ?? c.state?.ai_paused)).length;
+  const activeCount = Math.max(0, conversations.length - pausedCount);
+
+  const palette: Record<ChannelKey, { border: string; soft: string; strong: string; label: string }> = {
+    messenger: { border: "border-blue-400", soft: "bg-blue-50", strong: "bg-blue-600", label: "Messenger AI" },
+    whatsapp: { border: "border-emerald-400", soft: "bg-emerald-50", strong: "bg-emerald-600", label: "WhatsApp AI" },
+    instagram: { border: "border-fuchsia-400", soft: "bg-fuchsia-50", strong: "bg-fuchsia-600", label: "Instagram AI" },
+  };
+
+  const Portal = ({ channel }: { channel: ChannelKey }) => {
+    const theme = palette[channel];
+    const rows = filtered(channel);
+    const current = selected[channel];
+    const paused = Boolean(current?.ai_paused ?? current?.state?.ai_paused);
+    const Icon = channel === "messenger" ? MessageCircle : channel === "whatsapp" ? MessagesSquare : Instagram;
+    return <section className={`min-w-0 flex-1 rounded-xl border-2 ${theme.border} bg-white overflow-hidden flex flex-col`}>
+      <header className={`px-3 py-2 ${theme.soft} border-b flex items-center justify-between gap-2`}>
+        <div className="flex items-center gap-2 min-w-0"><Icon className="w-4 h-4"/><b className="text-xs truncate">{theme.label}</b><span className={`text-[10px] text-white rounded-full px-1.5 ${theme.strong}`}>{counts[channel]}</span></div>
+        <button disabled={!current || channel === "instagram"} onClick={() => current && pauseConversation(channel, current)} className="text-[10px] bg-white border rounded-md px-2 py-1 inline-flex items-center gap-1 disabled:opacity-40">
+          {paused ? <Unlock className="w-3 h-3"/> : <Lock className="w-3 h-3"/>}{paused ? "Activar AI" : "Pause AI"}
+        </button>
+      </header>
+      {channel === "instagram" ? <div className="flex-1 grid place-items-center p-6 text-center bg-gradient-to-b from-white to-fuchsia-50"><div><Instagram className="w-10 h-10 mx-auto mb-3 text-fuchsia-500"/><b className="text-sm">Instagram AI</b><p className="text-xs text-gray-500 mt-1">Sin configurar</p><p className="text-[11px] text-gray-400 mt-3">Portal preparado para conectarse más adelante.</p></div></div> : <div className="flex-1 min-h-0 grid grid-cols-[42%_58%]">
+        <div className="border-r min-w-0 flex flex-col">
+          <div className="p-2 border-b"><div className="relative"><Search className="absolute left-2 top-2 w-3.5 h-3.5 text-gray-400"/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder={`Buscar en ${theme.label}...`} className="w-full pl-7 pr-2 py-1.5 border rounded-md text-[10px]"/></div></div>
+          <div className="flex-1 overflow-auto">
+            {rows.map(row => { const rowPaused=Boolean(row.ai_paused ?? row.state?.ai_paused); return <button key={row.id} onClick={()=>setSelected(c=>({...c,[channel]:row}))} className={`w-full text-left p-2 border-b hover:${theme.soft} ${current?.id===row.id?theme.soft:""}`}>
+              <div className="flex gap-2"><div className={`w-7 h-7 rounded-full ${theme.strong} text-white grid place-items-center text-[10px] shrink-0`}><User className="w-3.5 h-3.5"/></div><div className="min-w-0 flex-1"><div className="flex justify-between gap-1"><b className="text-[10px] truncate">{row.title || `Conversación #${row.id}`}</b><span className="text-[8px] text-gray-400">{row.last_message_at ? new Date(row.last_message_at).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"}) : ""}</span></div><p className="text-[9px] text-gray-500 truncate">{row.last_message || "Sin mensajes"}</p><span className={`text-[8px] ${rowPaused?"text-amber-600":"text-emerald-600"}`}>● {rowPaused?"AI en pausa":"AI activa"}</span></div>{Number(row.unread_count)>0&&<span className={`${theme.strong} text-white text-[8px] rounded-full min-w-4 h-4 grid place-items-center`}>{row.unread_count}</span>}</div>
+            </button>})}
+            {!rows.length && <div className="p-4 text-center text-[10px] text-gray-400">Sin conversaciones</div>}
+          </div>
+        </div>
+        <div className="min-w-0 flex flex-col bg-gray-50/40">
+          <div className="px-2 py-1.5 border-b bg-white flex justify-between items-center"><span className="text-[10px] font-semibold truncate">{current?.title || "Selecciona una conversación"}</span>{current&&<span className={`text-[8px] px-2 py-0.5 rounded-full ${paused?"bg-amber-100 text-amber-700":"bg-emerald-100 text-emerald-700"}`}>{paused?"AI en pausa":"AI activa"}</span>}</div>
+          <div className="flex-1 min-h-0 overflow-auto p-2">
+            {(messages[channel]||[]).map(m=><div key={m.id} className={`mb-1.5 flex ${m.role==="user"?"justify-start":"justify-end"}`}><div className={`max-w-[88%] px-2 py-1.5 rounded-xl text-[10px] shadow-sm ${m.role==="user"?"bg-white border text-gray-700":`${theme.strong} text-white`}`}><div className="whitespace-pre-wrap">{stripInternalJson(m.content)}</div><div className={`text-[8px] mt-1 ${m.role==="user"?"text-gray-400":"text-white/70"}`}>{new Date(m.created_at).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"})}</div></div></div>)}
+            <div ref={el => { bottomRefs.current[channel]=el; }}/>
+          </div>
+          <div className="p-2 border-t bg-white"><div className="text-[8px] mb-1 text-emerald-600">● {paused ? "AI en pausa · respuesta manual habilitada" : "AI respondiendo"}</div><div className="flex gap-1"><input disabled={!current} value={drafts[channel]} onChange={e=>setDrafts(d=>({...d,[channel]:e.target.value}))} onKeyDown={e=>{if(e.key==="Enter") void sendManual(channel)}} placeholder="Escribe un mensaje..." className="min-w-0 flex-1 border rounded-md px-2 py-1.5 text-[10px]"/><button disabled={!current||sending===channel||!drafts[channel].trim()} onClick={()=>void sendManual(channel)} className={`${theme.strong} text-white rounded-md px-2 disabled:opacity-40`}><Send className="w-3.5 h-3.5"/></button></div></div>
+        </div>
+      </div>}
+    </section>;
+  };
+
+  const channels: ChannelKey[] = initialChannel === "portals" ? ["messenger","whatsapp","instagram"] : [initialChannel];
+  return <div className="h-full min-h-0 bg-slate-50 p-2 flex gap-2 overflow-hidden">
+    <aside className="w-40 shrink-0 rounded-xl border bg-white p-2 overflow-auto">
+      <b className="text-[11px]">Todos los portales</b><div className="mt-2 space-y-1 text-[10px]"><button onClick={()=>setStatus("all")} className="w-full flex justify-between rounded px-2 py-1.5 bg-blue-50"><span>Todos</span><b>{conversations.length}</b></button><div className="flex justify-between px-2 py-1"><span>Messenger AI</span><b>{counts.messenger}</b></div><div className="flex justify-between px-2 py-1"><span>WhatsApp AI</span><b>{counts.whatsapp}</b></div><div className="flex justify-between px-2 py-1"><span>Instagram AI</span><b>0</b></div></div>
+      <div className="border-t mt-3 pt-3"><b className="text-[11px]">Estados</b><div className="mt-2 space-y-1 text-[10px]"><button onClick={()=>setStatus("active")} className="w-full flex justify-between px-2 py-1"><span className="text-emerald-600">● Activos</span><b>{activeCount}</b></button><button onClick={()=>setStatus("paused")} className="w-full flex justify-between px-2 py-1"><span className="text-amber-600">● En pausa</span><b>{pausedCount}</b></button><button onClick={()=>setStatus("unassigned")} className="w-full flex justify-between px-2 py-1"><span>● Sin asignar</span><b>{conversations.filter(c=>!c.state?.assigned_to).length}</b></button></div></div>
+      <div className="border-t mt-3 pt-3"><b className="text-[11px]">Filtros</b><select value={status} onChange={e=>setStatus(e.target.value as any)} className="w-full mt-2 border rounded px-2 py-1.5 text-[10px]"><option value="all">Todos los estados</option><option value="active">Activos</option><option value="paused">En pausa</option><option value="unassigned">Sin asignar</option></select></div>
+      <button onClick={()=>void loadConversations()} className="mt-4 w-full border rounded px-2 py-1.5 text-[10px] inline-flex items-center justify-center gap-1"><RefreshCw className={`w-3 h-3 ${loading?"animate-spin":""}`}/>Actualizar</button>
+    </aside>
+    <main className="min-w-0 flex-1 flex gap-2">{channels.map(channel=><Portal key={channel} channel={channel}/>)}</main>
+    {error&&<div className="absolute bottom-3 left-1/2 -translate-x-1/2 bg-red-600 text-white text-xs px-3 py-2 rounded-lg shadow">{error}</div>}
+  </div>;
+}
+
 export default function AIFloatingWidget(props: { apiBase?: string; sucursalId?: string; dbKey?: string; appId?: string }) {
   const env = (import.meta as any).env || {};
   const API_BASE = (
@@ -214,7 +419,7 @@ export default function AIFloatingWidget(props: { apiBase?: string; sucursalId?:
 
   const [open, setOpen] = React.useState(false);
   const [closing, setClosing] = React.useState(false);
-  const [tab, setTab] = React.useState<"f1" | "convs" | "chat" | "ventas">("f1");
+  const [tab, setTab] = React.useState<"f1" | "portals" | "messenger" | "whatsapp" | "instagram" | "convs" | "chat" | "ventas">("f1");
 
   // Robot flotante (draggable) + persistencia
   const ROBOT_SIZE = 92; // grande y visible
@@ -1926,7 +2131,8 @@ const buildLeadReport = React.useCallback(() => {
                 className="text-xs px-2 py-1 rounded bg-white border hover:bg-gray-100"
                 onClick={() => {
                   if (tab === "ventas") loadLeads();
-                  else loadConvs();
+                  else if (tab === "convs" || tab === "chat") loadConvs();
+                  else window.dispatchEvent(new CustomEvent("f1:channels-refresh"));
                 }}
                 title="Refrescar"
               >
@@ -1942,41 +2148,19 @@ const buildLeadReport = React.useCallback(() => {
               </div>
           </div>
 
-          {/* Tabs */}
-          <div className="flex border-b overflow-x-auto">
-            <button
-              className={`flex-1 min-w-[110px] px-3 py-2 text-sm ${tab === "f1" ? "bg-white font-semibold" : "bg-gray-50"}`}
-              onClick={() => {
-                setTab("f1");
-                setF1UnreadEvents(0);
-              }}
-            >
-              <span className="inline-flex items-center gap-2"><Mic className="w-4 h-4" /> F1 Gestión</span>
-            </button>
-            <button
-              className={`flex-1 min-w-[110px] px-3 py-2 text-sm ${tab === "convs" ? "bg-white font-semibold" : "bg-gray-50"}`}
-              onClick={() => setTab("convs")}
-            >
-              <span className="inline-flex items-center gap-2">
-                <MessagesSquare className="w-4 h-4" /> Conversaciones
-              </span>
-            </button>
-            <button
-              className={`flex-1 min-w-[110px] px-3 py-2 text-sm ${tab === "chat" ? "bg-white font-semibold" : "bg-gray-50"}`}
-              onClick={() => setTab("chat")}
-            >
-              <span className="inline-flex items-center gap-2">
-                <Send className="w-4 h-4" /> Responder
-              </span>
-            </button>
-            <button
-              className={`flex-1 min-w-[110px] px-3 py-2 text-sm ${tab === "ventas" ? "bg-white font-semibold" : "bg-gray-50"}`}
-              onClick={() => setTab("ventas")}
-            >
-              <span className="inline-flex items-center gap-2">
-                💼 Ventas
-              </span>
-            </button>
+          {/* Tabs Centro Multicanal */}
+          <div className="flex border-b overflow-x-auto bg-white">
+            {[
+              { id: "f1", label: "F1 Gestión", icon: <Mic className="w-4 h-4"/> },
+              { id: "portals", label: "Portales", icon: <Inbox className="w-4 h-4"/> },
+              { id: "messenger", label: "Messenger AI", icon: <MessageCircle className="w-4 h-4 text-blue-600"/> },
+              { id: "whatsapp", label: "WhatsApp AI", icon: <MessagesSquare className="w-4 h-4 text-emerald-600"/> },
+              { id: "instagram", label: "Instagram AI", icon: <Instagram className="w-4 h-4 text-fuchsia-600"/> },
+            ].map(item => (
+              <button key={item.id} className={`flex-1 min-w-[112px] px-3 py-2 text-[11px] border-b-2 ${tab === item.id ? "bg-white border-blue-500 font-semibold" : "bg-gray-50 border-transparent"}`} onClick={() => { setTab(item.id as any); if (item.id === "f1") setF1UnreadEvents(0); }}>
+                <span className="inline-flex items-center gap-1.5">{item.icon}{item.label}</span>
+              </button>
+            ))}
           </div>
 
           {/* Body */}
@@ -2388,6 +2572,8 @@ const buildLeadReport = React.useCallback(() => {
                   </div>
                 </div>
               </div>
+            ) : (tab === "portals" || tab === "messenger" || tab === "whatsapp" || tab === "instagram") ? (
+              <F1MultichannelCenter API_BASE={API_BASE} headers={headers} initialChannel={tab as any} />
             ) : tab === "convs" ? (
               <div className="h-full p-3 overflow-auto">
                 <div className="flex items-center justify-between mb-2">
