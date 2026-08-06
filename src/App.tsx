@@ -1393,6 +1393,32 @@ function EmpresasModule() {
     }
   };
 
+  const toggleMessengerService = async (empresa: Empresa, enabled: boolean) => {
+    setChannelsLoading(true);
+    setChannelMessage('');
+
+    try {
+      await api(`/companies/${empresa.id}/services/messenger`, {
+        method: 'PATCH',
+        body: JSON.stringify({ enabled })
+      });
+
+      setChannelMessage(
+        enabled
+          ? `Recepcionista virtual activada para ${empresa.name}. Volverá a responder en Facebook Messenger.`
+          : `Recepcionista virtual suspendida para ${empresa.name}. Dejará de responder mensajes en Facebook.`
+      );
+
+      await loadChannels(empresa);
+    } catch (e: any) {
+      setChannelMessage(
+        `Error: ${e?.message || 'No se pudo cambiar el estado de la recepcionista virtual'}`
+      );
+    } finally {
+      setChannelsLoading(false);
+    }
+  };
+
   const loadChannels = React.useCallback(async (empresa: Empresa) => {
     setChannelsLoading(true);
     setChannelMessage('');
@@ -1692,6 +1718,62 @@ function EmpresasModule() {
                   </button>
                 </div>
               </div>
+
+              {(() => {
+                const messengerChannel = channels.find(
+                  channel => channel.channel === 'messenger' || channel.channel === 'facebook'
+                );
+                const messengerEnabled = Boolean(messengerChannel?.active);
+
+                return (
+                  <div className="rounded-xl border bg-white p-5">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <MessageCircle className="w-5 h-5 text-blue-600" />
+                          <h4 className="font-semibold text-gray-900">
+                            Recepcionista virtual de Messenger
+                          </h4>
+                          <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                            messengerEnabled
+                              ? 'bg-green-100 text-green-700'
+                              : 'bg-red-100 text-red-700'
+                          }`}>
+                            {messengerEnabled ? 'Activa' : 'Suspendida'}
+                          </span>
+                        </div>
+
+                        <p className="mt-1 text-sm text-gray-500">
+                          Controla si la Recepcionista V5 responde en Facebook. No elimina el Page ID, el token ni la configuración guardada.
+                        </p>
+
+                        {!messengerChannel && (
+                          <p className="mt-2 text-xs text-amber-700">
+                            Primero guarda un canal de Facebook Messenger para habilitar este control.
+                          </p>
+                        )}
+                      </div>
+
+                      <button
+                        type="button"
+                        disabled={channelsLoading || !messengerChannel}
+                        onClick={() =>
+                          toggleMessengerService(channelsCompany, !messengerEnabled)
+                        }
+                        className={`rounded-lg px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50 ${
+                          messengerEnabled
+                            ? 'bg-red-600 hover:bg-red-700'
+                            : 'bg-green-600 hover:bg-green-700'
+                        }`}
+                      >
+                        {messengerEnabled
+                          ? 'Suspender recepcionista'
+                          : 'Activar recepcionista'}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })()}
 
               <form onSubmit={saveChannel} className="space-y-4 rounded-xl border bg-gray-50 p-5">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

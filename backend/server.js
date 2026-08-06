@@ -4924,28 +4924,39 @@ async function resolveMessengerAssistantRoute(pageId) {
     await client.query(`SELECT set_config('app.tenant_bypass', 'on', true)`);
 
     const { rows } = await client.query(
-      `SELECT tenant_id
-         FROM clinic_channels
-        WHERE channel IN ('messenger', 'facebook')
-          AND COALESCE(active, TRUE) = TRUE
-          AND COALESCE(is_active, TRUE) = TRUE
-          AND tenant_id IS NOT NULL
-          AND (
-            external_id = $1
-            OR phone_number_id = $1
-            OR config->>'pageId' = $1
-            OR config->>'page_id' = $1
-            OR metadata->>'pageId' = $1
-            OR metadata->>'page_id' = $1
-          )
-        ORDER BY updated_at DESC NULLS LAST, id DESC
-        LIMIT 1`,
+      `SELECT
+         tenant_id,
+         COALESCE(active, TRUE) AS active,
+         COALESCE(is_active, TRUE) AS is_active
+       FROM clinic_channels
+       WHERE channel IN ('messenger', 'facebook')
+         AND tenant_id IS NOT NULL
+         AND (
+           external_id = $1
+           OR phone_number_id = $1
+           OR config->>'pageId' = $1
+           OR config->>'page_id' = $1
+           OR metadata->>'pageId' = $1
+           OR metadata->>'page_id' = $1
+         )
+       ORDER BY updated_at DESC NULLS LAST, id DESC
+       LIMIT 1`,
       [pid]
     );
 
     await client.query('COMMIT');
 
-    const tenantId = String(rows?.[0]?.tenant_id || '').trim();
+    const channel = rows?.[0] || null;
+    const tenantId = String(channel?.tenant_id || '').trim();
+
+    if (tenantId && (channel.active === false || channel.is_active === false)) {
+      return {
+        type: 'disabled',
+        tenantId,
+        source: 'clinic_channels'
+      };
+    }
+
     if (tenantId) {
       return {
         type: 'clinic',
@@ -4985,6 +4996,14 @@ async function callAiChatForMessenger(senderId, pageId, msgText, req) {
     tenantId: route.tenantId || null,
     source: route.source
   });
+
+  if (route.type === 'disabled') {
+    console.log('⏸️ Recepcionista Messenger suspendida; mensaje ignorado', {
+      pageId: pid,
+      tenantId: route.tenantId || null
+    });
+    return { disabled: true, reply: '' };
+  }
 
   if (route.type === 'clinic') {
     return await callClinicAiForMessenger(senderId, pid, msgText, req);
@@ -5047,6 +5066,10 @@ app.post('/api/messenger/webhook', async (req, res) => {
         }
 
         const ai = await callAiChatForMessenger(senderId, entry?.id, String(msgText).trim(), req);
+
+        if (ai?.disabled === true) {
+          continue;
+        }
 
         const reply =
           ai?.reply ||
@@ -6058,6 +6081,58 @@ app.patch(
       ok: true,
       id: rows[0].id,
       whatsappEnabled: rows[0].whatsapp_enabled
+    });
+  })
+);
+
+app.patch(
+  '/api/companies/:id/services/messenger',
+  authRequired,
+  companiesSuperAdminOnly,
+  ah(async (req, res) => {
+    const enabled = req.body?.enabled;
+
+    if (typeof enabled !== 'boolean') {
+      return res.status(400).json({
+        error: 'El campo enabled debe ser booleano'
+      });
+    }
+
+    const tenantId = req.params.id;
+
+    const { rows: tenantRows } = await poolDB1.query(
+      `SELECT id
+         FROM tenants
+        WHERE id = $1::uuid
+        LIMIT 1`,
+      [tenantId]
+    );
+
+    if (!tenantRows[0]) {
+      return res.status(404).json({ error: 'Empresa no encontrada' });
+    }
+
+    const { rows } = await poolDB1.query(
+      `UPDATE clinic_channels
+          SET active = $1,
+              is_active = $1,
+              updated_at = NOW()
+        WHERE tenant_id = $2::uuid
+          AND channel IN ('messenger', 'facebook')
+        RETURNING id, tenant_id, channel, active, is_active`,
+      [enabled, tenantId]
+    );
+
+    if (!rows.length) {
+      return res.status(404).json({
+        error: 'Esta empresa todavía no tiene un canal de Facebook Messenger configurado'
+      });
+    }
+
+    res.json({
+      ok: true,
+      messengerEnabled: enabled,
+      updatedChannels: rows.length
     });
   })
 );
