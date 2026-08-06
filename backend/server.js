@@ -5610,46 +5610,59 @@ app.get(
   companiesSuperAdminOnly,
   ah(async (req, res) => {
     const tenantId = req.params.id;
+    const client = await poolDB1.connect();
 
-    const { rows: tenantRows } = await poolDB1.query(
-      `SELECT id
-         FROM tenants
-        WHERE id = $1::uuid
-        LIMIT 1`,
-      [tenantId]
-    );
+    try {
+      await client.query('BEGIN');
+      await client.query(`SELECT set_config('app.tenant_bypass', 'on', true)`);
 
-    if (!tenantRows[0]) {
-      return res.status(404).json({
-        error: 'Empresa no encontrada'
-      });
+      const { rows: tenantRows } = await client.query(
+        `SELECT id
+           FROM tenants
+          WHERE id = $1::uuid
+          LIMIT 1`,
+        [tenantId]
+      );
+
+      if (!tenantRows[0]) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({
+          error: 'Empresa no encontrada'
+        });
+      }
+
+      const { rows } = await client.query(
+        `SELECT
+           id,
+           tenant_id,
+           phone_number_id,
+           external_id,
+           channel,
+           name,
+           clinic_name,
+           branch_key,
+           sucursal_id,
+           db_key,
+           active,
+           is_active,
+           config,
+           metadata,
+           created_at,
+           updated_at
+         FROM clinic_channels
+         WHERE tenant_id = $1::uuid
+         ORDER BY created_at ASC, id ASC`,
+        [tenantId]
+      );
+
+      await client.query('COMMIT');
+      res.json(rows.map(mapCompanyChannel));
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw error;
+    } finally {
+      client.release();
     }
-
-    const { rows } = await poolDB1.query(
-      `SELECT
-         id,
-         tenant_id,
-         phone_number_id,
-         external_id,
-         channel,
-         name,
-         clinic_name,
-         branch_key,
-         sucursal_id,
-         db_key,
-         active,
-         is_active,
-         config,
-         metadata,
-         created_at,
-         updated_at
-       FROM clinic_channels
-       WHERE tenant_id = $1::uuid
-       ORDER BY created_at ASC, id ASC`,
-      [tenantId]
-    );
-
-    res.json(rows.map(mapCompanyChannel));
   })
 );
 
@@ -5708,6 +5721,30 @@ app.post(
           LIMIT 1`,
         [tenantId, channel, externalId]
       );
+
+      if (!existing.rows[0]) {
+        const duplicate = await client.query(
+          `SELECT cc.tenant_id, t.name AS tenant_name
+             FROM clinic_channels cc
+             LEFT JOIN tenants t ON t.id = cc.tenant_id
+            WHERE cc.channel=$1
+              AND (
+                cc.external_id=$2
+                OR cc.phone_number_id=$2
+                OR cc.metadata->>'page_id'=$2
+              )
+            ORDER BY cc.updated_at DESC NULLS LAST, cc.id DESC
+            LIMIT 1`,
+          [channel, externalId]
+        );
+
+        if (duplicate.rows[0]) {
+          await client.query('ROLLBACK');
+          return res.status(409).json({
+            error: `Este Page ID ya está conectado a la empresa ${duplicate.rows[0].tenant_name || duplicate.rows[0].tenant_id}.`
+          });
+        }
+      }
 
       const previousConfig =
         existing.rows[0]?.config && typeof existing.rows[0].config === 'object'
