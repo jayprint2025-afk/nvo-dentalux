@@ -6136,41 +6136,56 @@ app.patch(
     }
 
     const tenantId = req.params.id;
+    const client = await poolDB1.connect();
 
-    const { rows: tenantRows } = await poolDB1.query(
-      `SELECT id
-         FROM tenants
-        WHERE id = $1::uuid
-        LIMIT 1`,
-      [tenantId]
-    );
+    try {
+      await client.query('BEGIN');
+      await client.query(`SELECT set_config('app.tenant_bypass', 'on', true)`);
 
-    if (!tenantRows[0]) {
-      return res.status(404).json({ error: 'Empresa no encontrada' });
-    }
+      const { rows: tenantRows } = await client.query(
+        `SELECT id
+           FROM tenants
+          WHERE id = $1::uuid
+          LIMIT 1`,
+        [tenantId]
+      );
 
-    const { rows } = await poolDB1.query(
-      `UPDATE clinic_channels
-          SET active = $1,
-              is_active = $1,
-              updated_at = NOW()
-        WHERE tenant_id = $2::uuid
-          AND channel IN ('messenger', 'facebook')
-        RETURNING id, tenant_id, channel, active, is_active`,
-      [enabled, tenantId]
-    );
+      if (!tenantRows[0]) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({ error: 'Empresa no encontrada' });
+      }
 
-    if (!rows.length) {
-      return res.status(404).json({
-        error: 'Esta empresa todavía no tiene un canal de Facebook Messenger configurado'
+      const { rows } = await client.query(
+        `UPDATE clinic_channels
+            SET active = $1,
+                is_active = $1,
+                updated_at = NOW()
+          WHERE tenant_id = $2::uuid
+            AND channel IN ('messenger', 'facebook')
+          RETURNING id, tenant_id, channel, active, is_active`,
+        [enabled, tenantId]
+      );
+
+      if (!rows.length) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({
+          error: 'Esta empresa todavía no tiene un canal de Facebook Messenger configurado'
+        });
+      }
+
+      await client.query('COMMIT');
+
+      res.json({
+        ok: true,
+        messengerEnabled: enabled,
+        updatedChannels: rows.length
       });
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw error;
+    } finally {
+      client.release();
     }
-
-    res.json({
-      ok: true,
-      messengerEnabled: enabled,
-      updatedChannels: rows.length
-    });
   })
 );
 // ===============================================================================
