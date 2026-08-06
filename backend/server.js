@@ -281,6 +281,7 @@ async function ensureAiSaasCompatibilityTables() {
 
     await adminQ(`ALTER TABLE clinic_channels ADD COLUMN IF NOT EXISTS tenant_id UUID`);
     await adminQ(`ALTER TABLE clinic_channels ADD COLUMN IF NOT EXISTS phone_number_id TEXT`);
+    await adminQ(`ALTER TABLE clinic_channels ADD COLUMN IF NOT EXISTS external_id TEXT`);
     await adminQ(`ALTER TABLE clinic_channels ADD COLUMN IF NOT EXISTS channel TEXT DEFAULT 'whatsapp'`);
     await adminQ(`ALTER TABLE clinic_channels ADD COLUMN IF NOT EXISTS name TEXT`);
     await adminQ(`ALTER TABLE clinic_channels ADD COLUMN IF NOT EXISTS clinic_name TEXT`);
@@ -5242,7 +5243,7 @@ async function uniqueCompanySlug(client, name, excludeId = null) {
 }
 
 const companySelectSql = `
-  SELECT t.id, t.name, t.slug, t.plan, t.status, t.whatsapp_enabled,
+  SELECT t.id, t.name, t.slug, t.plan, t.status,
          COALESCE(owner_u.name, '') AS owner_name,
          COALESCE(owner_u.email, '') AS owner_email,
          COALESCE(first_b.name, '') AS branch_name,
@@ -5259,19 +5260,9 @@ const companySelectSql = `
   ) first_b ON TRUE`;
 
 function mapCompany(row) {
-  return {
-    id: row.id,
-    name: row.name,
-    slug: row.slug,
-    plan: row.plan,
-    status: row.status,
-    whatsappEnabled: row.whatsapp_enabled !== false,
-    ownerName: row.owner_name,
-    ownerEmail: row.owner_email,
-    branchName: row.branch_name,
-    phone: row.phone,
-    address: row.address
-  };
+  return { id: row.id, name: row.name, slug: row.slug, plan: row.plan, status: row.status,
+    ownerName: row.owner_name, ownerEmail: row.owner_email, branchName: row.branch_name,
+    phone: row.phone, address: row.address };
 }
 
 app.get('/api/companies', authRequired, companiesSuperAdminOnly, ah(async (_req, res) => {
@@ -5411,6 +5402,7 @@ function mapCompanyChannel(row) {
     name: row.name || '',
     clinicName: row.clinic_name || '',
     phoneNumberId: row.phone_number_id || '',
+    externalId: row.external_id || row.phone_number_id || '',
     branchKey: row.branch_key || '',
     sucursalId: row.sucursal_id || '',
     dbKey: row.db_key || 'db1',
@@ -5477,6 +5469,7 @@ app.get(
          id,
          tenant_id,
          phone_number_id,
+         external_id,
          channel,
          name,
          clinic_name,
@@ -5496,6 +5489,148 @@ app.get(
     );
 
     res.json(rows.map(mapCompanyChannel));
+  })
+);
+
+
+app.post(
+  '/api/companies/:id/channels',
+  authRequired,
+  companiesSuperAdminOnly,
+  ah(async (req, res) => {
+    const tenantId = req.params.id;
+    const requestedChannel = String(req.body?.channel || '').trim().toLowerCase();
+    const channel = requestedChannel === 'facebook' ? 'messenger' : requestedChannel;
+    const externalId = String(req.body?.externalId || '').replace(/\s/g, '').trim();
+    const name = String(req.body?.name || '').trim();
+    const accessToken = String(req.body?.accessToken || '').trim();
+    const active = req.body?.active !== false;
+
+    if (!['messenger', 'whatsapp'].includes(channel)) {
+      return res.status(400).json({ error: 'Canal no válido' });
+    }
+
+    if (!externalId) {
+      return res.status(400).json({
+        error: channel === 'messenger'
+          ? 'Page ID de Facebook requerido'
+          : 'Phone Number ID de WhatsApp requerido'
+      });
+    }
+
+    const { rows: tenantRows } = await poolDB1.query(
+      'SELECT id FROM tenants WHERE id=$1::uuid LIMIT 1',
+      [tenantId]
+    );
+
+    if (!tenantRows[0]) {
+      return res.status(404).json({ error: 'Empresa no encontrada' });
+    }
+
+    const client = await poolDB1.connect();
+
+    try {
+      await client.query('BEGIN');
+      await client.query(`SELECT set_config('app.tenant_bypass', 'on', true)`);
+
+      const existing = await client.query(
+        `SELECT id, config, metadata
+           FROM clinic_channels
+          WHERE tenant_id=$1::uuid
+            AND channel=$2
+            AND (
+              external_id=$3
+              OR phone_number_id=$3
+              OR metadata->>'page_id'=$3
+            )
+          ORDER BY id ASC
+          LIMIT 1`,
+        [tenantId, channel, externalId]
+      );
+
+      const previousConfig =
+        existing.rows[0]?.config && typeof existing.rows[0].config === 'object'
+          ? existing.rows[0].config
+          : {};
+
+      const previousMetadata =
+        existing.rows[0]?.metadata && typeof existing.rows[0].metadata === 'object'
+          ? existing.rows[0].metadata
+          : {};
+
+      const config = { ...previousConfig };
+      const metadata = { ...previousMetadata };
+
+      if (channel === 'messenger') {
+        config.pageId = externalId;
+        metadata.page_id = externalId;
+        if (accessToken) config.pageAccessToken = accessToken;
+      } else {
+        config.phoneNumberId = externalId;
+        if (accessToken) config.accessToken = accessToken;
+      }
+
+      let saved;
+
+      if (existing.rows[0]) {
+        saved = await client.query(
+          `UPDATE clinic_channels
+              SET phone_number_id=$1,
+                  external_id=$1,
+                  name=$2,
+                  clinic_name=$2,
+                  active=$3,
+                  is_active=$3,
+                  config=$4::jsonb,
+                  metadata=$5::jsonb,
+                  updated_at=NOW()
+            WHERE id=$6
+              AND tenant_id=$7::uuid
+            RETURNING *`,
+          [
+            externalId,
+            name || null,
+            active,
+            JSON.stringify(config),
+            JSON.stringify(metadata),
+            existing.rows[0].id,
+            tenantId
+          ]
+        );
+      } else {
+        saved = await client.query(
+          `INSERT INTO clinic_channels (
+             tenant_id, phone_number_id, external_id, channel,
+             name, clinic_name, db_key, active, is_active,
+             config, metadata, created_at, updated_at
+           )
+           VALUES (
+             $1::uuid,$2,$2,$3,$4,$4,'db1',$5,$5,
+             $6::jsonb,$7::jsonb,NOW(),NOW()
+           )
+           RETURNING *`,
+          [
+            tenantId,
+            externalId,
+            channel,
+            name || null,
+            active,
+            JSON.stringify(config),
+            JSON.stringify(metadata)
+          ]
+        );
+      }
+
+      await client.query('COMMIT');
+      res.status(existing.rows[0] ? 200 : 201).json(
+        mapCompanyChannel(saved.rows[0])
+      );
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
   })
 );
 
@@ -5753,35 +5888,6 @@ app.patch('/api/companies/:id/suspend', authRequired, companiesSuperAdminOnly, a
   const { rows } = await poolDB1.query("UPDATE tenants SET status='suspended',updated_at=NOW() WHERE id=$1 RETURNING id,status", [req.params.id]);
   if (!rows[0]) return res.status(404).json({ error: 'Empresa no encontrada' });
   res.json({ ok:true, ...rows[0] });
-}));
-
-app.patch('/api/companies/:id/services/whatsapp', authRequired, companiesSuperAdminOnly, ah(async (req, res) => {
-  const enabled = req.body?.enabled;
-
-  if (typeof enabled !== 'boolean') {
-    return res.status(400).json({
-      error: 'El campo enabled debe ser booleano'
-    });
-  }
-
-  const { rows } = await poolDB1.query(
-    `UPDATE tenants
-        SET whatsapp_enabled = $1,
-            updated_at = NOW()
-      WHERE id = $2::uuid
-      RETURNING id, whatsapp_enabled`,
-    [enabled, req.params.id]
-  );
-
-  if (!rows[0]) {
-    return res.status(404).json({ error: 'Empresa no encontrada' });
-  }
-
-  res.json({
-    ok: true,
-    id: rows[0].id,
-    whatsappEnabled: rows[0].whatsapp_enabled
-  });
 }));
 // ===============================================================================
 
