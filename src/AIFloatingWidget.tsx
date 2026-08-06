@@ -386,14 +386,14 @@ function F1MultichannelCenter({
     instagram: { border: "border-fuchsia-400", soft: "bg-fuchsia-50", strong: "bg-fuchsia-600", label: "Instagram AI" },
   };
 
-  const Portal = ({ channel }: { channel: ChannelKey }) => {
+  const renderPortal = (channel: ChannelKey) => {
     const theme = palette[channel];
     const rows = filtered(channel);
     const current = selected[channel];
     const paused = Boolean(current?.ai_paused ?? current?.state?.ai_paused);
     const Icon = channel === "messenger" ? MessageCircle : channel === "whatsapp" ? MessagesSquare : Instagram;
     const showMobileChat = isMobile && mobileView[channel] === "chat" && Boolean(current);
-    return <section className={`min-w-0 flex-1 rounded-xl border-2 ${theme.border} bg-white overflow-hidden flex flex-col h-full`}>
+    return <section key={channel} className={`min-w-0 flex-1 rounded-xl border-2 ${theme.border} bg-white overflow-hidden flex flex-col h-full`}>
       <header className={`px-3 py-2 ${theme.soft} border-b flex items-center justify-between gap-2`}>
         <div className="flex items-center gap-2 min-w-0"><Icon className="w-4 h-4"/><b className="text-xs truncate">{theme.label}</b><span className={`text-[10px] text-white rounded-full px-1.5 ${theme.strong}`}>{counts[channel]}</span></div>
         <button disabled={!current || channel === "instagram"} onClick={() => current && pauseConversation(channel, current)} className="text-[10px] bg-white border rounded-md px-2 py-1 inline-flex items-center gap-1 disabled:opacity-40">
@@ -432,7 +432,7 @@ function F1MultichannelCenter({
       <div className="border-t mt-3 pt-3"><b className="text-[11px]">Filtros</b><select value={status} onChange={e=>setStatus(e.target.value as any)} className="w-full mt-2 border rounded px-2 py-1.5 text-[10px]"><option value="all">Todos los estados</option><option value="active">Activos</option><option value="paused">En pausa</option><option value="unassigned">Sin asignar</option></select></div>
       <button onClick={()=>void loadConversations()} className="mt-4 w-full border rounded px-2 py-1.5 text-[10px] inline-flex items-center justify-center gap-1"><RefreshCw className={`w-3 h-3 ${loading?"animate-spin":""}`}/>Actualizar</button>
     </aside>
-    <main className="min-w-0 flex-1 min-h-0 flex gap-2">{channels.map(channel=><Portal key={channel} channel={channel}/>)}</main>
+    <main className="min-w-0 flex-1 min-h-0 flex gap-2">{channels.map(channel => renderPortal(channel))}</main>
     </div>
     {error&&<div className="absolute bottom-3 left-1/2 -translate-x-1/2 bg-red-600 text-white text-xs px-3 py-2 rounded-lg shadow">{error}</div>}
   </div>;
