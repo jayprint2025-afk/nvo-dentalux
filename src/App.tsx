@@ -1710,13 +1710,13 @@ function EmpresasModule() {
             <div className="space-y-6 p-6">
               {channelMessage && <div className={`p-3 rounded-lg border text-sm ${channelMessage.startsWith('Error') ? 'bg-red-50 border-red-200 text-red-700' : 'bg-green-50 border-green-200 text-green-700'}`}>{channelMessage}</div>}
 
-              <div className="rounded-xl border bg-white p-5">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <MessageCircle className="w-5 h-5 text-green-600" />
-                      <h4 className="font-semibold text-gray-900">Recordatorios por WhatsApp</h4>
-                      <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+              <div className="rounded-xl border bg-white px-4 py-3.5 shadow-sm">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <MessageCircle className="w-4 h-4 text-green-600" />
+                      <h4 className="text-sm font-semibold text-gray-900">Recordatorios por WhatsApp</h4>
+                      <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
                         channelsCompany.whatsappEnabled
                           ? 'bg-green-100 text-green-700'
                           : 'bg-red-100 text-red-700'
@@ -1724,7 +1724,7 @@ function EmpresasModule() {
                         {channelsCompany.whatsappEnabled ? 'Activo' : 'Suspendido'}
                       </span>
                     </div>
-                    <p className="mt-1 text-sm text-gray-500">
+                    <p className="mt-1 text-xs leading-5 text-gray-500">
                       Controla el botón manual y el cronjob diario de las 8:00 a. m. No modifica el número ni la plantilla compartida.
                     </p>
                   </div>
@@ -1735,16 +1735,70 @@ function EmpresasModule() {
                       await toggleWhatsappService(channelsCompany);
                       setChannelsCompany(v => v ? {...v, whatsappEnabled: !v.whatsappEnabled} : v);
                     }}
-                    className={`rounded-lg px-4 py-2 text-sm font-semibold text-white disabled:opacity-60 ${
+                    className={`inline-flex min-w-[104px] items-center justify-center rounded-lg px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition disabled:opacity-60 ${
                       channelsCompany.whatsappEnabled
                         ? 'bg-red-600 hover:bg-red-700'
                         : 'bg-green-600 hover:bg-green-700'
                     }`}
                   >
-                    {channelsCompany.whatsappEnabled ? 'Suspender WhatsApp' : 'Activar WhatsApp'}
+                    {channelsCompany.whatsappEnabled ? 'Suspender' : 'Activar'}
                   </button>
                 </div>
               </div>
+
+              {(() => {
+                const whatsappReceptionistChannel = channels.find(
+                  channel => channel.channel === 'whatsapp'
+                );
+                const whatsappReceptionistEnabled = Boolean(whatsappReceptionistChannel?.active);
+
+                return (
+                  <div className="rounded-xl border bg-white px-4 py-3.5 shadow-sm">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <MessageCircle className="w-4 h-4 text-emerald-600" />
+                          <h4 className="text-sm font-semibold text-gray-900">
+                            Recepcionista virtual de WhatsApp
+                          </h4>
+                          <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
+                            whatsappReceptionistEnabled
+                              ? 'bg-green-100 text-green-700'
+                              : 'bg-red-100 text-red-700'
+                          }`}>
+                            {whatsappReceptionistEnabled ? 'Activa' : 'Suspendida'}
+                          </span>
+                        </div>
+                        <p className="mt-1 text-xs leading-5 text-gray-500">
+                          Controla si la Recepcionista V5 responde en WhatsApp. Conserva el número, el token y la configuración.
+                        </p>
+                        {!whatsappReceptionistChannel && (
+                          <p className="mt-1 text-[11px] text-amber-700">
+                            Guarda un canal de WhatsApp para habilitar este control.
+                          </p>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        disabled={channelsLoading || !whatsappReceptionistChannel}
+                        onClick={() =>
+                          toggleWhatsappReceptionist(
+                            channelsCompany,
+                            !whatsappReceptionistEnabled
+                          )
+                        }
+                        className={`inline-flex min-w-[104px] items-center justify-center rounded-lg px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                          whatsappReceptionistEnabled
+                            ? 'bg-red-600 hover:bg-red-700'
+                            : 'bg-green-600 hover:bg-green-700'
+                        }`}
+                      >
+                        {whatsappReceptionistEnabled ? 'Suspender' : 'Activar'}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })()}
 
               {(() => {
                 const messengerChannel = channels.find(
@@ -1753,15 +1807,15 @@ function EmpresasModule() {
                 const messengerEnabled = Boolean(messengerChannel?.active);
 
                 return (
-                  <div className="rounded-xl border bg-white p-5">
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <MessageCircle className="w-5 h-5 text-blue-600" />
-                          <h4 className="font-semibold text-gray-900">
+                  <div className="rounded-xl border bg-white px-4 py-3.5 shadow-sm">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <MessageCircle className="w-4 h-4 text-blue-600" />
+                          <h4 className="text-sm font-semibold text-gray-900">
                             Recepcionista virtual de Messenger
                           </h4>
-                          <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                          <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
                             messengerEnabled
                               ? 'bg-green-100 text-green-700'
                               : 'bg-red-100 text-red-700'
@@ -1770,12 +1824,12 @@ function EmpresasModule() {
                           </span>
                         </div>
 
-                        <p className="mt-1 text-sm text-gray-500">
+                        <p className="mt-1 text-xs leading-5 text-gray-500">
                           Controla si la Recepcionista V5 responde en Facebook. No elimina el Page ID, el token ni la configuración guardada.
                         </p>
 
                         {!messengerChannel && (
-                          <p className="mt-2 text-xs text-amber-700">
+                          <p className="mt-1 text-[11px] text-amber-700">
                             Primero guarda un canal de Facebook Messenger para habilitar este control.
                           </p>
                         )}
@@ -1787,15 +1841,13 @@ function EmpresasModule() {
                         onClick={() =>
                           toggleMessengerService(channelsCompany, !messengerEnabled)
                         }
-                        className={`rounded-lg px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50 ${
+                        className={`inline-flex min-w-[104px] items-center justify-center rounded-lg px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition disabled:cursor-not-allowed disabled:opacity-50 ${
                           messengerEnabled
                             ? 'bg-red-600 hover:bg-red-700'
                             : 'bg-green-600 hover:bg-green-700'
                         }`}
                       >
-                        {messengerEnabled
-                          ? 'Suspender recepcionista'
-                          : 'Activar recepcionista'}
+                        {messengerEnabled ? 'Suspender' : 'Activar'}
                       </button>
                     </div>
                   </div>
