@@ -4910,13 +4910,89 @@ async function callClinicAiForMessenger(senderId, pageId, msgText, req) {
   return data;
 }
 
+async function resolveMessengerAssistantRoute(pageId) {
+  const pid = String(pageId || '').trim();
+  if (!pid) return { type: 'sales', source: 'missing-page-id' };
+
+  // Fuente principal SaaS:
+  // toda página activa registrada desde Empresas > Canales pertenece a una clínica
+  // y debe usar la Recepcionista V5, nunca F1 ni los routers de ventas.
+  const client = await poolDB1.connect();
+
+  try {
+    await client.query('BEGIN');
+    await client.query(`SELECT set_config('app.tenant_bypass', 'on', true)`);
+
+    const { rows } = await client.query(
+      `SELECT tenant_id
+         FROM clinic_channels
+        WHERE channel IN ('messenger', 'facebook')
+          AND COALESCE(active, TRUE) = TRUE
+          AND COALESCE(is_active, TRUE) = TRUE
+          AND tenant_id IS NOT NULL
+          AND (
+            external_id = $1
+            OR phone_number_id = $1
+            OR config->>'pageId' = $1
+            OR config->>'page_id' = $1
+            OR metadata->>'pageId' = $1
+            OR metadata->>'page_id' = $1
+          )
+        ORDER BY updated_at DESC NULLS LAST, id DESC
+        LIMIT 1`,
+      [pid]
+    );
+
+    await client.query('COMMIT');
+
+    const tenantId = String(rows?.[0]?.tenant_id || '').trim();
+    if (tenantId) {
+      return {
+        type: 'clinic',
+        tenantId,
+        source: 'clinic_channels'
+      };
+    }
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.warn(
+      '⚠️ No se pudo resolver el tipo de asistente Messenger desde clinic_channels:',
+      error.message
+    );
+  } finally {
+    client.release();
+  }
+
+  // Compatibilidad temporal para páginas antiguas aún no registradas en Empresas.
+  if (MESSENGER_CONSULTORIO_PAGE_IDS.includes(pid)) {
+    return { type: 'clinic', source: 'env-consultorio' };
+  }
+
+  if (MESSENGER_DETALLES_PAGE_IDS.includes(pid)) {
+    return { type: 'detalles', source: 'env-detalles' };
+  }
+
+  return { type: 'sales', source: 'fallback-sales' };
+}
+
 async function callAiChatForMessenger(senderId, pageId, msgText, req) {
   const pid = String(pageId || '').trim();
-  const isClinic = MESSENGER_CONSULTORIO_PAGE_IDS.includes(pid);
-  if (isClinic) return await callClinicAiForMessenger(senderId, pid, msgText, req);
+  const route = await resolveMessengerAssistantRoute(pid);
 
-  const isDetalles = MESSENGER_DETALLES_PAGE_IDS.includes(pid);
-  if (isDetalles) return await callDetallesAiForMessenger(senderId, pid, msgText, req);
+  console.log('🧭 Messenger assistant route', {
+    pageId: pid,
+    type: route.type,
+    tenantId: route.tenantId || null,
+    source: route.source
+  });
+
+  if (route.type === 'clinic') {
+    return await callClinicAiForMessenger(senderId, pid, msgText, req);
+  }
+
+  if (route.type === 'detalles') {
+    return await callDetallesAiForMessenger(senderId, pid, msgText, req);
+  }
 
   return await callSalesAiForMessenger(senderId, pid, msgText, req);
 }
