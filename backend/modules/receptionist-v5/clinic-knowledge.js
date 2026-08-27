@@ -1,12 +1,12 @@
 'use strict';
-const { getServices } = require('../booking-engine');
 
 async function loadBranches(q, tenantId) {
   try {
     const { rows } = await q(
       `SELECT branch_key,name,address,phone,COALESCE(whatsapp,phone) AS whatsapp,
               business_hours,google_maps_url,directions,payment_methods,parking_info,
-              ai_enabled,booking_enabled
+              welcome_message,cancellation_policy,preparation_notes,insurance_information,
+              extra_information,promotions,ai_enabled,booking_enabled
          FROM branches
         WHERE tenant_id=$1::uuid AND COALESCE(active,TRUE)=TRUE
         ORDER BY branch_key`,
@@ -19,20 +19,31 @@ async function loadBranches(q, tenantId) {
   }
 }
 
-async function loadAllServices(q, branches) {
-  const map = new Map();
+async function loadAllServices(q, tenantId, branches) {
+  const services = [];
   for (const branch of branches) {
     try {
-      const services = await getServices(q, branch.branch_key);
-      for (const service of services || []) {
-        const key = String(service.id || service.name);
-        if (!map.has(key)) map.set(key, service);
+      const { rows } = await q(
+        `SELECT id, name,
+                COALESCE(price, 0) AS price,
+                COALESCE(duration_hours, 1) AS duration_hours,
+                COALESCE(description, '') AS description,
+                sucursal_id
+           FROM services
+          WHERE tenant_id=$1::uuid
+            AND sucursal_id=$2
+            AND COALESCE(active, TRUE)=TRUE
+          ORDER BY name`,
+        [tenantId, branch.branch_key]
+      );
+      for (const service of rows || []) {
+        services.push({ ...service, branch_key: branch.branch_key });
       }
     } catch (error) {
       console.warn('V5 knowledge services:', error.message);
     }
   }
-  return [...map.values()];
+  return services;
 }
 
 async function loadPromotions(q, tenantId) {
@@ -56,7 +67,7 @@ async function loadPromotions(q, tenantId) {
 async function loadClinicKnowledge(q, ctx) {
   const tenantId = String(ctx.tenant_id || ctx.clinic_id);
   const branches = await loadBranches(q, tenantId);
-  const services = await loadAllServices(q, branches);
+  const services = await loadAllServices(q, tenantId, branches);
   const promotions = await loadPromotions(q, tenantId);
   const urgentPhone = branches.find(branch => branch.phone)?.phone || null;
   return {
@@ -67,6 +78,8 @@ async function loadClinicKnowledge(q, ctx) {
       name: service.name,
       price: service.price ?? service.precio ?? service.cost ?? service.costo ?? null,
       duration_hours: service.duration_hours ?? service.duration ?? null,
+      description: service.description || '',
+      branch_key: service.branch_key || service.sucursal_id || null,
     })),
     promotions,
     unknown_information_policy: urgentPhone

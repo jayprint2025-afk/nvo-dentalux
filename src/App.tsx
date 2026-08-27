@@ -1248,14 +1248,24 @@ type EmpresaChannel = {
   channel: 'messenger' | 'whatsapp';
   externalId: string;
   name: string;
+  branchKey?: string;
   active: boolean;
   hasAccessToken: boolean;
+};
+
+type EmpresaTreatmentAI = {
+  id?: number;
+  name: string;
+  price: number | '';
+  durationHours: number;
+  description: string;
+  active: boolean;
 };
 
 type EmpresaBranchAI = {
   id?: string;
   tenantId: string;
-  branchKey: 'sucursal_1' | 'sucursal_2';
+  branchKey: string;
   name: string;
   phone: string;
   whatsapp: string;
@@ -1271,19 +1281,20 @@ type EmpresaBranchAI = {
   insuranceInformation: string;
   extraInformation: string;
   promotions: string;
+  treatments: EmpresaTreatmentAI[];
   aiEnabled: boolean;
   bookingEnabled: boolean;
   active: boolean;
 };
 
-const makeEmptyBranchAI = (tenantId: string, branchKey: 'sucursal_1' | 'sucursal_2'): EmpresaBranchAI => ({
+const makeEmptyBranchAI = (tenantId: string, branchKey: string, name = ''): EmpresaBranchAI => ({
   tenantId,
   branchKey,
-  name: branchKey === 'sucursal_1' ? 'Victoria' : 'Condesa',
+  name,
   phone: '', whatsapp: '', address: '', businessHours: '', googleMapsUrl: '',
   directions: '', paymentMethods: '', parkingInfo: '', welcomeMessage: '',
   cancellationPolicy: '', preparationNotes: '', insuranceInformation: '',
-  extraInformation: '', promotions: '', aiEnabled: true, bookingEnabled: true, active: true
+  extraInformation: '', promotions: '', treatments: [], aiEnabled: true, bookingEnabled: true, active: true
 });
 
 const emptyEmpresaForm = {
@@ -1295,6 +1306,7 @@ const emptyChannelForm = {
   channel: 'messenger' as 'messenger' | 'whatsapp',
   externalId: '',
   name: '',
+  branchKey: 'sucursal_1',
   accessToken: '',
   active: true
 };
@@ -1474,8 +1486,18 @@ function EmpresasModule() {
 
   const openChannels = async (empresa: Empresa) => {
     setChannelsCompany(empresa);
+    let branchKey = 'sucursal_1';
+    try {
+      const branchData = await api(`/companies/${empresa.id}/branches/ai-config`);
+      const branches = Array.isArray(branchData) ? branchData : [];
+      if (branches.length) {
+        setAiBranches(branches.map((item: EmpresaBranchAI) => ({...item, treatments:Array.isArray(item.treatments) ? item.treatments : []})));
+        branchKey = branches[0].branchKey || branchKey;
+      }
+    } catch {}
     setChannelForm({
       ...emptyChannelForm,
+      branchKey,
       name: `Facebook Messenger ${empresa.name}`
     });
     await loadChannels(empresa);
@@ -1494,6 +1516,7 @@ function EmpresasModule() {
       setChannelMessage('Canal guardado y ligado correctamente a la empresa.');
       setChannelForm({
         ...emptyChannelForm,
+        branchKey: aiBranches[0]?.branchKey || 'sucursal_1',
         name: `Facebook Messenger ${channelsCompany.name}`
       });
       await loadChannels(channelsCompany);
@@ -1525,6 +1548,7 @@ function EmpresasModule() {
       channel: channel.channel,
       externalId: channel.externalId,
       name: channel.name,
+      branchKey: channel.branchKey || aiBranches[0]?.branchKey || 'sucursal_1',
       accessToken: '',
       active: channel.active
     });
@@ -1537,25 +1561,81 @@ function EmpresasModule() {
     setAiMessage('');
     try {
       const data = await api(`/companies/${empresa.id}/branches/ai-config`);
-      const received = Array.isArray(data) ? data : [];
-      const byKey = new Map(received.map((item: EmpresaBranchAI) => [item.branchKey, item]));
-      setAiBranches([
-        byKey.get('sucursal_1') || makeEmptyBranchAI(empresa.id, 'sucursal_1'),
-        byKey.get('sucursal_2') || makeEmptyBranchAI(empresa.id, 'sucursal_2')
-      ]);
+      const received = (Array.isArray(data) ? data : []).map((item: EmpresaBranchAI) => ({
+        ...item,
+        treatments: Array.isArray(item.treatments) ? item.treatments : []
+      }));
+      setAiBranches(received.length ? received : [makeEmptyBranchAI(empresa.id, 'sucursal_1', empresa.branchName || 'Sucursal principal')]);
     } catch (e: any) {
       setAiMessage(`Error: ${e?.message || 'No se pudo cargar la configuración de IA'}`);
-      setAiBranches([
-        makeEmptyBranchAI(empresa.id, 'sucursal_1'),
-        makeEmptyBranchAI(empresa.id, 'sucursal_2')
-      ]);
+      setAiBranches([makeEmptyBranchAI(empresa.id, 'sucursal_1', empresa.branchName || 'Sucursal principal')]);
     } finally {
       setAiLoading(false);
     }
   };
 
+  const makeUniqueBranchKey = (items: EmpresaBranchAI[]) => {
+    const used = new Set(items.map(item => item.branchKey));
+    let n = 1;
+    while (used.has(`sucursal_${n}`)) n += 1;
+    return `sucursal_${n}`;
+  };
+
+  const addAiBranch = () => {
+    if (!aiCompany) return;
+    setAiBranches(items => {
+      const branchKey = makeUniqueBranchKey(items);
+      return [...items, makeEmptyBranchAI(aiCompany.id, branchKey, `Sucursal ${items.length + 1}`)];
+    });
+  };
+
+  const removeAiBranch = async (branchKey: string) => {
+    if (!aiCompany) return;
+    if (aiBranches.length <= 1) {
+      setAiMessage('Cada empresa debe conservar al menos una sucursal.');
+      return;
+    }
+    const branch = aiBranches.find(item => item.branchKey === branchKey);
+    if (!window.confirm(`¿Quitar la sucursal "${branch?.name || branchKey}"? Sus tratamientos y canales quedarán inactivos; las citas históricas se conservan.`)) return;
+    if (branch?.id) {
+      try {
+        setAiLoading(true);
+        await api(`/companies/${aiCompany.id}/branches/${encodeURIComponent(branchKey)}`, { method:'DELETE' });
+      } catch (e:any) {
+        setAiMessage(`Error: ${e?.message || 'No se pudo quitar la sucursal'}`);
+        setAiLoading(false);
+        return;
+      }
+    }
+    setAiBranches(items => items.filter(item => item.branchKey !== branchKey));
+    setAiMessage('Sucursal retirada de la empresa.');
+    setAiLoading(false);
+  };
+
   const updateAiBranch = (branchKey: string, patch: Partial<EmpresaBranchAI>) => {
     setAiBranches(items => items.map(item => item.branchKey === branchKey ? {...item, ...patch} : item));
+  };
+
+  const addAiTreatment = (branchKey: string) => {
+    setAiBranches(items => items.map(item => item.branchKey === branchKey ? {
+      ...item,
+      treatments: [...(item.treatments || []), { name: '', price: '', durationHours: 1, description: '', active: true }]
+    } : item));
+  };
+
+  const updateAiTreatment = (branchKey: string, index: number, patch: Partial<EmpresaTreatmentAI>) => {
+    setAiBranches(items => items.map(item => {
+      if (item.branchKey !== branchKey) return item;
+      const treatments = [...(item.treatments || [])];
+      treatments[index] = { ...treatments[index], ...patch };
+      return { ...item, treatments };
+    }));
+  };
+
+  const removeAiTreatment = (branchKey: string, index: number) => {
+    setAiBranches(items => items.map(item => item.branchKey === branchKey ? {
+      ...item, treatments: (item.treatments || []).filter((_, i) => i !== index)
+    } : item));
   };
 
   const saveAIConfig = async () => {
@@ -1653,7 +1733,11 @@ function EmpresasModule() {
               {aiMessage && <div className={`p-3 rounded-lg border text-sm ${aiMessage.startsWith('Error') ? 'bg-red-50 border-red-200 text-red-700' : 'bg-green-50 border-green-200 text-green-700'}`}>{aiMessage}</div>}
 
               <div className="rounded-xl border border-violet-200 bg-violet-50 p-4 text-sm text-violet-900">
-                Cada empresa conserva sus propios datos. <strong>sucursal_1</strong> y <strong>sucursal_2</strong> son claves internas; el paciente sólo verá los nombres configurados aquí.
+                Cada empresa puede tener sucursales ilimitadas. Cada sucursal conserva sus propios horarios, dirección, tratamientos, precios, canales y agenda.
+              </div>
+
+              <div className="flex justify-end">
+                <button type="button" onClick={addAiBranch} className="px-4 py-2 rounded-lg bg-violet-600 text-white flex items-center gap-2"><Plus className="w-4 h-4" /> Agregar sucursal</button>
               </div>
 
               <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
@@ -1662,12 +1746,13 @@ function EmpresasModule() {
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b pb-4">
                       <div>
                         <div className="text-xs font-mono text-gray-400">{branch.branchKey}</div>
-                        <h4 className="text-lg font-bold text-gray-900">{branch.name || (branch.branchKey === 'sucursal_1' ? 'Victoria' : 'Condesa')}</h4>
+                        <h4 className="text-lg font-bold text-gray-900">{branch.name || 'Sucursal sin nombre'}</h4>
                       </div>
-                      <div className="flex flex-wrap gap-3 text-sm">
+                      <div className="flex flex-wrap gap-3 text-sm items-center">
                         <label className="flex items-center gap-2"><input type="checkbox" checked={branch.active} onChange={e => updateAiBranch(branch.branchKey,{active:e.target.checked})} /> Activa</label>
                         <label className="flex items-center gap-2"><input type="checkbox" checked={branch.aiEnabled} onChange={e => updateAiBranch(branch.branchKey,{aiEnabled:e.target.checked})} /> IA informa</label>
                         <label className="flex items-center gap-2"><input type="checkbox" checked={branch.bookingEnabled} onChange={e => updateAiBranch(branch.branchKey,{bookingEnabled:e.target.checked})} /> IA agenda</label>
+                        <button type="button" onClick={() => removeAiBranch(branch.branchKey)} className="px-2 py-1 rounded border border-red-200 text-red-600 hover:bg-red-50" title="Quitar sucursal de esta configuración"><Trash2 className="w-4 h-4" /></button>
                       </div>
                     </div>
 
@@ -1696,6 +1781,32 @@ function EmpresasModule() {
                         <textarea rows={key === 'extraInformation' || key === 'promotions' ? 4 : 2} value={(branch as any)[key]} onChange={e => updateAiBranch(branch.branchKey,{[key]:e.target.value} as any)} placeholder={placeholder} className="w-full border rounded-lg px-3 py-2 resize-y" />
                       </label>
                     ))}
+
+
+                    <div className="rounded-xl border border-emerald-200 bg-emerald-50/40 p-4 space-y-3">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                        <div>
+                          <h5 className="font-semibold text-gray-900">Tratamientos y precios reales</h5>
+                          <p className="text-xs text-gray-600">La IA sólo usará tratamientos de esta sucursal. La duración se usa para validar espacios reales en agenda.</p>
+                        </div>
+                        <button type="button" onClick={() => addAiTreatment(branch.branchKey)} className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-sm flex items-center gap-1"><Plus className="w-4 h-4" /> Tratamiento</button>
+                      </div>
+                      <div className="space-y-3">
+                        {(branch.treatments || []).map((treatment, treatmentIndex) => (
+                          <div key={treatment.id ?? `new-${treatmentIndex}`} className="rounded-lg border bg-white p-3 space-y-3">
+                            <div className="grid grid-cols-1 md:grid-cols-12 gap-2 items-end">
+                              <label className="md:col-span-4"><span className="block text-xs font-medium mb-1">Tratamiento</span><input value={treatment.name} onChange={e => updateAiTreatment(branch.branchKey,treatmentIndex,{name:e.target.value})} placeholder="Ej. Limpieza dental" className="w-full border rounded-lg px-3 py-2" /></label>
+                              <label className="md:col-span-2"><span className="block text-xs font-medium mb-1">Precio</span><input type="number" min="0" step="0.01" value={treatment.price} onChange={e => updateAiTreatment(branch.branchKey,treatmentIndex,{price:e.target.value === '' ? '' : Number(e.target.value)})} placeholder="350" className="w-full border rounded-lg px-3 py-2" /></label>
+                              <label className="md:col-span-2"><span className="block text-xs font-medium mb-1">Duración (h)</span><input type="number" min="0.5" step="0.5" value={treatment.durationHours} onChange={e => updateAiTreatment(branch.branchKey,treatmentIndex,{durationHours:Math.max(0.5,Number(e.target.value)||0.5)})} className="w-full border rounded-lg px-3 py-2" /></label>
+                              <label className="md:col-span-2 flex items-center gap-2 h-10"><input type="checkbox" checked={treatment.active !== false} onChange={e => updateAiTreatment(branch.branchKey,treatmentIndex,{active:e.target.checked})} /><span className="text-sm">Activo</span></label>
+                              <div className="md:col-span-2 flex justify-end"><button type="button" onClick={() => removeAiTreatment(branch.branchKey,treatmentIndex)} className="px-3 py-2 rounded-lg border border-red-200 text-red-600 hover:bg-red-50 flex items-center gap-1"><Trash2 className="w-4 h-4" /> Quitar</button></div>
+                            </div>
+                            <label className="block"><span className="block text-xs font-medium mb-1">Descripción / qué incluye</span><textarea rows={2} value={treatment.description} onChange={e => updateAiTreatment(branch.branchKey,treatmentIndex,{description:e.target.value})} placeholder="Información real que la IA puede explicar" className="w-full border rounded-lg px-3 py-2 resize-y" /></label>
+                          </div>
+                        ))}
+                        {(branch.treatments || []).length === 0 && <div className="rounded-lg border border-dashed bg-white p-4 text-center text-sm text-gray-500">No hay tratamientos configurados para esta sucursal.</div>}
+                      </div>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -1889,6 +2000,13 @@ function EmpresasModule() {
                   </label>
 
                   <label>
+                    <span className="block text-sm font-medium text-gray-700 mb-1">Sucursal que atenderá este canal</span>
+                    <select value={channelForm.branchKey} onChange={e => setChannelForm(v => ({...v, branchKey:e.target.value}))} className="w-full px-3 py-2 border rounded-lg bg-white">
+                      {(aiBranches.length ? aiBranches : [makeEmptyBranchAI(channelsCompany.id, 'sucursal_1', channelsCompany.branchName || 'Sucursal principal')]).map(branch => <option key={branch.branchKey} value={branch.branchKey}>{branch.name || branch.branchKey}</option>)}
+                    </select>
+                  </label>
+
+                  <label>
                     <span className="block text-sm font-medium text-gray-700 mb-1">
                       {channelForm.channel === 'messenger' ? 'Page ID de Facebook' : 'Phone Number ID de WhatsApp'}
                     </span>
@@ -1937,7 +2055,7 @@ function EmpresasModule() {
                 </div>
 
                 <div className="flex justify-end gap-2">
-                  <button type="button" onClick={() => setChannelForm({...emptyChannelForm, name:`Facebook Messenger ${channelsCompany.name}`})} className="px-4 py-2 border rounded-lg">Limpiar</button>
+                  <button type="button" onClick={() => setChannelForm({...emptyChannelForm, branchKey: aiBranches[0]?.branchKey || 'sucursal_1', name:`Facebook Messenger ${channelsCompany.name}`})} className="px-4 py-2 border rounded-lg">Limpiar</button>
                   <button disabled={channelsLoading} className="px-4 py-2 bg-blue-600 text-white rounded-lg disabled:opacity-60">{channelsLoading ? 'Guardando...' : 'Guardar canal'}</button>
                 </div>
               </form>
@@ -1955,6 +2073,7 @@ function EmpresasModule() {
                         </div>
                         <div className="mt-1 text-xs text-gray-500">
                           {channel.channel === 'messenger' ? 'Page ID' : 'Phone Number ID'}: <span className="font-mono">{channel.externalId}</span>
+                          {channel.branchKey && <> · Sucursal: <span className="font-medium">{aiBranches.find(b => b.branchKey === channel.branchKey)?.name || channel.branchKey}</span></>}
                         </div>
                       </div>
                       <div className="flex gap-2">

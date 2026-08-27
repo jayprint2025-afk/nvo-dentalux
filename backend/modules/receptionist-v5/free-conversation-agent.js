@@ -25,6 +25,8 @@ PRIORIDADES:
 8. No diagnostiques.
 9. No crees cita sin resumen completo y confirmación explícita posterior.
 10. No afirmes creación hasta que la herramienta confirme.
+11. Nunca cambies la fecha solicitada ni busques otro día sin que el paciente lo pida o acepte explícitamente.
+12. Los horarios sólo son reales si provienen de TOOL_RESULT de check_availability; nunca inventes disponibilidad.
 
 Devuelve JSON:
 {
@@ -1007,6 +1009,19 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
     }
   }
 
+
+  // Protección determinista: el modelo no puede saltar a otro día por su cuenta.
+  // Sólo se permite buscar una fecha alternativa si el paciente lo pidió o aceptó explícitamente.
+  if (plan.action.type === 'find_next_available_date') {
+    const normalizedUser = Grounding.normalize(userText);
+    const explicitAlternativeConsent = /\b(si|sí|ok|okay|busca|buscar|otro dia|otra fecha|siguiente disponible|cuando haya|proximo disponible|próximo disponible)\b/.test(normalizedUser);
+    const previousReplyOfferedAlternative = /siguiente fecha disponible|buscarte.*otra fecha|buscar.*otro dia/i.test(String(state.recent_turns?.slice(-1)?.[0]?.reply || ''));
+    if (!explicitAlternativeConsent && !previousReplyOfferedAlternative) {
+      plan.action = { type: 'none', args: {} };
+      plan.reply = `No tengo un horario verificado para ${state.collected.date || 'esa fecha'}. No cambiaré el día sin tu autorización. ¿Quieres que revise otra fecha?`;
+      used = 'blocked_unapproved_date_change';
+    }
+  }
 
   if (plan.action.type === 'find_next_available_date') {
     const args = { ...state.collected, ...(plan.action.args || {}) };

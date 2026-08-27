@@ -1,6 +1,6 @@
 'use strict';
 const crypto = require('crypto');
-const { computeAvailability, createAppointmentTransactional } = require('../booking-engine');
+const { createAppointmentTransactional } = require('../booking-engine');
 
 function bookingKey(data) {
   return crypto.createHash('sha256').update(JSON.stringify({
@@ -13,20 +13,118 @@ function bookingKey(data) {
   })).digest('hex').slice(0,24);
 }
 
+function timeToMinutes(value) {
+  const [h, m] = String(value || '00:00').slice(0, 5).split(':').map(Number);
+  return (Number(h) || 0) * 60 + (Number(m) || 0);
+}
+function minutesToTime(value) {
+  const h = Math.floor(value / 60);
+  const m = value % 60;
+  return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
+}
+function parseBusinessHours(text, date) {
+  const raw = String(text || '').trim();
+  if (!raw) return null;
+  const day = new Date(`${date}T12:00:00`).getDay(); // 0 dom ... 6 sáb
+  const normalized = raw.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
+  const segments = normalized.split(/[;\n]+/).map(v => v.trim()).filter(Boolean);
+  const labels = day === 0 ? ['dom','domingo'] : day === 6 ? ['sab','sabado'] : ['l-v','lun-vie','lunes a viernes','lunes-viernes'];
+  let chosen = segments.find(seg => labels.some(label => seg.includes(label)));
+  if (!chosen && day >= 1 && day <= 5) chosen = segments.find(seg => /lunes|lun|l-v/.test(seg));
+  if (!chosen) return null;
+  if (/cerrado|no\s+abr/.test(chosen)) return { closed: true };
+  const times = [...chosen.matchAll(/(\d{1,2})(?::(\d{2}))?\s*(?:h|hrs?)?/g)]
+    .map(m => ({ h:Number(m[1]), m:Number(m[2] || 0) }))
+    .filter(x => x.h <= 23 && x.m <= 59)
+    .map(x => x.h * 60 + x.m);
+  if (times.length < 2) return null;
+  return { start: times[0], end: times[1], closed: false };
+}
 async function checkAvailability(q, ctx, args) {
-  const result = await computeAvailability(q, {
-    clinic_id: ctx.tenant_id || ctx.clinic_id,
-    branch_key: args.branch_key,
-    date: args.date,
-    duration_hours: Number(args.duration_hours || 1),
-    limit: Number(args.limit || 20),
-    min_start_mins: args.min_start_mins == null ? null : Number(args.min_start_mins),
-  });
-  let slots = Array.isArray(result?.slots) ? result.slots : [];
-  if (args.after_time) slots = slots.filter(slot => String(slot.start_time).slice(0,5) >= String(args.after_time).slice(0,5));
-  if (args.before_time) slots = slots.filter(slot => String(slot.start_time).slice(0,5) <= String(args.before_time).slice(0,5));
-  if (args.exact_time) slots = slots.filter(slot => String(slot.start_time).slice(0,5) === String(args.exact_time).slice(0,5));
-  return { slots: slots.slice(0,8), date: args.date, branch_key: args.branch_key };
+  const tenantId = String(ctx.tenant_id || ctx.clinic_id || '').trim();
+  const branchKey = String(args.branch_key || '').trim();
+  const date = String(args.date || '').slice(0,10);
+  const serviceId = String(args.service_id || '').trim();
+  if (!tenantId || !branchKey || !date) return { slots: [], date, branch_key: branchKey, reason: 'missing_context' };
+
+  const branchResult = await q(
+    `SELECT business_hours, booking_enabled, active FROM branches
+      WHERE tenant_id=$1::uuid AND branch_key=$2 LIMIT 1`, [tenantId, branchKey]
+  );
+  const branch = branchResult.rows?.[0];
+  if (!branch || branch.active === false || branch.booking_enabled === false) {
+    return { slots: [], date, branch_key: branchKey, reason: 'branch_not_bookable' };
+  }
+
+  let durationHours = Number(args.duration_hours || 0);
+  if (serviceId) {
+    const serviceResult = await q(
+      `SELECT id, COALESCE(duration_hours,1) AS duration_hours
+         FROM services
+        WHERE tenant_id=$1::uuid AND sucursal_id=$2 AND id::text=$3
+          AND COALESCE(active,TRUE)=TRUE LIMIT 1`,
+      [tenantId, branchKey, serviceId]
+    );
+    if (!serviceResult.rows?.[0]) return { slots: [], date, branch_key: branchKey, reason: 'service_not_in_branch' };
+    durationHours = Number(serviceResult.rows[0].duration_hours || durationHours || 1);
+  }
+  if (!Number.isFinite(durationHours) || durationHours <= 0) durationHours = 1;
+  const durationMins = Math.max(30, Math.ceil(durationHours * 60 / 30) * 30);
+
+  const hours = parseBusinessHours(branch.business_hours, date);
+  if (hours?.closed) return { slots: [], date, branch_key: branchKey, reason: 'closed' };
+  const start = hours?.start ?? 8 * 60;
+  const end = hours?.end ?? 20 * 60;
+
+  const doctorsResult = await q(
+    `SELECT id, name FROM doctors
+      WHERE tenant_id=$1::uuid AND sucursal_id=$2 ORDER BY id`, [tenantId, branchKey]
+  );
+  const doctors = doctorsResult.rows || [];
+  if (!doctors.length) return { slots: [], date, branch_key: branchKey, reason: 'no_doctors' };
+
+  const appointmentsResult = await q(
+    `SELECT id, doctor_id, start_time::text AS start_time, COALESCE(duration_hours,1) AS duration_hours, status
+       FROM appointments
+      WHERE tenant_id=$1::uuid AND sucursal_id=$2 AND date=$3::date
+        AND LOWER(COALESCE(status,'')) NOT LIKE '%cancel%'`,
+    [tenantId, branchKey, date]
+  );
+  const busy = appointmentsResult.rows || [];
+  const now = new Date();
+  const todayLocal = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
+  const currentMins = now.getHours()*60 + now.getMinutes();
+  const minRequested = args.min_start_mins == null ? null : Number(args.min_start_mins);
+  const slots = [];
+
+  for (let slotStart = start; slotStart + durationMins <= end; slotStart += 30) {
+    if (date === todayLocal && slotStart <= currentMins) continue;
+    if (Number.isFinite(minRequested) && slotStart < minRequested) continue;
+    const slotEnd = slotStart + durationMins;
+    const freeDoctor = doctors.find(doc => !busy.some(apt => {
+      if (String(apt.doctor_id) !== String(doc.id)) return false;
+      const aptStart = timeToMinutes(apt.start_time);
+      const aptEnd = aptStart + Math.max(30, Number(apt.duration_hours || 1) * 60);
+      return slotStart < aptEnd && slotEnd > aptStart;
+    }));
+    if (!freeDoctor) continue;
+    slots.push({
+      date,
+      start_time: minutesToTime(slotStart),
+      end_time: minutesToTime(slotEnd),
+      doctor_id: freeDoctor.id,
+      doctor_name: freeDoctor.name,
+      duration_hours: durationHours,
+      verified: true,
+    });
+    if (slots.length >= Number(args.limit || 20)) break;
+  }
+
+  let filtered = slots;
+  if (args.after_time) filtered = filtered.filter(slot => slot.start_time >= String(args.after_time).slice(0,5));
+  if (args.before_time) filtered = filtered.filter(slot => slot.start_time <= String(args.before_time).slice(0,5));
+  if (args.exact_time) filtered = filtered.filter(slot => slot.start_time === String(args.exact_time).slice(0,5));
+  return { slots: filtered.slice(0,8), date, branch_key: branchKey, verified: true, source: 'appointments_db' };
 }
 
 function normalizePhone(value) {

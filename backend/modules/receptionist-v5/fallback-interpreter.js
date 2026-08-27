@@ -22,6 +22,8 @@ function branch(text) {
   const n = normalize(text);
   if (/\b(victoria|sucursal\s*1|sucursal_1|la primera)\b/.test(n)) return 'sucursal_1';
   if (/\b(condesa|sucursal\s*2|sucursal_2|la segunda)\b/.test(n)) return 'sucursal_2';
+  const dynamicBranch = n.match(/\bsucursal[\s_-]*(\d+)\b/);
+  if (dynamicBranch) return `sucursal_${dynamicBranch[1]}`;
   return null;
 }
 

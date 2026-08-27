@@ -136,11 +136,17 @@ const poolDB3 = null;
 const als = new AsyncLocalStorage();
 
 function normalizeSucursal(value) {
-  const sucursal = String(value || '').trim().toLowerCase();
-  if (sucursal === 'condesa' || sucursal === 'sucursal_2' || sucursal === '2') {
-    return 'sucursal_2';
-  }
-  return 'sucursal_1';
+  const raw = String(value || '').trim().toLowerCase();
+  if (!raw) return 'sucursal_1';
+  // Compatibilidad con instalaciones antiguas, sin colapsar sucursales dinámicas.
+  if (raw === 'condesa' || raw === '2') return 'sucursal_2';
+  if (raw === '1') return 'sucursal_1';
+  const normalized = raw
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9_-]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .replace(/_+/g, '_');
+  return normalized || 'sucursal_1';
 }
 
 function getSucursal(req) {
@@ -1488,7 +1494,7 @@ app.get('/api/services', authRequired, ah(async (req, res) => {
   const s = getSucursal(req);
   const tenantId = getTenantId(req);
   const { rows } = await q(
-    `SELECT id, name, sucursal_id
+    `SELECT id, name, price, duration_hours, description, active, sucursal_id
      FROM services
      WHERE tenant_id = $1 AND ${sucWhereN(2)}
      ORDER BY id ASC`, [tenantId, s]
@@ -1499,11 +1505,11 @@ app.get('/api/services', authRequired, ah(async (req, res) => {
 app.post('/api/services', authRequired, ah(async (req, res) => {
   const s = getSucursal(req);
   const tenantId = getTenantId(req);
-  const { name } = req.body || {};
+  const { name, price, duration_hours, description, active } = req.body || {};
   const { rows } = await q(
-    `INSERT INTO services (name, sucursal_id, tenant_id)
-     VALUES ($1,$2,$3) RETURNING *`,
-    [name, s, tenantId]
+    `INSERT INTO services (name, price, duration_hours, description, active, sucursal_id, tenant_id)
+     VALUES ($1,$2,$3,$4,COALESCE($5,TRUE),$6,$7) RETURNING *`,
+    [name, price == null || price === '' ? null : Number(price), duration_hours ? Number(duration_hours) : 1, description || '', active, s, tenantId]
   );
   res.json(rows[0]);
 }));
@@ -4069,6 +4075,17 @@ async function ensureCoreTenantSchema() {
     await q(`CREATE INDEX IF NOT EXISTS idx_${table}_tenant_sucursal ON ${table}(tenant_id, sucursal_id)`);
   }
 
+  // Catálogo autoritativo de tratamientos para IA y agenda.
+  // Cada servicio pertenece a una empresa + sucursal y define precio/duración reales.
+  const servicesExistsForAi = await q(`SELECT to_regclass('public.services') AS name`);
+  if (servicesExistsForAi.rows[0]?.name) {
+    await q(`ALTER TABLE services ADD COLUMN IF NOT EXISTS price NUMERIC(12,2)`);
+    await q(`ALTER TABLE services ADD COLUMN IF NOT EXISTS duration_hours NUMERIC(6,2) NOT NULL DEFAULT 1`);
+    await q(`ALTER TABLE services ADD COLUMN IF NOT EXISTS description TEXT`);
+    await q(`ALTER TABLE services ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT TRUE`);
+    await q(`CREATE INDEX IF NOT EXISTS idx_services_tenant_branch_active ON services(tenant_id, sucursal_id, active)`);
+  }
+
   // El SKU ya no debe ser único globalmente: cada empresa/sucursal puede usar el mismo SKU.
   const inventoryExists = await q(`SELECT to_regclass('public.inventory') AS name`);
   if (inventoryExists.rows[0]?.name) {
@@ -5476,20 +5493,37 @@ const branchAiSelect = `
          ai_enabled, booking_enabled, active
     FROM branches
    WHERE tenant_id = $1::uuid
-   ORDER BY CASE branch_key WHEN 'sucursal_1' THEN 1 WHEN 'sucursal_2' THEN 2 ELSE 3 END,
-            created_at ASC`;
+   ORDER BY created_at ASC, name ASC, branch_key ASC`;
 
 app.get('/api/companies/:id/branches/ai-config', authRequired, companiesSuperAdminOnly, ah(async (req, res) => {
-  const { rows: tenantRows } = await poolDB1.query('SELECT id FROM tenants WHERE id=$1::uuid LIMIT 1', [req.params.id]);
+  const tenantId = req.params.id;
+  const { rows: tenantRows } = await poolDB1.query('SELECT id FROM tenants WHERE id=$1::uuid LIMIT 1', [tenantId]);
   if (!tenantRows[0]) return res.status(404).json({ error: 'Empresa no encontrada' });
-  const { rows } = await poolDB1.query(branchAiSelect, [req.params.id]);
-  res.json(rows.map(mapBranchAI));
+  const { rows } = await poolDB1.query(branchAiSelect, [tenantId]);
+  const { rows: serviceRows } = await poolDB1.query(
+    `SELECT id, name, price, duration_hours, description, active, sucursal_id
+       FROM services
+      WHERE tenant_id=$1::uuid
+      ORDER BY sucursal_id, name`, [tenantId]
+  );
+  res.json(rows.map(row => ({
+    ...mapBranchAI(row),
+    treatments: serviceRows
+      .filter(service => String(service.sucursal_id || '') === String(row.branch_key))
+      .map(service => ({
+        id: service.id,
+        name: service.name || '',
+        price: service.price == null ? '' : Number(service.price),
+        durationHours: Number(service.duration_hours || 1),
+        description: service.description || '',
+        active: service.active !== false
+      }))
+  })));
 }));
 
 app.put('/api/companies/:id/branches/ai-config', authRequired, companiesSuperAdminOnly, ah(async (req, res) => {
   const tenantId = req.params.id;
   const branches = Array.isArray(req.body?.branches) ? req.body.branches : [];
-  const allowedKeys = new Set(['sucursal_1', 'sucursal_2']);
   if (!branches.length) return res.status(400).json({ error: 'Envía la configuración de las sucursales' });
 
   const client = await poolDB1.connect();
@@ -5502,9 +5536,9 @@ app.put('/api/companies/:id/branches/ai-config', authRequired, companiesSuperAdm
     }
 
     for (const item of branches) {
-      const branchKey = String(item?.branchKey || '').trim();
-      if (!allowedKeys.has(branchKey)) continue;
-      const defaultName = branchKey === 'sucursal_1' ? 'Victoria' : 'Condesa';
+      const branchKey = normalizeSucursal(item?.branchKey);
+      if (!branchKey || !/^[a-z0-9][a-z0-9_-]{0,79}$/.test(branchKey)) continue;
+      const defaultName = String(item?.name || '').trim() || branchKey.replace(/[_-]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
       await client.query(`
         INSERT INTO branches (
           tenant_id, branch_key, name, phone, whatsapp, address,
@@ -5539,11 +5573,70 @@ app.put('/api/companies/:id/branches/ai-config', authRequired, companiesSuperAdm
         String(item?.extraInformation || '').trim(), String(item?.promotions || '').trim(),
         item?.aiEnabled !== false, item?.bookingEnabled !== false, item?.active !== false
       ]);
+
+      // Guardar tratamientos reales de ESTA empresa y ESTA sucursal.
+      const treatments = Array.isArray(item?.treatments) ? item.treatments : [];
+      const keepIds = [];
+      for (const treatment of treatments) {
+        const name = String(treatment?.name || '').trim();
+        if (!name) continue;
+        const price = treatment?.price === '' || treatment?.price == null ? null : Number(treatment.price);
+        const durationHours = Number(treatment?.durationHours || 1);
+        const description = String(treatment?.description || '').trim();
+        const isActive = treatment?.active !== false;
+        const treatmentId = Number(treatment?.id);
+
+        if (Number.isFinite(treatmentId) && treatmentId > 0) {
+          const updated = await client.query(
+            `UPDATE services SET name=$1, price=$2, duration_hours=$3, description=$4, active=$5, sucursal_id=$6
+              WHERE id=$7 AND tenant_id=$8::uuid RETURNING id`,
+            [name, Number.isFinite(price) ? price : null, Number.isFinite(durationHours) && durationHours > 0 ? durationHours : 1, description, isActive, branchKey, treatmentId, tenantId]
+          );
+          if (updated.rows[0]?.id) keepIds.push(Number(updated.rows[0].id));
+        } else {
+          const inserted = await client.query(
+            `INSERT INTO services (name, price, duration_hours, description, active, sucursal_id, tenant_id)
+             VALUES ($1,$2,$3,$4,$5,$6,$7::uuid) RETURNING id`,
+            [name, Number.isFinite(price) ? price : null, Number.isFinite(durationHours) && durationHours > 0 ? durationHours : 1, description, isActive, branchKey, tenantId]
+          );
+          keepIds.push(Number(inserted.rows[0].id));
+        }
+      }
+
+      // Si el formulario trae treatments, refleja exactamente ese catálogo para la sucursal.
+      if (Array.isArray(item?.treatments)) {
+        if (keepIds.length) {
+          await client.query(
+            `UPDATE services SET active=FALSE
+              WHERE tenant_id=$1::uuid AND sucursal_id=$2 AND NOT (id = ANY($3::int[]))`,
+            [tenantId, branchKey, keepIds]
+          );
+        } else {
+          await client.query(
+            `UPDATE services SET active=FALSE WHERE tenant_id=$1::uuid AND sucursal_id=$2`,
+            [tenantId, branchKey]
+          );
+        }
+      }
     }
 
     await client.query('COMMIT');
     const { rows } = await poolDB1.query(branchAiSelect, [tenantId]);
-    res.json(rows.map(mapBranchAI));
+    const { rows: serviceRows } = await poolDB1.query(
+      `SELECT id, name, price, duration_hours, description, active, sucursal_id
+         FROM services WHERE tenant_id=$1::uuid ORDER BY sucursal_id, name`, [tenantId]
+    );
+    res.json(rows.map(row => ({
+      ...mapBranchAI(row),
+      treatments: serviceRows
+        .filter(service => String(service.sucursal_id || '') === String(row.branch_key))
+        .map(service => ({
+          id: service.id, name: service.name || '',
+          price: service.price == null ? '' : Number(service.price),
+          durationHours: Number(service.duration_hours || 1),
+          description: service.description || '', active: service.active !== false
+        }))
+    })));
   } catch (error) {
     await client.query('ROLLBACK').catch(() => {});
     throw error;
@@ -5556,6 +5649,37 @@ app.put('/api/companies/:id/branches/ai-config', authRequired, companiesSuperAdm
 // ===============================================================================
 // CANALES POR EMPRESA — WhatsApp y Facebook Messenger
 // ===============================================================================
+
+
+app.delete('/api/companies/:id/branches/:branchKey', authRequired, companiesSuperAdminOnly, ah(async (req, res) => {
+  const tenantId = req.params.id;
+  const branchKey = normalizeSucursal(req.params.branchKey);
+  const client = await poolDB1.connect();
+  try {
+    await client.query('BEGIN');
+    const count = await client.query('SELECT COUNT(*)::int AS total FROM branches WHERE tenant_id=$1::uuid', [tenantId]);
+    if (Number(count.rows[0]?.total || 0) <= 1) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'Cada empresa debe conservar al menos una sucursal' });
+    }
+    const deleted = await client.query(
+      'DELETE FROM branches WHERE tenant_id=$1::uuid AND branch_key=$2 RETURNING id, branch_key',
+      [tenantId, branchKey]
+    );
+    if (!deleted.rows[0]) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Sucursal no encontrada' });
+    }
+    await client.query('UPDATE services SET active=FALSE WHERE tenant_id=$1::uuid AND sucursal_id=$2', [tenantId, branchKey]);
+    await client.query(`UPDATE clinic_channels SET active=FALSE, is_active=FALSE, updated_at=NOW()
+                        WHERE tenant_id=$1::uuid AND (branch_key=$2 OR sucursal_id=$2)`, [tenantId, branchKey]);
+    await client.query('COMMIT');
+    res.json({ ok: true, branchKey });
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally { client.release(); }
+}));
 
 function mapCompanyChannel(row) {
   const config = row.config && typeof row.config === 'object'
@@ -5688,6 +5812,7 @@ app.post(
     const externalId = String(req.body?.externalId || '').replace(/\s/g, '').trim();
     const name = String(req.body?.name || '').trim();
     const accessToken = String(req.body?.accessToken || '').trim();
+    const branchKey = normalizeSucursal(req.body?.branchKey || req.body?.sucursalId || 'sucursal_1');
     const active = req.body?.active !== false;
 
     if (!['messenger', 'whatsapp'].includes(channel)) {
@@ -5710,6 +5835,11 @@ app.post(
     if (!tenantRows[0]) {
       return res.status(404).json({ error: 'Empresa no encontrada' });
     }
+    const { rows: branchRows } = await poolDB1.query(
+      'SELECT branch_key FROM branches WHERE tenant_id=$1::uuid AND branch_key=$2 LIMIT 1',
+      [tenantId, branchKey]
+    );
+    if (!branchRows[0]) return res.status(400).json({ error: 'La sucursal seleccionada no pertenece a esta empresa' });
 
     const client = await poolDB1.connect();
 
@@ -5791,17 +5921,20 @@ app.post(
                   external_id=$1,
                   name=$2,
                   clinic_name=$2,
-                  active=$3,
-                  is_active=$3,
-                  config=$4::jsonb,
-                  metadata=$5::jsonb,
+                  branch_key=$3,
+                  sucursal_id=$3,
+                  active=$4,
+                  is_active=$4,
+                  config=$5::jsonb,
+                  metadata=$6::jsonb,
                   updated_at=NOW()
-            WHERE id=$6
-              AND tenant_id=$7::uuid
+            WHERE id=$7
+              AND tenant_id=$8::uuid
             RETURNING *`,
           [
             externalId,
             name || null,
+            branchKey,
             active,
             JSON.stringify(config),
             JSON.stringify(metadata),
@@ -5813,12 +5946,12 @@ app.post(
         saved = await client.query(
           `INSERT INTO clinic_channels (
              tenant_id, phone_number_id, external_id, channel,
-             name, clinic_name, db_key, active, is_active,
+             name, clinic_name, branch_key, sucursal_id, db_key, active, is_active,
              config, metadata, created_at, updated_at
            )
            VALUES (
-             $1::uuid,$2,$2,$3,$4,$4,'db1',$5,$5,
-             $6::jsonb,$7::jsonb,NOW(),NOW()
+             $1::uuid,$2,$2,$3,$4,$4,$5,$5,'db1',$6,$6,
+             $7::jsonb,$8::jsonb,NOW(),NOW()
            )
            RETURNING *`,
           [
@@ -5826,6 +5959,7 @@ app.post(
             externalId,
             channel,
             name || null,
+            branchKey,
             active,
             JSON.stringify(config),
             JSON.stringify(metadata)
@@ -6033,9 +6167,7 @@ app.post('/api/companies', authRequired, companiesSuperAdminOnly, ah(async (req,
     await client.query("INSERT INTO tenant_users(tenant_id,user_id,role,active) VALUES($1,$2,'owner',TRUE)", [tenant.id,user.id]);
     await client.query(`
       INSERT INTO branches(tenant_id,name,branch_key,phone,address,active)
-      VALUES
-        ($1,$2,'sucursal_1',$3,$4,TRUE),
-        ($1,'Condesa','sucursal_2','','',TRUE)
+      VALUES ($1,$2,'sucursal_1',$3,$4,TRUE)
       ON CONFLICT (tenant_id,branch_key) DO NOTHING
     `, [tenant.id,branchName,phone,address]);
     await client.query('COMMIT');
