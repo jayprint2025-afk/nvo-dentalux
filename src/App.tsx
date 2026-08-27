@@ -1638,6 +1638,78 @@ function EmpresasModule() {
     } : item));
   };
 
+  const importAiTreatmentsFile = async (branchKey: string, file?: File | null) => {
+    if (!file) return;
+    setAiMessage('');
+
+    try {
+      if (!file.name.toLowerCase().endsWith('.json')) {
+        throw new Error('Selecciona un archivo JSON válido.');
+      }
+
+      const text = await file.text();
+      const parsed = JSON.parse(text);
+      const source = Array.isArray(parsed)
+        ? parsed
+        : Array.isArray(parsed?.treatments)
+          ? parsed.treatments
+          : Array.isArray(parsed?.tratamientos)
+            ? parsed.tratamientos
+            : null;
+
+      if (!source) {
+        throw new Error('El archivo no contiene una lista de tratamientos compatible.');
+      }
+
+      const normalized: EmpresaTreatmentAI[] = source.map((item: any, index: number) => {
+        const name = String(item?.name ?? item?.tratamiento ?? item?.nombre ?? '').trim();
+        const rawPrice = item?.price ?? item?.precio ?? item?.costo;
+        const rawDuration = item?.durationHours ?? item?.duracion_horas ?? item?.duration ?? item?.duracion;
+        const description = String(item?.description ?? item?.descripcion ?? '').trim();
+        const cleanPrice = typeof rawPrice === 'string'
+          ? Number(String(rawPrice).replace(/[^0-9.-]/g, ''))
+          : Number(rawPrice);
+        const durationHours = Number(rawDuration);
+
+        if (!name) throw new Error(`El tratamiento ${index + 1} no tiene nombre.`);
+        if (!Number.isFinite(cleanPrice) || cleanPrice < 0) {
+          throw new Error(`El tratamiento "${name}" tiene un precio inválido.`);
+        }
+        if (!Number.isFinite(durationHours) || durationHours <= 0) {
+          throw new Error(`El tratamiento "${name}" tiene una duración inválida.`);
+        }
+
+        return {
+          name,
+          price: cleanPrice,
+          durationHours,
+          description,
+          active: item?.active !== false && item?.activo !== false
+        };
+      });
+
+      if (normalized.length === 0) {
+        throw new Error('El archivo no contiene tratamientos para importar.');
+      }
+
+      const current = aiBranches.find(item => item.branchKey === branchKey)?.treatments || [];
+      if (current.length > 0) {
+        const replace = window.confirm(
+          `Esta sucursal ya tiene ${current.length} tratamiento(s). ¿Deseas reemplazarlos con los ${normalized.length} del archivo?`
+        );
+        if (!replace) return;
+      }
+
+      setAiBranches(items => items.map(item => item.branchKey === branchKey
+        ? { ...item, treatments: normalized }
+        : item
+      ));
+      setAiMessage(`${normalized.length} tratamientos importados. Presiona "Guardar configuración" para guardarlos definitivamente.`);
+    } catch (e: any) {
+      setAiMessage(`Error al importar: ${e?.message || 'No se pudo leer el archivo'}`);
+    }
+  };
+
   const saveAIConfig = async () => {
     if (!aiCompany) return;
     setAiLoading(true);
@@ -1789,7 +1861,23 @@ function EmpresasModule() {
                           <h5 className="font-semibold text-gray-900">Tratamientos y precios reales</h5>
                           <p className="text-xs text-gray-600">La IA sólo usará tratamientos de esta sucursal. La duración se usa para validar espacios reales en agenda.</p>
                         </div>
-                        <button type="button" onClick={() => addAiTreatment(branch.branchKey)} className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-sm flex items-center gap-1"><Plus className="w-4 h-4" /> Tratamiento</button>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <label className="px-3 py-1.5 rounded-lg border border-emerald-300 bg-white text-emerald-700 text-sm flex items-center gap-1 cursor-pointer hover:bg-emerald-50">
+                            <FileText className="w-4 h-4" /> Importar JSON
+                            <input
+                              type="file"
+                              accept="application/json,.json"
+                              className="hidden"
+                              onChange={async e => {
+                                const input = e.currentTarget;
+                                const file = input.files?.[0];
+                                await importAiTreatmentsFile(branch.branchKey, file);
+                                input.value = '';
+                              }}
+                            />
+                          </label>
+                          <button type="button" onClick={() => addAiTreatment(branch.branchKey)} className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-sm flex items-center gap-1"><Plus className="w-4 h-4" /> Tratamiento</button>
+                        </div>
                       </div>
                       <div className="space-y-3">
                         {(branch.treatments || []).map((treatment, treatmentIndex) => (
