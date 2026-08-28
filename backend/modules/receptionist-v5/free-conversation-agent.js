@@ -98,21 +98,54 @@ async function callModel(messages) {
   const key = process.env.RECEPTIONIST_V5_API_KEY || process.env.OPENAI_API_KEY || '';
   if (!key) throw new Error('Falta RECEPTIONIST_V5_API_KEY');
 
-  const response = await fetch(process.env.OPENAI_CHAT_URL || 'https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
-    body: JSON.stringify({
-      model: process.env.RECEPTIONIST_V5_MODEL || 'gpt-4.1-mini',
-      temperature: 0.3,
-      max_tokens: 1400,
-      response_format: { type: 'json_object' },
-      messages,
-    }),
+  const url = process.env.OPENAI_CHAT_URL || 'https://api.openai.com/v1/chat/completions';
+  const body = JSON.stringify({
+    model: process.env.RECEPTIONIST_V5_MODEL || 'gpt-4.1-mini',
+    temperature: 0.3,
+    max_tokens: 1400,
+    response_format: { type: 'json_object' },
+    messages,
   });
 
-  if (!response.ok) throw new Error(`OpenAI ${response.status}: ${await response.text()}`);
-  const payload = await response.json();
-  return safePlan(parseJson(payload?.choices?.[0]?.message?.content));
+  const retryable = status =>
+    status === 408 ||
+    status === 409 ||
+    status === 429 ||
+    (status >= 500 && status <= 599);
+
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
+        body,
+      });
+
+      if (response.ok) {
+        const payload = await response.json();
+        return safePlan(parseJson(payload?.choices?.[0]?.message?.content));
+      }
+
+      const errorText = await response.text();
+      const error = new Error(`OpenAI ${response.status}: ${errorText.slice(0, 800)}`);
+      error.status = response.status;
+      lastError = error;
+
+      if (!retryable(response.status) || attempt === 3) throw error;
+    } catch (error) {
+      lastError = error;
+      const status = Number(error?.status || 0);
+      const canRetryNetworkError = !status;
+      if (attempt === 3 || (!canRetryNetworkError && !retryable(status))) throw error;
+    }
+
+    // Backoff corto: 350ms, 700ms.
+    await new Promise(resolve => setTimeout(resolve, 350 * attempt));
+  }
+
+  throw lastError || new Error('OpenAI no respondió');
 }
 
 function contextMessage(knowledge, state, userText, detected, toolResult = null) {
@@ -366,21 +399,26 @@ function deterministicInformation(knowledge, state, intents) {
 }
 
 async function repairPlan({ messages, plan, violations, knowledge, state, userText, detected }) {
-  const repair = await callModel([
-    ...messages,
-    { role: 'assistant', content: JSON.stringify(plan) },
-    {
-      role: 'user',
-      content: JSON.stringify({
-        instruction: 'Corrige la respuesta. No vuelvas a pedir datos conocidos. Responde primero el mensaje actual, evita repetir preguntas y conserva la conversación natural.',
-        violations,
-        AUTHORITATIVE_FACTS: Grounding.knownFacts(knowledge, state.collected),
-        DETECTED_FROM_CURRENT_MESSAGE: detected,
-        CURRENT_USER_MESSAGE: userText,
-      }),
-    },
-  ]);
-  return mergeActionArgs(repair, state.collected);
+  try {
+    const repair = await callModel([
+      ...messages,
+      { role: 'assistant', content: JSON.stringify(plan) },
+      {
+        role: 'user',
+        content: JSON.stringify({
+          instruction: 'Corrige la respuesta. No vuelvas a pedir datos conocidos. Responde primero el mensaje actual, evita repetir preguntas y conserva la conversación natural.',
+          violations,
+          AUTHORITATIVE_FACTS: Grounding.knownFacts(knowledge, state.collected),
+          DETECTED_FROM_CURRENT_MESSAGE: detected,
+          CURRENT_USER_MESSAGE: userText,
+        }),
+      },
+    ]);
+    return mergeActionArgs(repair, state.collected);
+  } catch (error) {
+    console.warn('⚠️ V5 repairPlan omitido por error temporal del modelo:', error.message);
+    return mergeActionArgs(plan, state.collected);
+  }
 }
 
 
