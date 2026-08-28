@@ -1300,6 +1300,7 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
   }
 
   let used = plan.action.type || 'none';
+  let authoritativeReplyLocked = false;
 
   // FIX8: disponibilidad siempre consulta agenda antes de pedir datos personales.
   if (availabilityQuestion) {
@@ -1498,6 +1499,11 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
       } else {
         used = 'check_availability';
       }
+
+      // Esta respuesta ya fue construida con slots reales del backend.
+      // No debe pasar por repairPlan, porque el modelo puede reemplazarla
+      // por preguntas de nombre/teléfono y destruir la respuesta autoritativa.
+      authoritativeReplyLocked = true;
     }
   }
 
@@ -1781,7 +1787,7 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
   if (!plan.reply) plan.reply = knowledge.unknown_information_policy;
 
   let violations = Grounding.replyViolations(plan.reply, state, userText);
-  if (violations.length) {
+  if (violations.length && !authoritativeReplyLocked) {
     plan = await repairPlan({
       messages,
       plan,
@@ -1797,7 +1803,7 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
     violations = Grounding.replyViolations(plan.reply, state, userText);
   }
 
-  if (violations.length) {
+  if (violations.length && !authoritativeReplyLocked) {
     const facts = Grounding.knownFacts(knowledge, state.collected);
     const summary = [];
     if (facts.branch) summary.push(`Sucursal: ${facts.branch.name}`);
