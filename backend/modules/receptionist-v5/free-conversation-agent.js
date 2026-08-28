@@ -36,6 +36,7 @@ PRIORIDADES:
 19. No repitas una respuesta autoritativa del backend con otra versión de la misma información. Una sola respuesta clara es suficiente.
 20. Para preguntas de dolor, sensibilidad, riesgos o resultados, no garantices que algo sea indoloro, seguro o efectivo. Habla con prudencia: puede variar según el paciente y el profesional confirmará lo necesario.
 21. Para preparación previa usa únicamente datos confirmados de la clínica. Si no hay una indicación registrada, dilo de forma natural sin inventar instrucciones clínicas.
+22. No digas que una cita está agendada, reservada o confirmada antes de que create_appointment haya respondido exitosamente. Si ya tienes todos los datos, muestra directamente el resumen formal de confirmación; no pidas una confirmación intermedia.
 
 Devuelve JSON:
 {
@@ -131,16 +132,30 @@ function contextMessage(knowledge, state, userText, detected, toolResult = null)
   });
 }
 
+function naturalConfirmationDate(dateValue, timeZone = 'America/Tijuana') {
+  const raw = String(dateValue || '').slice(0, 10);
+  if (!raw) return 'fecha por confirmar';
+  const relative = Grounding.naturalDateLabel(raw, timeZone);
+  const target = new Date(`${raw}T12:00:00Z`);
+  if (Number.isNaN(target.getTime())) return relative;
+  const full = target.toLocaleDateString('es-MX', {
+    weekday: 'long', day: 'numeric', month: 'long', timeZone: 'UTC',
+  });
+  if (relative === 'hoy' || relative === 'mañana') return `${relative}, ${full}`;
+  return full;
+}
+
 function confirmationSummary(args, knowledge) {
   const branch = knowledge.branches.find(item => item.branch_key === args.branch_key);
   const service = knowledge.services.find(item => String(item.id) === String(args.service_id));
+  const timeZone = branch?.timezone || branch?.time_zone || 'America/Tijuana';
   return [
     `Paciente: ${args.patient}`,
     `Teléfono: ${args.phone}`,
     `Servicio: ${service?.name || args.service_name || args.service_id}`,
     `Sucursal: ${branch?.name || args.branch_key}`,
-    `Fecha: ${args.date}`,
-    `Hora: ${String(args.start_time || '').slice(0, 5)}`,
+    `Fecha: ${naturalConfirmationDate(args.date, timeZone)}`,
+    `Hora: ${formatNaturalTime(args.start_time)}`,
   ].join('\n');
 }
 
@@ -769,6 +784,26 @@ function naturalInformationReply(knowledge, state, intents = []) {
 
   const parts = [];
 
+  if (intents.includes('duration')) {
+    const hours = Number(service?.duration_hours);
+    if (Number.isFinite(hours) && hours > 0) {
+      const minutes = Math.round(hours * 60);
+      const label = minutes % 60 === 0
+        ? `${minutes / 60} ${minutes === 60 ? 'hora' : 'horas'}`
+        : `${minutes} minutos`;
+      parts.push(`${service?.name || 'El servicio'} dura aproximadamente ${label}.`);
+    } else {
+      parts.push(`No tengo confirmada la duración de ${service?.name || 'ese servicio'} en este momento.`);
+    }
+  }
+
+  if (intents.includes('preparation')) {
+    const notes = String(branch?.preparation_notes || '').trim();
+    parts.push(notes
+      ? notes
+      : 'No tengo registrada una preparación especial para ese tratamiento. Si el especialista requiere alguna indicación previa, la clínica te la confirmará.');
+  }
+
   if (intents.includes('payment_methods')) {
     parts.push(
       branch?.payment_methods
@@ -830,9 +865,20 @@ function stripSchedulingPitch(reply) {
     /\s*¿Deseas que te ayude a agendar(?:[^?]*)\?\s*$/i,
     /\s*¿Te gustaría (?:que te ayude a )?agendar(?:[^?]*)\?\s*$/i,
     /\s*¿Quieres que continúe con la reserva\?\s*$/i,
+    /\s*¿(?:En )?qué día te gustaría (?:agendar|venir|asistir)(?:[^?]*)\?\s*$/i,
+    /\s*¿Qué día te gustaría (?:agendar )?(?:tu )?cita(?:[^?]*)\?\s*$/i,
+    /\s*¿Quieres que te dé detalles(?:[^?]*)\?\s*$/i,
   ];
   for (const pattern of patterns) text = text.replace(pattern, '').trim();
   return text;
+}
+
+function sanitizeClinicalReply(reply) {
+  return String(reply || '')
+    .replace(/\s+de forma segura y efectiva/gi, '')
+    .replace(/\bes un procedimiento seguro y efectivo\b/gi, 'es un procedimiento cuyo resultado puede variar según cada paciente')
+    .replace(/\bgeneralmente no causa dolor\b/gi, 'puede sentirse diferente en cada paciente')
+    .trim();
 }
 
 function nearbyAvailabilityReply(slots, requestedTime) {
@@ -1121,7 +1167,17 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
         args.duration_hours = Number(authoritativeService.duration_hours);
       }
 
-      const toolResult = await Appointment.checkAvailability(q, ctx, args);
+      const requestedExactTime = String(args.exact_time || '').slice(0, 5);
+      const availabilityArgs = { ...args };
+      // Para una hora exacta necesitamos conocer también los horarios cercanos reales.
+      // No mandar exact_time al tool: validamos la hora exacta aquí contra todos los slots verificados.
+      if (requestedExactTime) {
+        delete availabilityArgs.exact_time;
+        delete availabilityArgs.start_time;
+        delete availabilityArgs.after_time;
+        delete availabilityArgs.before_time;
+      }
+      const toolResult = await Appointment.checkAvailability(q, ctx, availabilityArgs);
       let slots = Array.isArray(toolResult.slots) ? toolResult.slots : [];
       slots = slots.filter(slot => !state.rejected_slots.includes(String(slot.start_time).slice(0, 5)));
 
@@ -1520,7 +1576,7 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
 
   const currentInfoIntents = grounding.detected.information_intents || [];
   const authoritativeInfoIntents = currentInfoIntents.filter(intent =>
-    ['location', 'maps', 'business_hours', 'payment_methods', 'parking', 'promotion'].includes(intent)
+    ['location', 'maps', 'business_hours', 'payment_methods', 'parking', 'promotion', 'duration', 'preparation'].includes(intent)
   );
 
   if (currentInfoIntents.includes('price')) {
@@ -1548,6 +1604,7 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
   if (!wantsBooking && !state.pending_booking) {
     plan.reply = stripSchedulingPitch(plan.reply);
   }
+  plan.reply = sanitizeClinicalReply(plan.reply);
 
   if (!plan.reply) plan.reply = knowledge.unknown_information_policy;
 

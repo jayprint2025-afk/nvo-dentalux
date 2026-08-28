@@ -250,6 +250,8 @@ function informationIntents(text) {
   if (/\bdonde|direccion|ubicacion|ubica|hubica\b/.test(n)) intents.push('location');
   if (/\bmaps|mapa|google maps|como llegar|enlace\b/.test(n)) intents.push('maps');
   if (/\bprecio|cuanto cuesta|costo|cuanto sale\b/.test(n)) intents.push('price');
+  if (/\b(cuanto tarda|cuanto dura|duracion|tiempo tarda|tiempo dura)\b/.test(n)) intents.push('duration');
+  if (/\b(necesito llevar|debo llevar|llevar algo|ir preparada|ir preparado|preparacion|prepararme|antes de la cita)\b/.test(n)) intents.push('preparation');
   if (/\bpromocion|promociones|descuento|oferta\b/.test(n)) intents.push('promotion');
   if (/\bhorario|a que hora|abren|cierran\b/.test(n)) intents.push('business_hours');
   if (/\bpago|tarjeta|efectivo|transferencia\b/.test(n)) intents.push('payment_methods');
@@ -429,14 +431,16 @@ function bookingIntent(text, collected = {}) {
     /\b(hoy|manana|pasado manana|lunes|martes|miercoles|jueves|viernes|sabado|domingo)\b/.test(n);
 
   const asksAvailability =
-    /\b(horario|horarios|hora|horas|disponible|disponibilidad|espacio|espacios)\b/.test(n);
+    /\b(horario|horarios|hora|horas|disponible|disponibilidad|espacio|espacios|lugar|lugares|se podra|se puede|tienen lugar|hay lugar)\b/.test(n);
 
   const explicitBooking =
     /\b(agendar|agenda|agendame|ajendame|cita|consulta|limpieza|valoracion|revision|tratamiento|quiero|necesito|me gustaria)\b/.test(n);
 
-  // Si ya conocemos el servicio por el turno anterior, frases como
-  // "¿y para mañana qué horarios tienes?" siguen siendo disponibilidad.
-  if (hasDate && asksAvailability && collected.service_id) return true;
+  // Si ya conocemos el servicio, una consulta de disponibilidad o una hora concreta
+  // conserva el contexto de la cita aunque el paciente no repita "agendar" o "cita".
+  const timePreference = parseTimePreference(text, collected);
+  if (collected.service_id && asksAvailability && (hasDate || collected.date)) return true;
+  if (collected.service_id && collected.date && timePreference) return true;
 
   return explicitBooking && (
     hasDate ||
