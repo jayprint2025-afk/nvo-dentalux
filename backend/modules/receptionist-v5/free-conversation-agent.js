@@ -32,6 +32,10 @@ PRIORIDADES:
 15. Muestra horas naturales de 12 horas, por ejemplo 6:00 p. m., no 18:00.
 16. Nunca cambies el servicio solicitado por otro tratamiento al ofrecer disponibilidad.
 17. El servicio detectado en CURRENT_USER_MESSAGE tiene prioridad sobre sugerencias o servicios ajenos mencionados por el modelo. No sugieras un tratamiento distinto si el paciente no lo pidió.
+18. Si el paciente sólo pide información (precio, duración, ubicación, pagos, preparación, miedo/dolor, promociones), responde esa pregunta y NO termines automáticamente con "¿Quieres que te ayude a agendar?". Sólo conduce al agendamiento cuando el paciente muestre intención de reservar o pregunte disponibilidad.
+19. No repitas una respuesta autoritativa del backend con otra versión de la misma información. Una sola respuesta clara es suficiente.
+20. Para preguntas de dolor, sensibilidad, riesgos o resultados, no garantices que algo sea indoloro, seguro o efectivo. Habla con prudencia: puede variar según el paciente y el profesional confirmará lo necesario.
+21. Para preparación previa usa únicamente datos confirmados de la clínica. Si no hay una indicación registrada, dilo de forma natural sin inventar instrucciones clínicas.
 
 Devuelve JSON:
 {
@@ -750,17 +754,119 @@ function naturalAvailabilityReply(slots, dateValue, timeZone = 'America/Tijuana'
 function naturalPriceReply(service) {
   if (!service) return null;
   const price = Number(service.price);
-  const duration = Number(service.duration_hours || 0);
   if (!Number.isFinite(price)) return null;
 
-  let reply = `La ${String(service.name || 'atención').toLowerCase()} tiene un costo de $${price.toLocaleString('es-MX')}.`;
-  if (Number.isFinite(duration) && duration > 0) {
-    const mins = Math.round(duration * 60);
-    if (mins === 60) reply += ` La cita dura aproximadamente 1 hora.`;
-    else if (mins % 60 === 0) reply += ` La cita dura aproximadamente ${mins / 60} horas.`;
-    else reply += ` La cita dura aproximadamente ${mins} minutos.`;
+  return `El costo de ${service.name || 'ese servicio'} es de $${price.toLocaleString('es-MX')}.`;
+}
+
+function naturalInformationReply(knowledge, state, intents = []) {
+  const branch = knowledge.branches.find(
+    item => item.branch_key === state.collected.branch_key
+  );
+  const service = knowledge.services.find(
+    item => String(item.id) === String(state.collected.service_id)
+  );
+
+  const parts = [];
+
+  if (intents.includes('payment_methods')) {
+    parts.push(
+      branch?.payment_methods
+        ? `Sí 😊 Aceptamos ${String(branch.payment_methods).replace(/\s*,\s*/g, ', ').replace(/, ([^,]*)$/, ' y $1')}.`
+        : knowledge.unknown_information_policy
+    );
   }
-  return `${reply} ¿Quieres que te ayude a agendar?`;
+
+  if (intents.includes('location')) {
+    parts.push(
+      branch?.address
+        ? `Estamos en ${branch.address}${branch?.name ? `, sucursal ${branch.name}` : ''}.`
+        : knowledge.unknown_information_policy
+    );
+  }
+
+  if (intents.includes('maps')) {
+    parts.push(
+      branch?.google_maps_url
+        ? `Aquí tienes la ubicación en Google Maps: ${branch.google_maps_url}`
+        : branch?.address
+          ? `No tengo registrado el enlace de Maps, pero estamos en ${branch.address}.`
+          : knowledge.unknown_information_policy
+    );
+  }
+
+  if (intents.includes('business_hours')) {
+    parts.push(
+      branch?.business_hours
+        ? `Nuestro horario es ${branch.business_hours}.`
+        : knowledge.unknown_information_policy
+    );
+  }
+
+  if (intents.includes('parking')) {
+    parts.push(branch?.parking_info || knowledge.unknown_information_policy);
+  }
+
+  if (intents.includes('promotion')) {
+    const promotions = knowledge.promotions.filter(item =>
+      (!state.collected.branch_key || item.branch_key === state.collected.branch_key) &&
+      (!state.collected.service_id || !item.service_id || String(item.service_id) === String(state.collected.service_id))
+    );
+    parts.push(
+      promotions.length
+        ? `Promociones vigentes: ${promotions.map(item => item.title).join(', ')}.`
+        : `Por el momento no tengo una promoción vigente confirmada${service ? ` para ${service.name}` : ''}.`
+    );
+  }
+
+  return parts.filter(Boolean).join(' ');
+}
+
+function stripSchedulingPitch(reply) {
+  let text = String(reply || '').trim();
+  const patterns = [
+    /\s*¿Quieres que te ayude a agendar(?:[^?]*)\?\s*$/i,
+    /\s*¿Quieres que (?:te )?agende(?:[^?]*)\?\s*$/i,
+    /\s*¿Deseas que te ayude a agendar(?:[^?]*)\?\s*$/i,
+    /\s*¿Te gustaría (?:que te ayude a )?agendar(?:[^?]*)\?\s*$/i,
+    /\s*¿Quieres que continúe con la reserva\?\s*$/i,
+  ];
+  for (const pattern of patterns) text = text.replace(pattern, '').trim();
+  return text;
+}
+
+function nearbyAvailabilityReply(slots, requestedTime) {
+  const list = Array.isArray(slots) ? slots : [];
+  const requested = String(requestedTime || '').slice(0, 5);
+  if (!requested) return null;
+
+  const toMinutes = value => {
+    const [h, m] = String(value || '').slice(0, 5).split(':').map(Number);
+    return Number.isFinite(h) && Number.isFinite(m) ? h * 60 + m : null;
+  };
+
+  const target = toMinutes(requested);
+  if (target == null) return null;
+
+  const nearby = list
+    .map(slot => ({
+      slot,
+      mins: toMinutes(slot.start_time),
+    }))
+    .filter(item => item.mins != null)
+    .sort((a, b) => Math.abs(a.mins - target) - Math.abs(b.mins - target))
+    .slice(0, 2)
+    .map(item => formatNaturalTime(item.slot.start_time));
+
+  if (!nearby.length) {
+    return `A las ${formatNaturalTime(requested)} no tengo espacio disponible para ese servicio.`;
+  }
+
+  if (nearby.length === 1) {
+    return `A las ${formatNaturalTime(requested)} no tengo espacio, pero lo más cercano disponible es a las ${nearby[0]}. ¿Te funciona?`;
+  }
+
+  return `A las ${formatNaturalTime(requested)} no tengo espacio, pero tengo opciones cercanas a las ${nearby[0]} y ${nearby[1]}. ¿Cuál te queda mejor?`;
 }
 
 
@@ -1025,16 +1131,17 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
         ''
       ).slice(0, 5);
 
+      // Una consulta amplia ("mañana por la tarde") NO selecciona automáticamente
+      // el primer horario. Sólo existe selected cuando el paciente pidió una hora exacta.
       const selected =
-        (
-          requestedTime &&
-          slots.find(
-            slot =>
-              String(slot.start_time || '').slice(0, 5) === requestedTime
-          )
-        ) ||
-        slots[0] ||
-        null;
+        requestedTime
+          ? (
+              slots.find(
+                slot =>
+                  String(slot.start_time || '').slice(0, 5) === requestedTime
+              ) || null
+            )
+          : null;
       state.last_tool_result = {
         type: 'check_availability',
         result: { ...toolResult, slots },
@@ -1058,13 +1165,20 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
       Memory.mergeState(state, plan.state_patch);
 
       // Respuesta determinista y natural: sólo usa disponibilidad verificada.
-      plan.reply = naturalAvailabilityReply(
-        slots,
-        state.collected.date || toolResult.date,
-        resolveClinicTimeZone(knowledge, state)
-      );
+      if (requestedTime) {
+        plan.reply = selected
+          ? `Sí 😊 Las ${formatNaturalTime(requestedTime)} están disponibles. ¿Te funciona ese horario?`
+          : nearbyAvailabilityReply(slots, requestedTime);
+      } else {
+        plan.reply = naturalAvailabilityReply(
+          slots,
+          state.collected.date || toolResult.date,
+          resolveClinicTimeZone(knowledge, state)
+        );
+      }
 
-      // Guardar el horario ofrecido aunque el modelo no lo incluya en state_patch.
+      // Guardar el horario únicamente cuando el paciente pidió una hora exacta
+      // y esa hora fue validada por la herramienta.
       if (selected) {
         state.collected.start_time = String(selected.start_time).slice(0, 5);
         state.collected.doctor_id = selected.doctor_id || state.collected.doctor_id || null;
@@ -1079,8 +1193,9 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
         ObjectivePlanner.markSlotValidated(state, state.collected.selected_slot);
       }
 
-      // No permitir que una segunda redacción reemplace los horarios verificados.
-      if (!selected) {
+      // No bloquear toda la fecha cuando solamente falló una hora exacta.
+      // La fecha se marca sin disponibilidad sólo si la herramienta no devolvió ningún slot.
+      if (!slots.length) {
         ObjectivePlanner.markUnavailable(state, {
           date: state.collected.date,
           reason: 'La clínica está cerrada o no tiene disponibilidad en esa fecha.',
@@ -1090,6 +1205,13 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
           state.collected.date || toolResult.date,
           resolveClinicTimeZone(knowledge, state)
         );
+      } else if (requestedTime && !selected) {
+        delete state.collected.start_time;
+        delete state.collected.exact_time;
+        delete state.collected.end_time;
+        delete state.collected.doctor_id;
+        delete state.collected.doctor_name;
+        delete state.collected.selected_slot;
       }
 
       if (bookingModification.changed) {
@@ -1141,7 +1263,9 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
         } else {
           state.pending_booking = null;
           plan.action = { type: 'none', args: {} };
-          used = 'booking_change_unavailable';
+          used = slots.length
+            ? 'booking_change_time_unavailable'
+            : 'booking_change_unavailable';
         }
       } else {
         used = 'check_availability';
@@ -1394,7 +1518,12 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
     filteredInformationIntents
   );
 
-  if ((grounding.detected.information_intents || []).includes('price')) {
+  const currentInfoIntents = grounding.detected.information_intents || [];
+  const authoritativeInfoIntents = currentInfoIntents.filter(intent =>
+    ['location', 'maps', 'business_hours', 'payment_methods', 'parking', 'promotion'].includes(intent)
+  );
+
+  if (currentInfoIntents.includes('price')) {
     const authoritativeService = knowledge.services.find(
       item => String(item.id) === String(state.collected.service_id)
     );
@@ -1403,11 +1532,21 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
       plan.reply = priceReply;
       used = 'natural_price_authoritative';
     }
+  } else if (authoritativeInfoIntents.length && !wantsBooking) {
+    const infoReply = naturalInformationReply(
+      knowledge,
+      state,
+      authoritativeInfoIntents
+    );
+    if (infoReply) {
+      plan.reply = infoReply;
+      used = 'natural_information_authoritative';
+    }
   }
 
-  for (const part of deterministicParts) {
-    if (used === 'natural_price_authoritative' && /^El costo de /i.test(part)) continue;
-    if (!plan.reply.includes(part)) plan.reply = plan.reply ? `${part}\n\n${plan.reply}` : part;
+  // Si es una pregunta meramente informativa, evitar la presión comercial repetitiva.
+  if (!wantsBooking && !state.pending_booking) {
+    plan.reply = stripSchedulingPitch(plan.reply);
   }
 
   if (!plan.reply) plan.reply = knowledge.unknown_information_policy;

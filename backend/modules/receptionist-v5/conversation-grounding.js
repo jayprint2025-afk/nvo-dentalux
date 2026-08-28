@@ -189,12 +189,24 @@ function naturalDateLabel(dateValue, timeZone = 'America/Tijuana', now = new Dat
   return target.toLocaleDateString('es-MX', { weekday: 'long', timeZone: 'UTC' });
 }
 
-function parseTimePreference(text) {
+function parseTimePreference(text, previous = {}) {
   const n = normalize(text);
-  const match = n.match(/\b(?:a las?|despues de las?|antes de las?|desde las?)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/);
+  const match = n.match(
+    /\b(?:(?:como|aprox(?:imadamente)?|alrededor de|cerca de|tipo)\s+)?(?:a las?|despues de las?|antes de las?|desde las?)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/
+  );
+
   if (!match) {
-    if (/\bpor la manana\b/.test(n)) return { type: 'range', after_time: '08:00', before_time: '12:00' };
-    if (/\bpor la tarde\b/.test(n)) return { type: 'range', after_time: '12:00', before_time: '18:00' };
+    // Para agenda dental tratamos "por la tarde" como 13:00-18:00.
+    // Así no ofrecemos 12:00 como primera opción cuando el paciente dice "por la tarde".
+    if (/\bpor la manana\b/.test(n)) {
+      return { type: 'range', after_time: '08:00', before_time: '12:00' };
+    }
+    if (/\bpor la tarde\b/.test(n)) {
+      return { type: 'range', after_time: '13:00', before_time: '18:00' };
+    }
+    if (/\bpor la noche\b/.test(n)) {
+      return { type: 'range', after_time: '18:00', before_time: '21:00' };
+    }
     return null;
   }
 
@@ -204,12 +216,32 @@ function parseTimePreference(text) {
 
   if (meridiem === 'pm' && hour < 12) hour += 12;
   if (meridiem === 'am' && hour === 12) hour = 0;
-  if (!meridiem && /\btarde|noche\b/.test(n) && hour < 12) hour += 12;
+
+  // Si el paciente dice "como a las 4" después de haber pedido "por la tarde",
+  // conservar el contexto y entender 16:00, no 04:00.
+  const previousAfter = String(previous.after_time || '').slice(0, 5);
+  const previousBefore = String(previous.before_time || '').slice(0, 5);
+  const previousRangeIsAfternoon =
+    previousAfter >= '12:00' ||
+    previousBefore >= '13:00';
+
+  if (
+    !meridiem &&
+    hour < 12 &&
+    (/\btarde|noche\b/.test(n) || previousRangeIsAfternoon)
+  ) {
+    hour += 12;
+  }
 
   const value = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
   if (/\bdespues de|desde\b/.test(n)) return { type: 'after', after_time: value };
   if (/\bantes de\b/.test(n)) return { type: 'before', before_time: value };
-  return { type: 'exact', exact_time: value };
+
+  return {
+    type: 'exact',
+    exact_time: value,
+    approximate: /\b(como|aprox|aproximadamente|alrededor|cerca|tipo|mas o menos)\b/.test(n),
+  };
 }
 
 function informationIntents(text) {
@@ -276,7 +308,7 @@ function deriveFacts(text, knowledge, state, options = {}) {
     'America/Tijuana';
 
   const date = parseDate(text, clinicTimeZone, options.now || new Date());
-  const time = parseTimePreference(text);
+  const time = parseTimePreference(text, collected);
 
   if (branch) {
     collected.branch_key = branch.branch_key;
@@ -290,7 +322,25 @@ function deriveFacts(text, knowledge, state, options = {}) {
   if (phone) collected.phone = phone;
   if (patient) collected.patient = patient;
   if (date) collected.date = date;
-  if (time) Object.assign(collected, time);
+  if (time) {
+    if (time.type === 'exact') {
+      // El paciente ya eligió una hora: no conservar filtros anteriores como
+      // "por la tarde", porque pueden interferir en la validación exacta.
+      delete collected.after_time;
+      delete collected.before_time;
+      delete collected.start_time;
+      delete collected.selected_time;
+      delete collected.selected_slot;
+      delete collected.end_time;
+    } else if (time.type === 'range') {
+      delete collected.exact_time;
+      delete collected.start_time;
+      delete collected.selected_time;
+      delete collected.selected_slot;
+      delete collected.end_time;
+    }
+    Object.assign(collected, time);
+  }
 
   return {
     collected,
