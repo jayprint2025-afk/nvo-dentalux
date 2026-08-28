@@ -37,6 +37,8 @@ PRIORIDADES:
 20. Para preguntas de dolor, sensibilidad, riesgos o resultados, no garantices que algo sea indoloro, seguro o efectivo. Habla con prudencia: puede variar según el paciente y el profesional confirmará lo necesario.
 21. Para preparación previa usa únicamente datos confirmados de la clínica. Si no hay una indicación registrada, dilo de forma natural sin inventar instrucciones clínicas.
 22. No digas que una cita está agendada, reservada o confirmada antes de que create_appointment haya respondido exitosamente. Si ya tienes todos los datos, muestra directamente el resumen formal de confirmación; no pidas una confirmación intermedia.
+23. Si el paciente pregunta por una hora concreta, responde sobre ESA hora. Nunca digas “sí” y luego menciones una hora distinta. Si no está disponible, di claramente que esa hora no está disponible y ofrece únicamente alternativas verificadas cercanas.
+24. Nunca afirmes disponibilidad, rangos ni horas libres si todavía no conoces el servicio solicitado. La disponibilidad depende de la duración del tratamiento; primero pregunta qué servicio necesita.
 
 Devuelve JSON:
 {
@@ -884,6 +886,41 @@ function sanitizeClinicalReply(reply) {
     .trim();
 }
 
+
+function requestedTimeFromCurrentMessage(userText, state = {}) {
+  const normalized = Grounding.normalize(userText);
+  const parsed = Grounding.parseTimePreference(userText, state.collected || {});
+  if (parsed?.type === 'exact' && parsed.exact_time) {
+    return String(parsed.exact_time).slice(0, 5);
+  }
+
+  const match = normalized.match(/\b(?:como\s+)?a las?\s*(\d{1,2})(?::(\d{2}))?\b/);
+  if (!match) return null;
+
+  let hour = Number(match[1]);
+  const minute = Number(match[2] || 0);
+  const previousAfter = String(state?.collected?.after_time || '').slice(0, 5);
+  const previousBefore = String(state?.collected?.before_time || '').slice(0, 5);
+  const afternoonContext =
+    previousAfter >= '12:00' ||
+    previousBefore >= '13:00' ||
+    /\btarde|noche\b/.test(normalized);
+
+  if (hour < 12 && afternoonContext) hour += 12;
+  if (hour > 23 || minute > 59) return null;
+
+  return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+}
+
+function availabilityQuestionWithoutService(userText, state = {}) {
+  const normalized = Grounding.normalize(userText);
+  const asksAvailability =
+    /\b(horario|horarios|disponible|disponibilidad|espacio|espacios|lugar|lugares|se podra|se puede|tienen lugar|hay lugar)\b/.test(normalized) ||
+    Boolean(Grounding.parseTimePreference(userText, state.collected || {}));
+
+  return asksAvailability && !state?.collected?.service_id;
+}
+
 function nearbyAvailabilityReply(slots, requestedTime) {
   const list = Array.isArray(slots) ? slots : [];
   const requested = String(requestedTime || '').slice(0, 5);
@@ -1206,7 +1243,21 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
         args.duration_hours = Number(authoritativeService.duration_hours);
       }
 
-      const requestedExactTime = String(args.exact_time || '').slice(0, 5);
+      const currentMessageTime = requestedTimeFromCurrentMessage(userText, state);
+      const currentMessageHasBroadRange = grounding.detected?.time?.type === 'range';
+      if (currentMessageHasBroadRange) {
+        delete args.exact_time;
+        delete args.start_time;
+        delete args.selected_time;
+        delete args.selected_slot;
+        delete args.end_time;
+      }
+
+      const requestedExactTime = String(
+        currentMessageTime ||
+        args.exact_time ||
+        ''
+      ).slice(0, 5);
       const availabilityArgs = { ...args };
       // Para una hora exacta necesitamos conocer también los horarios cercanos reales.
       // No mandar exact_time al tool: validamos la hora exacta aquí contra todos los slots verificados.
@@ -1221,6 +1272,7 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
       slots = slots.filter(slot => !state.rejected_slots.includes(String(slot.start_time).slice(0, 5)));
 
       const requestedTime = String(
+        requestedTimeFromCurrentMessage(userText, state) ||
         state.collected.exact_time ||
         state.collected.start_time ||
         ''
