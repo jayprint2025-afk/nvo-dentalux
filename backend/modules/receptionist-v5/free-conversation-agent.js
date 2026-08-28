@@ -928,15 +928,7 @@ function sanitizeClinicalReply(reply) {
 function requestedTimeFromCurrentMessage(userText, state = {}) {
   const normalized = Grounding.normalize(userText);
   const parsed = Grounding.parseTimePreference(userText, state.collected || {});
-  if (parsed?.type === 'exact' && parsed.exact_time) {
-    return String(parsed.exact_time).slice(0, 5);
-  }
 
-  const match = normalized.match(/\b(?:como\s+)?a las?\s*(\d{1,2})(?::(\d{2}))?\b/);
-  if (!match) return null;
-
-  let hour = Number(match[1]);
-  const minute = Number(match[2] || 0);
   const previousAfter = String(state?.collected?.after_time || '').slice(0, 5);
   const previousBefore = String(state?.collected?.before_time || '').slice(0, 5);
   const afternoonContext =
@@ -944,7 +936,34 @@ function requestedTimeFromCurrentMessage(userText, state = {}) {
     previousBefore >= '13:00' ||
     /\btarde|noche\b/.test(normalized);
 
-  if (hour < 12 && afternoonContext) hour += 12;
+  const explicitAm =
+    /\b(a m|am|de la manana|por la manana)\b/.test(normalized);
+  const explicitPm =
+    /\b(p m|pm|de la tarde|por la tarde|de la noche|por la noche)\b/.test(normalized);
+
+  if (parsed?.type === 'exact' && parsed.exact_time) {
+    const [parsedHourRaw, parsedMinuteRaw] = String(parsed.exact_time).slice(0, 5).split(':');
+    let parsedHour = Number(parsedHourRaw);
+    const parsedMinute = Number(parsedMinuteRaw || 0);
+
+    // "Como a las 4" conserva el contexto previo de "por la tarde".
+    // Sólo respetamos 04:00 si el paciente indicó AM explícitamente.
+    if (parsedHour < 12 && !explicitAm && (explicitPm || afternoonContext)) {
+      parsedHour += 12;
+    }
+
+    if (parsedHour <= 23 && parsedMinute <= 59) {
+      return `${String(parsedHour).padStart(2, '0')}:${String(parsedMinute).padStart(2, '0')}`;
+    }
+  }
+
+  const match = normalized.match(/\b(?:como\s+)?a las?\s*(\d{1,2})(?::(\d{2}))?\b/);
+  if (!match) return null;
+
+  let hour = Number(match[1]);
+  const minute = Number(match[2] || 0);
+
+  if (hour < 12 && !explicitAm && (explicitPm || afternoonContext)) hour += 12;
   if (hour > 23 || minute > 59) return null;
 
   return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
@@ -1016,6 +1035,8 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
   ) {
     const reply =
       'Claro. Para revisar la disponibilidad real necesito saber qué servicio deseas, porque el tiempo de cada tratamiento es diferente. ¿Qué servicio necesitas?';
+
+    state.awaiting_service_for_availability = true;
 
     Memory.recordTurn(state, userText, reply, {
       used: 'availability_missing_service',
@@ -1210,12 +1231,29 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
   // Si el paciente está intentando agendar y ya tenemos sucursal, servicio y fecha,
   // la consulta de disponibilidad es obligatoria.
   const wantsBooking = Grounding.bookingIntent(userText, state.collected);
-  const availabilityQuestion =
-    wantsBooking &&
+
+  const lastTurn = state.recent_turns?.slice(-1)?.[0] || null;
+  const lastReply = String(lastTurn?.reply || '');
+  const availabilityContinuation =
     Grounding.availabilityReady(state.collected) &&
-    Boolean(
-      grounding.detected?.time ||
-      /\b(horario|horarios|disponible|disponibilidad|espacio|espacios|lugar|lugares|se podra|se puede|tienen lugar|hay lugar)\b/.test(Grounding.normalize(userText))
+    Boolean(state.collected.service_id) &&
+    (
+      state.awaiting_service_for_availability === true ||
+      lastTurn?.used === 'availability_missing_service' ||
+      /para revisar la disponibilidad real necesito saber que servicio/i.test(
+        Grounding.normalize(lastReply)
+      )
+    );
+
+  const availabilityQuestion =
+    availabilityContinuation ||
+    (
+      wantsBooking &&
+      Grounding.availabilityReady(state.collected) &&
+      Boolean(
+        grounding.detected?.time ||
+        /\b(horario|horarios|disponible|disponibilidad|espacio|espacios|lugar|lugares|se podra|se puede|tienen lugar|hay lugar)\b/.test(Grounding.normalize(userText))
+      )
     );
   const availabilityReady = Grounding.availabilityReady(state.collected);
 
@@ -1266,6 +1304,7 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
   // FIX8: disponibilidad siempre consulta agenda antes de pedir datos personales.
   if (availabilityQuestion) {
     plan.action = { type: 'check_availability', args: { ...state.collected } };
+    state.awaiting_service_for_availability = false;
   }
 
   if (plan.action.type === 'check_availability') {
