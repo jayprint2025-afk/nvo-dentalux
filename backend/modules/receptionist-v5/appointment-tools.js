@@ -102,7 +102,9 @@ async function checkAvailability(q, ctx, args) {
     if (Number.isFinite(minRequested) && slotStart < minRequested) continue;
     const slotEnd = slotStart + durationMins;
     const freeDoctor = doctors.find(doc => !busy.some(apt => {
-      if (String(apt.doctor_id) !== String(doc.id)) return false;
+      // Si una cita histórica/no asignada no tiene doctor_id, se considera ocupación
+      // de la sucursal para evitar ofrecer un horario que ya está reservado.
+      if (apt.doctor_id != null && String(apt.doctor_id) !== String(doc.id)) return false;
       const aptStart = timeToMinutes(apt.start_time);
       const aptDurationHours = Number(apt.duration_hours || 1);
       const aptDurationMins = Math.max(

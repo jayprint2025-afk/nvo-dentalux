@@ -676,10 +676,26 @@ function naturalAvailabilityReply(slots, dateValue) {
   const day = naturalDayLabel(dateValue);
   if (!list.length) return `Por ${day} ya no tengo espacios disponibles. Si gustas, puedo revisar otro día 😊`;
   const times = list.map(s=>formatNaturalTime(s.start_time)).filter(Boolean);
-  if (times.length===1) return `Sí 😊 Para ${day} tengo disponible a las ${times[0]}. ¿Te funciona ese horario?`;
+  if (times.length===1) return `Sí 😊 Para ${day} tengo disponible a las ${times[0]} ¿Te funciona ese horario?`;
   const last=times.pop();
-  return `Claro 😊 Para ${day} tengo disponible a las ${times.join(', ')} y ${last}. ¿Cuál te queda mejor?`;
+  return `Claro 😊 Para ${day} tengo disponible a las ${times.join(', ')} y ${last} ¿Cuál te queda mejor?`;
 }
+function naturalPriceReply(service) {
+  if (!service) return null;
+  const price = Number(service.price);
+  const duration = Number(service.duration_hours || 0);
+  if (!Number.isFinite(price)) return null;
+
+  let reply = `La ${String(service.name || 'atención').toLowerCase()} tiene un costo de $${price.toLocaleString('es-MX')}.`;
+  if (Number.isFinite(duration) && duration > 0) {
+    const mins = Math.round(duration * 60);
+    if (mins === 60) reply += ` La cita dura aproximadamente 1 hora.`;
+    else if (mins % 60 === 0) reply += ` La cita dura aproximadamente ${mins / 60} horas.`;
+    else reply += ` La cita dura aproximadamente ${mins} minutos.`;
+  }
+  return `${reply} ¿Quieres que te ayude a agendar?`;
+}
+
 
 async function runAgent(q, ctx, incoming, userText, knowledge) {
   const state = Memory.initialState(incoming);
@@ -903,6 +919,13 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
       plan.action = { type: 'none', args: {} };
       used = 'availability_missing_data';
     } else {
+      const authoritativeService = knowledge.services.find(
+        item => String(item.id) === String(args.service_id)
+      );
+      if (authoritativeService && Number(authoritativeService.duration_hours) > 0) {
+        args.duration_hours = Number(authoritativeService.duration_hours);
+      }
+
       const toolResult = await Appointment.checkAvailability(q, ctx, args);
       let slots = Array.isArray(toolResult.slots) ? toolResult.slots : [];
       slots = slots.filter(slot => !state.rejected_slots.includes(String(slot.start_time).slice(0, 5)));
@@ -1256,13 +1279,29 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
     used = 'handoff';
   }
 
+  const filteredInformationIntents = (grounding.detected.information_intents || []).filter(
+    intent => !(intent === 'business_hours' && wantsBooking)
+  );
+
   const deterministicParts = deterministicInformation(
     knowledge,
     state,
-    grounding.detected.information_intents
+    filteredInformationIntents
   );
 
+  if ((grounding.detected.information_intents || []).includes('price')) {
+    const authoritativeService = knowledge.services.find(
+      item => String(item.id) === String(state.collected.service_id)
+    );
+    const priceReply = naturalPriceReply(authoritativeService);
+    if (priceReply && !wantsBooking) {
+      plan.reply = priceReply;
+      used = 'natural_price_authoritative';
+    }
+  }
+
   for (const part of deterministicParts) {
+    if (used === 'natural_price_authoritative' && /^El costo de /i.test(part)) continue;
     if (!plan.reply.includes(part)) plan.reply = plan.reply ? `${part}\n\n${plan.reply}` : part;
   }
 
