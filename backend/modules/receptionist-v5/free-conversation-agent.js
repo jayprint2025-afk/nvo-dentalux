@@ -1036,7 +1036,7 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
     const reply =
       'Claro. Para revisar la disponibilidad real necesito saber qué servicio deseas, porque el tiempo de cada tratamiento es diferente. ¿Qué servicio necesitas?';
 
-    state.awaiting_service_for_availability = true;
+    state.collected.availability_pending = true;
 
     Memory.recordTurn(state, userText, reply, {
       used: 'availability_missing_service',
@@ -1238,7 +1238,7 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
     Grounding.availabilityReady(state.collected) &&
     Boolean(state.collected.service_id) &&
     (
-      state.awaiting_service_for_availability === true ||
+      state.collected.availability_pending === true ||
       lastTurn?.used === 'availability_missing_service' ||
       /para revisar la disponibilidad real necesito saber que servicio/i.test(
         Grounding.normalize(lastReply)
@@ -1304,7 +1304,7 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
   // FIX8: disponibilidad siempre consulta agenda antes de pedir datos personales.
   if (availabilityQuestion) {
     plan.action = { type: 'check_availability', args: { ...state.collected } };
-    state.awaiting_service_for_availability = false;
+    delete state.collected.availability_pending;
   }
 
   if (plan.action.type === 'check_availability') {
@@ -1320,8 +1320,12 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
         args.duration_hours = Number(authoritativeService.duration_hours);
       }
 
-      const currentMessageTime = requestedTimeFromCurrentMessage(userText, state);
-      const currentMessageHasBroadRange = grounding.detected?.time?.type === 'range';
+      const detectedCurrentTime = grounding.detected?.time || null;
+      const currentMessageTime =
+        detectedCurrentTime?.type === 'exact'
+          ? String(detectedCurrentTime.exact_time || '').slice(0, 5)
+          : requestedTimeFromCurrentMessage(userText, state);
+      const currentMessageHasBroadRange = detectedCurrentTime?.type === 'range';
       if (currentMessageHasBroadRange) {
         delete args.exact_time;
         delete args.start_time;
@@ -1349,7 +1353,7 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
       slots = slots.filter(slot => !state.rejected_slots.includes(String(slot.start_time).slice(0, 5)));
 
       const requestedTime = String(
-        requestedTimeFromCurrentMessage(userText, state) ||
+        currentMessageTime ||
         state.collected.exact_time ||
         state.collected.start_time ||
         ''
@@ -1826,7 +1830,7 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
       summary,
       presented_at: new Date().toISOString(),
     };
-    reply =
+    plan.reply =
       `Antes de agendar, confirma estos datos:\n\n${summary}\n\n` +
       `¿Confirmas que deseas crear esta cita?`;
   }
