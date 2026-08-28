@@ -70,11 +70,12 @@ function explicitConfirmation(text, state = null) {
   if (!shortAffirmative || !state?.pending_booking) return false;
 
   const lastReply = String(state?.recent_turns?.slice(-1)?.[0]?.reply || '');
-  const confirmationWasRequested =
-    /confirm(a|as|ación)|deseas crear esta cita|responde.*confirma la cita/i.test(lastReply) ||
-    Boolean(state.pending_booking?.presented_at);
+  const formalSummaryWasPresented =
+    Boolean(state.pending_booking?.presented_at) &&
+    /Paciente:\s*.+\nTel[eé]fono:\s*.+\nServicio:\s*.+\nSucursal:\s*.+\nFecha:\s*.+\nHora:\s*.+/i.test(lastReply) &&
+    /¿Confirmas que deseas crear esta cita/i.test(lastReply);
 
-  return confirmationWasRequested;
+  return formalSummaryWasPresented;
 }
 
 function safePlan(raw) {
@@ -878,6 +879,8 @@ function sanitizeClinicalReply(reply) {
     .replace(/\s+de forma segura y efectiva/gi, '')
     .replace(/\bes un procedimiento seguro y efectivo\b/gi, 'es un procedimiento cuyo resultado puede variar según cada paciente')
     .replace(/\bgeneralmente no causa dolor\b/gi, 'puede sentirse diferente en cada paciente')
+    .replace(/\bpuede sentirse diferente en cada paciente\s+intenso\b/gi, 'puede sentirse diferente en cada paciente')
+    .replace(/\bcada paciente intenso\b/gi, 'cada paciente')
     .trim();
 }
 
@@ -1108,6 +1111,13 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
   // Si el paciente está intentando agendar y ya tenemos sucursal, servicio y fecha,
   // la consulta de disponibilidad es obligatoria.
   const wantsBooking = Grounding.bookingIntent(userText, state.collected);
+  const availabilityQuestion =
+    wantsBooking &&
+    Grounding.availabilityReady(state.collected) &&
+    Boolean(
+      grounding.detected?.time ||
+      /\b(horario|horarios|disponible|disponibilidad|espacio|espacios|lugar|lugares|se podra|se puede|tienen lugar|hay lugar)\b/.test(Grounding.normalize(userText))
+    );
   const availabilityReady = Grounding.availabilityReady(state.collected);
 
   if (
@@ -1153,6 +1163,11 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
   }
 
   let used = plan.action.type || 'none';
+
+  // FIX8: disponibilidad siempre consulta agenda antes de pedir datos personales.
+  if (availabilityQuestion) {
+    plan.action = { type: 'check_availability', args: { ...state.collected } };
+  }
 
   if (plan.action.type === 'check_availability') {
     const args = { ...state.collected, ...plan.action.args };
@@ -1637,7 +1652,33 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
     used = `${used}_guarded`;
   }
 
-  Memory.recordTurn(state, userText, plan.reply, { used, objective: ObjectivePlanner.nextObjective(state) });
+  
+  // FIX8: si ya están completos todos los datos de una cita y todavía no se ha
+  // presentado el resumen formal del backend, no permitimos una confirmación
+  // improvisada del modelo. Presentamos un único resumen autoritativo.
+  const bookingDataForSummary = resolveServiceIdentity(canonicalBookingData(state), knowledge);
+  const bookingSummaryRequired = ['patient','phone','branch_key','service_id','date','start_time']
+    .every(key => Boolean(bookingDataForSummary[key]));
+  if (
+    bookingSummaryRequired &&
+    !state.pending_booking &&
+    state.collected.booking_mode !== 'cancel' &&
+    state.collected.booking_mode !== 'reschedule'
+  ) {
+    const booking_key = Appointment.bookingKey(bookingDataForSummary);
+    const summary = confirmationSummary(bookingDataForSummary, knowledge);
+    state.pending_booking = {
+      ...bookingDataForSummary,
+      booking_key,
+      summary,
+      presented_at: new Date().toISOString(),
+    };
+    reply =
+      `Antes de agendar, confirma estos datos:\n\n${summary}\n\n` +
+      `¿Confirmas que deseas crear esta cita?`;
+  }
+
+Memory.recordTurn(state, userText, plan.reply, { used, objective: ObjectivePlanner.nextObjective(state) });
 
   return { reply: plan.reply, state, used, engine_version: 'v5' };
 }
