@@ -120,6 +120,30 @@ function extractPatient(text) {
         .trim();
     }
   }
+
+  // Respuesta común al pedir nombre + teléfono:
+  // "hector jimenez 6867865525"
+  // Si el mensaje contiene un teléfono, tomar como nombre únicamente el texto
+  // alfabético que queda antes/después de quitar el número.
+  const phone = extractPhone(raw);
+  if (phone) {
+    const withoutPhone = raw
+      .replace(/(?:\+?\d[\d\s().-]{8,}\d)/g, ' ')
+      .replace(/\b(?:mi nombre es|me llamo|soy|nombre|telefono|teléfono|numero|número|contacto|es)\b/gi, ' ')
+      .replace(/[^A-Za-zÁÉÍÓÚÜÑáéíóúüñ' -]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    const words = withoutPhone.split(/\s+/).filter(Boolean);
+    if (
+      words.length >= 2 &&
+      words.length <= 6 &&
+      words.every(word => /^[A-Za-zÁÉÍÓÚÜÑáéíóúüñ'-]+$/.test(word))
+    ) {
+      return withoutPhone;
+    }
+  }
+
   return null;
 }
 

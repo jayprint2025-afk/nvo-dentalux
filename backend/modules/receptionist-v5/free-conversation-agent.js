@@ -100,6 +100,23 @@ function mergeModelState(state, patch) {
   // pero eso NO debe borrar un resumen formal ya presentado.
   const safePatch = patch && typeof patch === 'object' ? { ...patch } : {};
   delete safePatch.pending_booking;
+
+  if (safePatch.collected && typeof safePatch.collected === 'object') {
+    safePatch.collected = { ...safePatch.collected };
+
+    if (Object.prototype.hasOwnProperty.call(safePatch.collected, 'patient')) {
+      const normalized = patientText(safePatch.collected.patient);
+      if (normalized) safePatch.collected.patient = normalized;
+      else delete safePatch.collected.patient;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(safePatch.collected, 'patient_name')) {
+      const normalized = patientText(safePatch.collected.patient_name);
+      if (normalized) safePatch.collected.patient_name = normalized;
+      else delete safePatch.collected.patient_name;
+    }
+  }
+
   return Memory.mergeState(state, safePatch);
 }
 
@@ -204,6 +221,32 @@ function confirmationSummary(args, knowledge) {
   ].join('\n');
 }
 
+function patientText(value) {
+  if (typeof value === 'string') {
+    const clean = value.replace(/\s+/g, ' ').trim();
+    return clean || null;
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+
+  const direct =
+    value.name ||
+    value.full_name ||
+    value.fullName ||
+    value.patient ||
+    value.patient_name ||
+    value.nombre ||
+    null;
+
+  if (typeof direct === 'string' && direct.trim()) {
+    return direct.replace(/\s+/g, ' ').trim();
+  }
+
+  const first = value.first_name || value.firstName || value.nombre || '';
+  const last = value.last_name || value.lastName || value.apellido || value.apellidos || '';
+  const joined = `${first || ''} ${last || ''}`.replace(/\s+/g, ' ').trim();
+  return joined || null;
+}
+
 function canonicalBookingData(state, pending = null) {
   const source = {
     ...(state?.collected || {}),
@@ -212,7 +255,13 @@ function canonicalBookingData(state, pending = null) {
 
   return {
     ...source,
-    patient: source.patient || source.patient_name || source.name || source.full_name || source.nombre || null,
+    patient:
+      patientText(source.patient) ||
+      patientText(source.patient_name) ||
+      patientText(source.name) ||
+      patientText(source.full_name) ||
+      patientText(source.nombre) ||
+      null,
     phone: source.phone || source.wa_phone || source.telephone || source.telefono || source.contact_phone || null,
     branch_key: source.branch_key || source.sucursal_id || source.branch || null,
     service_id: source.service_id || source.service?.id || null,
