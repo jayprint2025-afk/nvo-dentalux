@@ -157,14 +157,14 @@ async function checkAvailability(q, ctx, args) {
       duration_hours: durationHours,
       verified: true,
     });
-    if (slots.length >= Number(args.limit || 20)) break;
+    if (slots.length >= Number(args.limit || 48)) break;
   }
 
   let filtered = slots;
   if (args.after_time) filtered = filtered.filter(slot => slot.start_time >= String(args.after_time).slice(0,5));
   if (args.before_time) filtered = filtered.filter(slot => slot.start_time <= String(args.before_time).slice(0,5));
   if (args.exact_time) filtered = filtered.filter(slot => slot.start_time === String(args.exact_time).slice(0,5));
-  return { slots: filtered.slice(0,8), date, branch_key: branchKey, verified: true, source: 'appointments_db' };
+  return { slots: filtered.slice(0,48), date, branch_key: branchKey, verified: true, source: 'appointments_db' };
 }
 
 function normalizePhone(value) {
