@@ -221,9 +221,11 @@ function parseTimePreference(text, previous = {}) {
   // conservar el contexto y entender 16:00, no 04:00.
   const previousAfter = String(previous.after_time || '').slice(0, 5);
   const previousBefore = String(previous.before_time || '').slice(0, 5);
+  const previousMeridiemContext = String(previous.meridiem_context || '').toLowerCase();
   const previousRangeIsAfternoon =
     previousAfter >= '12:00' ||
-    previousBefore >= '13:00';
+    previousBefore >= '13:00' ||
+    previousMeridiemContext === 'pm';
 
   if (
     !meridiem &&
@@ -326,6 +328,14 @@ function deriveFacts(text, knowledge, state, options = {}) {
   if (date) collected.date = date;
   if (time) {
     if (time.type === 'exact') {
+      // Conservar el contexto AM/PM aunque eliminemos el rango anterior.
+      // Ejemplo: "por la tarde" -> "como a las 4" -> "sí, a las 5".
+      // El tercer mensaje debe seguir interpretándose como 5:00 p. m.
+      const exactHour = Number(String(time.exact_time || '').slice(0, 2));
+      if (Number.isFinite(exactHour)) {
+        collected.meridiem_context = exactHour >= 12 ? 'pm' : 'am';
+      }
+
       // El paciente ya eligió una hora: no conservar filtros anteriores como
       // "por la tarde", porque pueden interferir en la validación exacta.
       delete collected.after_time;
@@ -335,6 +345,20 @@ function deriveFacts(text, knowledge, state, options = {}) {
       delete collected.selected_slot;
       delete collected.end_time;
     } else if (time.type === 'range') {
+      const afterHour = Number(String(time.after_time || '').slice(0, 2));
+      const beforeHour = Number(String(time.before_time || '').slice(0, 2));
+      if (
+        (Number.isFinite(afterHour) && afterHour >= 12) ||
+        (Number.isFinite(beforeHour) && beforeHour > 12)
+      ) {
+        collected.meridiem_context = 'pm';
+      } else if (
+        Number.isFinite(beforeHour) &&
+        beforeHour <= 12
+      ) {
+        collected.meridiem_context = 'am';
+      }
+
       delete collected.exact_time;
       delete collected.start_time;
       delete collected.selected_time;

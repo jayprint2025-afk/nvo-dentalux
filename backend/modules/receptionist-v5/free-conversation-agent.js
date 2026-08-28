@@ -1410,6 +1410,9 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
       // y esa hora fue validada por la herramienta.
       if (selected) {
         state.collected.start_time = String(selected.start_time).slice(0, 5);
+        state.collected.exact_time = String(selected.start_time).slice(0, 5);
+        state.collected.meridiem_context =
+          Number(String(selected.start_time).slice(0, 2)) >= 12 ? 'pm' : 'am';
         state.collected.doctor_id = selected.doctor_id || state.collected.doctor_id || null;
         state.collected.doctor_name = selected.doctor_name || state.collected.doctor_name || null;
         state.collected.selected_slot = {
