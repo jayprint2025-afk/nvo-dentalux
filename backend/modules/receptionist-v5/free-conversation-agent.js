@@ -869,10 +869,32 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
 
   plan = ObjectivePlanner.applyObjectiveOverride({ state, userText, plan });
 
+  // CURRENT MESSAGE service lock:
+  // si el paciente menciona un servicio en este turno, ese servicio manda sobre
+  // cualquier sugerencia previa del modelo.
+  if (grounding.detected?.service?.id) {
+    state.collected.service_id = grounding.detected.service.id;
+    state.collected.service_name = grounding.detected.service.name;
+    const lockedService = knowledge.services.find(
+      item => String(item.id) === String(grounding.detected.service.id)
+    );
+    if (lockedService?.duration_hours != null) {
+      state.collected.duration_hours = lockedService.duration_hours;
+    }
+    if (plan.action?.args) {
+      plan.action.args.service_id = grounding.detected.service.id;
+      if (lockedService?.duration_hours != null) {
+        plan.action.args.duration_hours = lockedService.duration_hours;
+      }
+    }
+  }
+
+
+
   // La IA redacta libremente, pero no decide si debe volver a preguntar datos ya conocidos.
   // Si el paciente está intentando agendar y ya tenemos sucursal, servicio y fecha,
   // la consulta de disponibilidad es obligatoria.
-  const wantsBooking = Grounding.bookingIntent(userText);
+  const wantsBooking = Grounding.bookingIntent(userText, state.collected);
   const availabilityReady = Grounding.availabilityReady(state.collected);
 
   if (
@@ -1075,7 +1097,11 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
     const previousReplyOfferedAlternative = /siguiente fecha disponible|buscarte.*otra fecha|buscar.*otro dia/i.test(String(state.recent_turns?.slice(-1)?.[0]?.reply || ''));
     if (!explicitAlternativeConsent && !previousReplyOfferedAlternative) {
       plan.action = { type: 'none', args: {} };
-      plan.reply = `No tengo un horario verificado para ${state.collected.date || 'esa fecha'}. No cambiaré el día sin tu autorización. ¿Quieres que revise otra fecha?`;
+      const day = Grounding.naturalDateLabel(
+        state.collected.date,
+        resolveClinicTimeZone(knowledge, state)
+      );
+      plan.reply = `Para ${day} no encontré espacios disponibles para ese servicio. Si gustas, puedo revisar otro día 😊`;
       used = 'blocked_unapproved_date_change';
     }
   }
@@ -1293,8 +1319,12 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
     used = 'handoff';
   }
 
+  const availabilityLanguage = /\b(horario|horarios|disponible|disponibilidad|espacio|espacios)\b/.test(
+    Grounding.normalize(userText)
+  );
+
   const filteredInformationIntents = (grounding.detected.information_intents || []).filter(
-    intent => !(intent === 'business_hours' && wantsBooking)
+    intent => !(intent === 'business_hours' && (wantsBooking || availabilityLanguage))
   );
 
   const deterministicParts = deterministicInformation(

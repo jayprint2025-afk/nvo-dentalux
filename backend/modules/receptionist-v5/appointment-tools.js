@@ -1,4 +1,27 @@
 'use strict';
+
+function localNowParts(timeZone = 'America/Tijuana', now = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(now);
+
+  const map = Object.fromEntries(
+    parts.filter(part => part.type !== 'literal').map(part => [part.type, part.value])
+  );
+
+  return {
+    date: `${map.year}-${map.month}-${map.day}`,
+    minutes: Number(map.hour) * 60 + Number(map.minute),
+  };
+}
+
+
 const crypto = require('crypto');
 const { createAppointmentTransactional } = require('../booking-engine');
 
@@ -91,9 +114,14 @@ async function checkAvailability(q, ctx, args) {
     [tenantId, branchKey, date]
   );
   const busy = appointmentsResult.rows || [];
-  const now = new Date();
-  const todayLocal = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
-  const currentMins = now.getHours()*60 + now.getMinutes();
+  const timeZone =
+    branch.timezone ||
+    branch.time_zone ||
+    process.env.CLINIC_TIMEZONE ||
+    'America/Tijuana';
+  const localNow = localNowParts(timeZone);
+  const todayLocal = localNow.date;
+  const currentMins = localNow.minutes;
   const minRequested = args.min_start_mins == null ? null : Number(args.min_start_mins);
   const slots = [];
 
@@ -101,10 +129,10 @@ async function checkAvailability(q, ctx, args) {
     if (date === todayLocal && slotStart <= currentMins) continue;
     if (Number.isFinite(minRequested) && slotStart < minRequested) continue;
     const slotEnd = slotStart + durationMins;
-    const freeDoctor = doctors.find(doc => !busy.some(apt => {
-      // Si una cita histórica/no asignada no tiene doctor_id, se considera ocupación
-      // de la sucursal para evitar ofrecer un horario que ya está reservado.
-      if (apt.doctor_id != null && String(apt.doctor_id) !== String(doc.id)) return false;
+    // Modelo actual de agenda de CliniqOne para esta sucursal:
+    // una cita ocupa el horario de la sucursal completa. Esto evita dobles reservas
+    // aunque existan varios doctores registrados o doctor_id distinto.
+    const branchBusy = busy.some(apt => {
       const aptStart = timeToMinutes(apt.start_time);
       const aptDurationHours = Number(apt.duration_hours || 1);
       const aptDurationMins = Math.max(
@@ -112,9 +140,13 @@ async function checkAvailability(q, ctx, args) {
         Math.ceil((Number.isFinite(aptDurationHours) && aptDurationHours > 0 ? aptDurationHours : 1) * 60)
       );
       const aptEnd = aptStart + aptDurationMins;
-      // Ej.: 18:30-19:30 contra una cita 19:00-20:00 = conflicto.
       return slotStart < aptEnd && slotEnd > aptStart;
-    }));
+    });
+    if (branchBusy) continue;
+
+    // Conservamos un doctor para guardar la cita, pero la disponibilidad ya fue
+    // validada a nivel sucursal.
+    const freeDoctor = doctors[0];
     if (!freeDoctor) continue;
     slots.push({
       date,

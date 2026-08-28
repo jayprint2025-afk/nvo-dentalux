@@ -372,14 +372,27 @@ function replyViolations(reply, state, userText) {
 }
 
 
-function bookingIntent(text) {
+function bookingIntent(text, collected = {}) {
   const n = normalize(text);
-  return /\b(agendar|agenda|agendame|ajendame|cita|consulta|limpieza|valoracion|revision|tratamiento|puedo|disponible)\b/.test(n) &&
-    (
-      /\b(hoy|manana|lunes|martes|miercoles|jueves|viernes|sabado|domingo)\b/.test(n) ||
-      /\b(a las?|despues de las?|antes de las?|por la manana|por la tarde)\b/.test(n) ||
-      /\b(quiero|necesito|me gustaria|para una|para un)\b/.test(n)
-    );
+
+  const hasDate =
+    /\b(hoy|manana|pasado manana|lunes|martes|miercoles|jueves|viernes|sabado|domingo)\b/.test(n);
+
+  const asksAvailability =
+    /\b(horario|horarios|hora|horas|disponible|disponibilidad|espacio|espacios)\b/.test(n);
+
+  const explicitBooking =
+    /\b(agendar|agenda|agendame|ajendame|cita|consulta|limpieza|valoracion|revision|tratamiento|quiero|necesito|me gustaria)\b/.test(n);
+
+  // Si ya conocemos el servicio por el turno anterior, frases como
+  // "¿y para mañana qué horarios tienes?" siguen siendo disponibilidad.
+  if (hasDate && asksAvailability && collected.service_id) return true;
+
+  return explicitBooking && (
+    hasDate ||
+    asksAvailability ||
+    /\b(a las?|despues de las?|antes de las?|por la manana|por la tarde|para una|para un)\b/.test(n)
+  );
 }
 
 function availabilityReady(collected = {}) {
