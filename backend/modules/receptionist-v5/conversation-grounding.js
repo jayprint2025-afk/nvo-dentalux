@@ -55,7 +55,13 @@ function findBranch(text, branches = []) {
 function serviceAliases(name) {
   const n = normalize(name);
   const values = [n];
-  if (/limpieza|profilaxis/.test(n)) values.push('limpieza', 'limpieza dental', 'profilaxis');
+
+  // Un tratamiento que diga "sin limpieza" NO debe convertirse en alias de "limpieza".
+  // Esto evita que "Aplicación de barniz de flúor (sin limpieza)" gane cuando
+  // el paciente pide una limpieza dental.
+  if (/limpieza|profilaxis/.test(n) && !/sin limpieza/.test(n)) {
+    values.push('limpieza', 'limpieza dental', 'profilaxis');
+  }
   if (/consulta|valoracion|revision|diagnostico/.test(n)) values.push('consulta', 'valoracion', 'revision', 'primera consulta');
   if (/ortodon|bracket/.test(n)) values.push('brackets', 'ortodoncia', 'revision de brackets');
   if (/resina|relleno/.test(n)) values.push('resina', 'relleno', 'empaste');
@@ -73,7 +79,17 @@ function findService(text, services = []) {
       else if (new RegExp(`\\b${escapeRegex(alias)}\\b`).test(n)) score = Math.max(score, 88);
       else score = Math.max(score, overlapScore(n, alias) * 70);
     }
-    if (/bracket|ortodon/.test(n) && /consulta|valoracion|revision|diagnostico/.test(normalize(service.name))) {
+    const serviceName = normalize(service.name);
+
+    // Si el paciente pide limpieza, nunca seleccionar un servicio que explícitamente diga
+    // "sin limpieza". Dar preferencia a Profilaxis/limpieza real.
+    if (/\blimpieza\b|\bprofilaxis\b/.test(n)) {
+      if (/sin limpieza/.test(serviceName)) score -= 200;
+      if (/profilaxis/.test(serviceName)) score += 30;
+      else if (/\blimpieza\b/.test(serviceName)) score += 15;
+    }
+
+    if (/bracket|ortodon/.test(n) && /consulta|valoracion|revision|diagnostico/.test(serviceName)) {
       score += 20;
     }
     if (!best || score > best.score) best = { service, score };
@@ -126,11 +142,13 @@ function addDays(base, days) {
   return date.toISOString().slice(0, 10);
 }
 
-function parseDate(text, timeZone = 'America/Phoenix', now = new Date()) {
+function parseDate(text, timeZone = 'America/Tijuana', now = new Date()) {
   const n = normalize(text);
   const local = dateParts(timeZone, now);
   const base = new Date(Date.UTC(local.year, local.month - 1, local.day));
 
+  // Cuando el mensaje contiene palabras contradictorias por una corrección del paciente,
+  // se prioriza la referencia más específica/futura: "pasado mañana" > "mañana" > "hoy".
   if (/\bpasado manana\b/.test(n)) return addDays(base, 2);
   if (/\bmanana\b/.test(n)) return addDays(base, 1);
   if (/\bhoy\b/.test(n)) return addDays(base, 0);
@@ -151,6 +169,24 @@ function parseDate(text, timeZone = 'America/Phoenix', now = new Date()) {
     return `${iso[1]}-${String(iso[2]).padStart(2, '0')}-${String(iso[3]).padStart(2, '0')}`;
   }
   return null;
+}
+
+
+function naturalDateLabel(dateValue, timeZone = 'America/Tijuana', now = new Date()) {
+  const raw = String(dateValue || '').slice(0, 10);
+  if (!raw) return 'ese día';
+
+  const local = dateParts(timeZone, now);
+  const base = new Date(Date.UTC(local.year, local.month - 1, local.day));
+  const today = base.toISOString().slice(0, 10);
+  const tomorrow = addDays(base, 1);
+
+  if (raw === today) return 'hoy';
+  if (raw === tomorrow) return 'mañana';
+
+  const target = new Date(`${raw}T12:00:00Z`);
+  if (Number.isNaN(target.getTime())) return 'ese día';
+  return target.toLocaleDateString('es-MX', { weekday: 'long', timeZone: 'UTC' });
 }
 
 function parseTimePreference(text) {
@@ -224,7 +260,22 @@ function deriveFacts(text, knowledge, state, options = {}) {
   const service = findService(text, knowledge.services);
   const phone = extractPhone(text);
   const patient = extractPatient(text);
-  const date = parseDate(text, options.timeZone || process.env.CLINIC_TIMEZONE || 'America/Phoenix', options.now || new Date());
+
+  const rememberedBranch =
+    branch ||
+    knowledge.branches.find(item => item.branch_key === collected.branch_key) ||
+    null;
+
+  const clinicTimeZone =
+    options.timeZone ||
+    rememberedBranch?.timezone ||
+    rememberedBranch?.time_zone ||
+    knowledge?.timezone ||
+    knowledge?.time_zone ||
+    knowledge?.clinic_timezone ||
+    'America/Tijuana';
+
+  const date = parseDate(text, clinicTimeZone, options.now || new Date());
   const time = parseTimePreference(text);
 
   if (branch) {
@@ -362,6 +413,7 @@ module.exports = {
   extractPhone,
   extractPatient,
   parseDate,
+  naturalDateLabel,
   parseTimePreference,
   informationIntents,
   appointmentActionIntent,

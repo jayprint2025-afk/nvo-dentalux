@@ -31,6 +31,7 @@ PRIORIDADES:
 14. No muestres fechas ISO al paciente. Usa hoy, mañana o el día de la semana.
 15. Muestra horas naturales de 12 horas, por ejemplo 6:00 p. m., no 18:00.
 16. Nunca cambies el servicio solicitado por otro tratamiento al ofrecer disponibilidad.
+17. El servicio detectado en CURRENT_USER_MESSAGE tiene prioridad sobre sugerencias o servicios ajenos mencionados por el modelo. No sugieras un tratamiento distinto si el paciente no lo pidió.
 
 Devuelve JSON:
 {
@@ -658,22 +659,27 @@ function formatNaturalTime(value) {
   return `${h}:${String(m0).padStart(2,'0')} ${suffix}`;
 }
 
-function naturalDayLabel(value) {
-  const raw = String(value || '').slice(0,10);
-  const target = new Date(`${raw}T12:00:00`);
-  if (!raw || Number.isNaN(target.getTime())) return 'ese día';
-  const now = new Date();
-  const today = new Date(now.getFullYear(),now.getMonth(),now.getDate(),12);
-  const tomorrow = new Date(today); tomorrow.setDate(tomorrow.getDate()+1);
-  const same=(a,b)=>a.getFullYear()===b.getFullYear()&&a.getMonth()===b.getMonth()&&a.getDate()===b.getDate();
-  if (same(target,today)) return 'hoy';
-  if (same(target,tomorrow)) return 'mañana';
-  return target.toLocaleDateString('es-MX',{weekday:'long'});
+function resolveClinicTimeZone(knowledge, state) {
+  const branch = knowledge?.branches?.find(
+    item => item.branch_key === state?.collected?.branch_key
+  );
+  return (
+    branch?.timezone ||
+    branch?.time_zone ||
+    knowledge?.timezone ||
+    knowledge?.time_zone ||
+    knowledge?.clinic_timezone ||
+    'America/Tijuana'
+  );
 }
 
-function naturalAvailabilityReply(slots, dateValue) {
+function naturalDayLabel(value, timeZone) {
+  return Grounding.naturalDateLabel(value, timeZone || 'America/Tijuana');
+}
+
+function naturalAvailabilityReply(slots, dateValue, timeZone = 'America/Tijuana') {
   const list = Array.isArray(slots) ? slots : [];
-  const day = naturalDayLabel(dateValue);
+  const day = naturalDayLabel(dateValue, timeZone);
   if (!list.length) return `Por ${day} ya no tengo espacios disponibles. Si gustas, puedo revisar otro día 😊`;
   const times = list.map(s=>formatNaturalTime(s.start_time)).filter(Boolean);
   if (times.length===1) return `Sí 😊 Para ${day} tengo disponible a las ${times[0]} ¿Te funciona ese horario?`;
@@ -969,7 +975,11 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
       Memory.mergeState(state, plan.state_patch);
 
       // Respuesta determinista y natural: sólo usa disponibilidad verificada.
-      plan.reply = naturalAvailabilityReply(slots, state.collected.date || toolResult.date);
+      plan.reply = naturalAvailabilityReply(
+        slots,
+        state.collected.date || toolResult.date,
+        resolveClinicTimeZone(knowledge, state)
+      );
 
       // Guardar el horario ofrecido aunque el modelo no lo incluya en state_patch.
       if (selected) {
@@ -992,7 +1002,11 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
           date: state.collected.date,
           reason: 'La clínica está cerrada o no tiene disponibilidad en esa fecha.',
         });
-        plan.reply = naturalAvailabilityReply([], state.collected.date || toolResult.date);
+        plan.reply = naturalAvailabilityReply(
+          [],
+          state.collected.date || toolResult.date,
+          resolveClinicTimeZone(knowledge, state)
+        );
       }
 
       if (bookingModification.changed) {
