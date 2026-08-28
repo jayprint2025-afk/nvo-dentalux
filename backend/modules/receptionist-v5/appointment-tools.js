@@ -104,7 +104,13 @@ async function checkAvailability(q, ctx, args) {
     const freeDoctor = doctors.find(doc => !busy.some(apt => {
       if (String(apt.doctor_id) !== String(doc.id)) return false;
       const aptStart = timeToMinutes(apt.start_time);
-      const aptEnd = aptStart + Math.max(30, Number(apt.duration_hours || 1) * 60);
+      const aptDurationHours = Number(apt.duration_hours || 1);
+      const aptDurationMins = Math.max(
+        30,
+        Math.ceil((Number.isFinite(aptDurationHours) && aptDurationHours > 0 ? aptDurationHours : 1) * 60)
+      );
+      const aptEnd = aptStart + aptDurationMins;
+      // Ej.: 18:30-19:30 contra una cita 19:00-20:00 = conflicto.
       return slotStart < aptEnd && slotEnd > aptStart;
     }));
     if (!freeDoctor) continue;

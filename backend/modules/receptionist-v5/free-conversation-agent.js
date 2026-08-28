@@ -27,6 +27,10 @@ PRIORIDADES:
 10. No afirmes creación hasta que la herramienta confirme.
 11. Nunca cambies la fecha solicitada ni busques otro día sin que el paciente lo pida o acepte explícitamente.
 12. Los horarios sólo son reales si provienen de TOOL_RESULT de check_availability; nunca inventes disponibilidad.
+13. Si preguntan disponibilidad, responde directamente; no recites el horario general salvo que lo pregunten.
+14. No muestres fechas ISO al paciente. Usa hoy, mañana o el día de la semana.
+15. Muestra horas naturales de 12 horas, por ejemplo 6:00 p. m., no 18:00.
+16. Nunca cambies el servicio solicitado por otro tratamiento al ofrecer disponibilidad.
 
 Devuelve JSON:
 {
@@ -645,6 +649,38 @@ function publishMessengerAppointmentCreated(created, pending, ctx) {
   }
 }
 
+
+function formatNaturalTime(value) {
+  const [h0, m0] = String(value || '').slice(0,5).split(':').map(Number);
+  if (!Number.isFinite(h0) || !Number.isFinite(m0)) return String(value || '');
+  const suffix = h0 >= 12 ? 'p. m.' : 'a. m.';
+  const h = h0 % 12 || 12;
+  return `${h}:${String(m0).padStart(2,'0')} ${suffix}`;
+}
+
+function naturalDayLabel(value) {
+  const raw = String(value || '').slice(0,10);
+  const target = new Date(`${raw}T12:00:00`);
+  if (!raw || Number.isNaN(target.getTime())) return 'ese día';
+  const now = new Date();
+  const today = new Date(now.getFullYear(),now.getMonth(),now.getDate(),12);
+  const tomorrow = new Date(today); tomorrow.setDate(tomorrow.getDate()+1);
+  const same=(a,b)=>a.getFullYear()===b.getFullYear()&&a.getMonth()===b.getMonth()&&a.getDate()===b.getDate();
+  if (same(target,today)) return 'hoy';
+  if (same(target,tomorrow)) return 'mañana';
+  return target.toLocaleDateString('es-MX',{weekday:'long'});
+}
+
+function naturalAvailabilityReply(slots, dateValue) {
+  const list = Array.isArray(slots) ? slots : [];
+  const day = naturalDayLabel(dateValue);
+  if (!list.length) return `Por ${day} ya no tengo espacios disponibles. Si gustas, puedo revisar otro día 😊`;
+  const times = list.map(s=>formatNaturalTime(s.start_time)).filter(Boolean);
+  if (times.length===1) return `Sí 😊 Para ${day} tengo disponible a las ${times[0]}. ¿Te funciona ese horario?`;
+  const last=times.pop();
+  return `Claro 😊 Para ${day} tengo disponible a las ${times.join(', ')} y ${last}. ¿Cuál te queda mejor?`;
+}
+
 async function runAgent(q, ctx, incoming, userText, knowledge) {
   const state = Memory.initialState(incoming);
   ObjectivePlanner.ensureGoal(state);
@@ -909,6 +945,9 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
 
       Memory.mergeState(state, plan.state_patch);
 
+      // Respuesta determinista y natural: sólo usa disponibilidad verificada.
+      plan.reply = naturalAvailabilityReply(slots, state.collected.date || toolResult.date);
+
       // Guardar el horario ofrecido aunque el modelo no lo incluya en state_patch.
       if (selected) {
         state.collected.start_time = String(selected.start_time).slice(0, 5);
@@ -924,32 +963,13 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
         ObjectivePlanner.markSlotValidated(state, state.collected.selected_slot);
       }
 
-      // El modelo no puede volver a pedir sucursal, servicio o fecha después de una consulta exitosa.
-      const availabilityViolations = Grounding.replyViolations(plan.reply, state, userText);
-      if (selected && (
-        !plan.reply ||
-        availabilityViolations.length ||
-        !String(plan.reply).includes(String(selected.start_time).slice(0, 5))
-      )) {
-        const branch = knowledge.branches.find(
-          item => item.branch_key === state.collected.branch_key
-        );
-        const service = knowledge.services.find(
-          item => String(item.id) === String(state.collected.service_id)
-        );
-        plan.reply =
-          `Tengo disponible ${service?.name || 'ese servicio'} en ` +
-          `${branch?.name || state.collected.branch_name || 'la sucursal seleccionada'} ` +
-          `el ${state.collected.date} a las ${String(selected.start_time).slice(0, 5)}. ` +
-          `¿Te funciona ese horario?`;
-      } else if (!selected) {
+      // No permitir que una segunda redacción reemplace los horarios verificados.
+      if (!selected) {
         ObjectivePlanner.markUnavailable(state, {
           date: state.collected.date,
           reason: 'La clínica está cerrada o no tiene disponibilidad en esa fecha.',
         });
-        plan.reply =
-          `No tenemos disponibilidad para el ${state.booking_goal.last_invalid_date}. ` +
-          `Puedo buscarte automáticamente la siguiente fecha disponible. ¿Deseas que lo haga?`;
+        plan.reply = naturalAvailabilityReply([], state.collected.date || toolResult.date);
       }
 
       if (bookingModification.changed) {
