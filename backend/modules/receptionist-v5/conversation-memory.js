@@ -14,6 +14,16 @@ function initialState(input) {
     recent_turns: Array.isArray(source.recent_turns) ? source.recent_turns.slice(-12) : [],
     recent_replies: Array.isArray(source.recent_replies) ? source.recent_replies.slice(-6) : [],
     pending_booking: source.pending_booking && typeof source.pending_booking === 'object' ? { ...source.pending_booking } : null,
+    booking_goal: source.booking_goal && typeof source.booking_goal === 'object'
+      ? {
+          ...source.booking_goal,
+          blocked_dates: Array.isArray(source.booking_goal.blocked_dates) ? [...source.booking_goal.blocked_dates] : [],
+          rejected_times: Array.isArray(source.booking_goal.rejected_times) ? [...source.booking_goal.rejected_times] : [],
+          last_validated_slot: source.booking_goal.last_validated_slot && typeof source.booking_goal.last_validated_slot === 'object'
+            ? { ...source.booking_goal.last_validated_slot }
+            : source.booking_goal.last_validated_slot || null,
+        }
+      : null,
     last_tool_result: source.last_tool_result || null,
     rejected_slots: Array.isArray(source.rejected_slots) ? source.rejected_slots.slice(-10) : [],
     handoff_requested: Boolean(source.handoff_requested),

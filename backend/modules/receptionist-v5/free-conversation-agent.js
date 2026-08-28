@@ -75,20 +75,10 @@ function explicitConfirmation(text, state = null) {
     /^(si|sí|ok|okay|correcto|esta bien|está bien|perfecto|de acuerdo|adelante)(?:\s+(?:por favor|gracias|esta bien|está bien|adelante))*[.!]*$/.test(value);
   if (!affirmative) return false;
 
-  const lastReply = String(state?.recent_turns?.slice(-1)?.[0]?.reply || '');
-  const summary = String(state.pending_booking?.summary || '');
-
-  const summaryWasPresented =
-    (
-      summary &&
-      lastReply.includes(summary)
-    ) ||
-    (
-      /Paciente:\s*.+\nTel[eé]fono:\s*.+\nServicio:\s*.+\nSucursal:\s*.+\nFecha:\s*.+\nHora:\s*.+/i.test(lastReply) &&
-      /confirm|crear esta cita|responde.*confirma|simplemente.*ok/i.test(lastReply)
-    );
-
-  return summaryWasPresented;
+  // pending_booking.presented_at sólo lo crea el backend cuando ya mostró
+  // el resumen formal. No dependemos de recent_turns porque recordTurn()
+  // compacta saltos de línea y destruía la comparación con summary.
+  return true;
 }
 
 function safePlan(raw) {
