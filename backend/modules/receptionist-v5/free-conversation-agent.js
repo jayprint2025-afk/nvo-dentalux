@@ -63,21 +63,32 @@ function explicitConfirmation(text, state = null) {
     return false;
   }
 
-  const explicit = /\b(si\s*,?\s*(confirma|confirmala|agendala|agenda)|confirmo|todo correcto.*(confirma|agenda)|adelante.*(confirma|agenda)|agenda esa cita|confirma la cita)\b/.test(value);
+  const explicit =
+    /\b(si\s*,?\s*(confirma|confirmala|agendala|agenda)|confirmo|todo correcto.*(confirma|agenda)|adelante.*(confirma|agenda)|agenda esa cita|confirma la cita)\b/.test(value);
   if (explicit) return true;
 
-  // Una respuesta breve sólo confirma cuando existe un resumen formal pendiente
-  // y el turno anterior pidió expresamente confirmar esa cita.
-  const shortAffirmative = /^(si|sí|ok|okay|correcto|esta bien|está bien|perfecto|de acuerdo|adelante)$/.test(value);
-  if (!shortAffirmative || !state?.pending_booking) return false;
+  // Una vez que el backend presentó el resumen formal, una afirmación natural
+  // ("sí", "sí por favor", "ok", "adelante", etc.) confirma ESA cita pendiente.
+  if (!state?.pending_booking?.presented_at) return false;
+
+  const affirmative =
+    /^(si|sí|ok|okay|correcto|esta bien|está bien|perfecto|de acuerdo|adelante)(?:\s+(?:por favor|gracias|esta bien|está bien|adelante))*[.!]*$/.test(value);
+  if (!affirmative) return false;
 
   const lastReply = String(state?.recent_turns?.slice(-1)?.[0]?.reply || '');
-  const formalSummaryWasPresented =
-    Boolean(state.pending_booking?.presented_at) &&
-    /Paciente:\s*.+\nTel[eé]fono:\s*.+\nServicio:\s*.+\nSucursal:\s*.+\nFecha:\s*.+\nHora:\s*.+/i.test(lastReply) &&
-    /¿Confirmas que deseas crear esta cita/i.test(lastReply);
+  const summary = String(state.pending_booking?.summary || '');
 
-  return formalSummaryWasPresented;
+  const summaryWasPresented =
+    (
+      summary &&
+      lastReply.includes(summary)
+    ) ||
+    (
+      /Paciente:\s*.+\nTel[eé]fono:\s*.+\nServicio:\s*.+\nSucursal:\s*.+\nFecha:\s*.+\nHora:\s*.+/i.test(lastReply) &&
+      /confirm|crear esta cita|responde.*confirma|simplemente.*ok/i.test(lastReply)
+    );
+
+  return summaryWasPresented;
 }
 
 function safePlan(raw) {
@@ -1769,6 +1780,7 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
             `${String(updated.date).slice(0, 10)} a las ` +
             `${String(updated.start_time).slice(0, 5)}. Número de cita: ${updated.id}.`;
           used = 'appointment_rescheduled';
+          authoritativeReplyLocked = true;
         } catch (error) {
           if (error?.code === 'APPOINTMENT_NOT_FOUND') {
             plan.reply =
@@ -1789,6 +1801,7 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
         state.pending_booking = null;
         plan.reply = `Listo, tu cita quedó registrada correctamente. Número de cita: ${created.id}.`;
         used = 'appointment_booked';
+        authoritativeReplyLocked = true;
       }
     }
   }
@@ -1886,6 +1899,7 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
   if (
     bookingSummaryRequired &&
     !state.pending_booking &&
+    !state.appointment_id &&
     state.collected.booking_mode !== 'cancel' &&
     state.collected.booking_mode !== 'reschedule'
   ) {
