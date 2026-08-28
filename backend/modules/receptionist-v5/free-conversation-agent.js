@@ -94,6 +94,15 @@ function safePlan(raw) {
   };
 }
 
+function mergeModelState(state, patch) {
+  // pending_booking es estado transaccional del backend.
+  // El modelo puede devolver pending_booking:null por el propio esquema JSON,
+  // pero eso NO debe borrar un resumen formal ya presentado.
+  const safePatch = patch && typeof patch === 'object' ? { ...patch } : {};
+  delete safePatch.pending_booking;
+  return Memory.mergeState(state, safePatch);
+}
+
 async function callModel(messages) {
   const key = process.env.RECEPTIONIST_V5_API_KEY || process.env.OPENAI_API_KEY || '';
   if (!key) throw new Error('Falta RECEPTIONIST_V5_API_KEY');
@@ -1190,7 +1199,7 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
   ];
 
   let plan = mergeActionArgs(await callModel(messages), state.collected);
-  Memory.mergeState(state, plan.state_patch);
+  mergeModelState(state, plan.state_patch);
   state.collected = { ...state.collected, ...grounding.collected };
 
   // Si el paciente cambia datos después del resumen, la confirmación anterior deja de ser válida.
@@ -1391,7 +1400,7 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
         },
       ]), state.collected);
 
-      Memory.mergeState(state, plan.state_patch);
+      mergeModelState(state, plan.state_patch);
 
       // Respuesta determinista y natural: sólo usa disponibilidad verificada.
       if (requestedTime) {
@@ -1800,7 +1809,7 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
       userText,
       detected: grounding.detected,
     });
-    Memory.mergeState(state, plan.state_patch);
+    mergeModelState(state, plan.state_patch);
     state.collected = { ...state.collected, ...grounding.collected };
     used = `${used}_repaired`;
     violations = Grounding.replyViolations(plan.reply, state, userText);
