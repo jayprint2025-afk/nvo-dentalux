@@ -18,6 +18,76 @@ function overlaps(aStart, aEnd, bStart, bEnd) {
   return aStart < bEnd && bStart < aEnd;
 }
 
+
+// Normaliza fechas antes de tocar PostgreSQL. La IA puede conservar referencias
+// naturales ("hoy", "mañana", "pasado mañana") en estados antiguos o pendientes;
+// la capa transaccional nunca debe enviar esas frases a una columna DATE.
+function bookingDateParts(timeZone = 'America/Tijuana', now = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(now);
+  const map = Object.fromEntries(
+    parts.filter(part => part.type !== 'literal').map(part => [part.type, part.value])
+  );
+  return { year: Number(map.year), month: Number(map.month), day: Number(map.day) };
+}
+
+function bookingAddDays(base, days) {
+  const date = new Date(base);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+function normalizeBookingDate(value, timeZone = 'America/Tijuana', now = new Date()) {
+  const raw = asText(value).trim();
+  if (!raw) return null;
+
+  const iso = raw.match(/^\s*(20\d{2})[-/](\d{1,2})[-/](\d{1,2})\s*$/);
+  if (iso) {
+    const normalized = `${iso[1]}-${pad2(iso[2])}-${pad2(iso[3])}`;
+    const check = new Date(`${normalized}T12:00:00Z`);
+    if (
+      !Number.isNaN(check.getTime()) &&
+      check.getUTCFullYear() === Number(iso[1]) &&
+      check.getUTCMonth() + 1 === Number(iso[2]) &&
+      check.getUTCDate() === Number(iso[3])
+    ) return normalized;
+    return null;
+  }
+
+  const n = raw
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[¿?¡!.,;:()[\]{}]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const local = bookingDateParts(timeZone, now);
+  const base = new Date(Date.UTC(local.year, local.month - 1, local.day));
+
+  if (/\bpasado manana\b/.test(n)) return bookingAddDays(base, 2);
+  if (/\bmanana\b/.test(n)) return bookingAddDays(base, 1);
+  if (/\bhoy\b/.test(n)) return bookingAddDays(base, 0);
+
+  const weekdays = {
+    domingo: 0, lunes: 1, martes: 2, miercoles: 3,
+    jueves: 4, viernes: 5, sabado: 6,
+  };
+  const weekday = Object.keys(weekdays).find(day => new RegExp(`\\b${day}\\b`).test(n));
+  if (weekday) {
+    let delta = (weekdays[weekday] - base.getUTCDay() + 7) % 7;
+    if (delta === 0) delta = 7;
+    return bookingAddDays(base, delta);
+  }
+
+  // "ese día" no contiene información suficiente por sí sola. No inventamos fecha.
+  return null;
+}
+
 // ====== introspección de columnas (cache en memoria) ======
 let _apptColsCache = null;
 async function getAppointmentsColumns(q) {
@@ -115,6 +185,12 @@ async function getServices(q, tenantOrBranch, maybeBranch) {
 
 async function getAppointmentsForDay(q, { clinic_id, branch_key, date }) {
   const cols = await getAppointmentsColumns(q);
+  const normalizedDate = normalizeBookingDate(date);
+  if (!normalizedDate) {
+    console.error('❌ FECHA INVÁLIDA AL CONSULTAR AGENDA', { date: date || null });
+    throw new Error('fecha inválida para consultar agenda');
+  }
+  date = normalizedDate;
 
   const where = [];
   const params = [];
@@ -256,13 +332,16 @@ async function createAppointmentTransactional(q, {
   // Corrección puntual: durante una modificación antes de confirmar,
   // el slot conserva doctor y hora, mientras la fecha permanece en el
   // objeto principal de la reserva. Unificamos ambos sin alterar el flujo.
+  const incomingDate =
+    slot?.date ||
+    date ||
+    appointment_date ||
+    null;
+  const normalizedDate = normalizeBookingDate(incomingDate);
+
   const resolvedSlot = {
     ...(slot && typeof slot === 'object' ? slot : {}),
-    date:
-      slot?.date ||
-      date ||
-      appointment_date ||
-      null,
+    date: normalizedDate,
     start_time: String(
       slot?.start_time ||
       start_time ||
@@ -277,10 +356,15 @@ async function createAppointmentTransactional(q, {
     ),
   };
 
-  if (
-    !resolvedSlot.date ||
-    !resolvedSlot.start_time
-  ) {
+  if (!normalizedDate) {
+    console.error('❌ FECHA INVÁLIDA AL CREAR CITA', {
+      received_date: incomingDate || null,
+      branch_key: branch_key || null,
+    });
+    throw new Error('fecha inválida al crear la cita');
+  }
+
+  if (!resolvedSlot.start_time) {
     console.error('❌ SLOT INCOMPLETO AL CREAR CITA', {
       doctor_id: resolvedSlot.doctor_id || null,
       date: resolvedSlot.date || null,

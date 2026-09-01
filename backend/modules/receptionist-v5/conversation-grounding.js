@@ -196,6 +196,29 @@ function parseDate(text, timeZone = 'America/Tijuana', now = new Date()) {
 }
 
 
+function normalizeStoredDate(dateValue, timeZone = 'America/Tijuana', now = new Date()) {
+  const raw = String(dateValue || '').trim();
+  if (!raw) return null;
+
+  // Si ya está normalizada, conservarla sólo si realmente representa una fecha válida.
+  const iso = raw.match(/^\s*(20\d{2})[-/](\d{1,2})[-/](\d{1,2})\s*$/);
+  if (iso) {
+    const normalized = `${iso[1]}-${String(iso[2]).padStart(2, '0')}-${String(iso[3]).padStart(2, '0')}`;
+    const check = new Date(`${normalized}T12:00:00Z`);
+    if (
+      !Number.isNaN(check.getTime()) &&
+      check.getUTCFullYear() === Number(iso[1]) &&
+      check.getUTCMonth() + 1 === Number(iso[2]) &&
+      check.getUTCDate() === Number(iso[3])
+    ) return normalized;
+    return null;
+  }
+
+  // Reutilizamos la misma semántica de parseDate para estados antiguos como
+  // date: "mañana". "ese día" permanece sin resolver: nunca inventamos una fecha.
+  return parseDate(raw, timeZone, now);
+}
+
 function naturalDateLabel(dateValue, timeZone = 'America/Tijuana', now = new Date()) {
   const raw = String(dateValue || '').slice(0, 10);
   if (!raw) return 'ese día';
@@ -335,7 +358,17 @@ function deriveFacts(text, knowledge, state, options = {}) {
     knowledge?.clinic_timezone ||
     'America/Tijuana';
 
-  const date = parseDate(text, clinicTimeZone, options.now || new Date());
+  const currentNow = options.now || new Date();
+
+  // Sanea estados persistidos por versiones anteriores. Esto es clave cuando el
+  // siguiente mensaje sólo es "sí": aun sin mencionar fecha, "mañana" debe
+  // convertirse a YYYY-MM-DD antes de preparar/crear la cita.
+  if (collected.date) {
+    const normalizedStoredDate = normalizeStoredDate(collected.date, clinicTimeZone, currentNow);
+    if (normalizedStoredDate) collected.date = normalizedStoredDate;
+  }
+
+  const date = parseDate(text, clinicTimeZone, currentNow);
   const time = parseTimePreference(text, collected);
 
   if (branch) {
@@ -528,6 +561,7 @@ module.exports = {
   extractPhone,
   extractPatient,
   parseDate,
+  normalizeStoredDate,
   naturalDateLabel,
   parseTimePreference,
   informationIntents,
