@@ -1028,10 +1028,30 @@ function requestedTimeFromCurrentMessage(userText, state = {}) {
   return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
 }
 
+function businessHoursOnlyQuestion(userText) {
+  const normalized = Grounding.normalize(userText);
+
+  const asksGeneralHours =
+    /\b(que|cual|cuales|sus|el|los)?\s*horario(?:s)?\b/.test(normalized) ||
+    /\b(a que hora|que hora)\s+(?:abren|cierran|atienden)\b/.test(normalized) ||
+    /\b(?:abren|cierran)\b/.test(normalized);
+
+  const asksRealAvailability =
+    /\b(disponible|disponibilidad|espacio|espacios|lugar|lugares|se podra|se puede|tienen lugar|hay lugar|cita|agendar|agendame|reservar)\b/.test(normalized) ||
+    /\b(hoy|manana|pasado manana|lunes|martes|miercoles|jueves|viernes|sabado|domingo)\b/.test(normalized) ||
+    Boolean(Grounding.parseTimePreference(userText, {}));
+
+  return asksGeneralHours && !asksRealAvailability;
+}
+
 function availabilityQuestionWithoutService(userText, state = {}) {
   const normalized = Grounding.normalize(userText);
+
+  if (businessHoursOnlyQuestion(userText)) return false;
+
   const asksAvailability =
-    /\b(horario|horarios|disponible|disponibilidad|espacio|espacios|lugar|lugares|se podra|se puede|tienen lugar|hay lugar)\b/.test(normalized) ||
+    /\b(disponible|disponibilidad|espacio|espacios|lugar|lugares|se podra|se puede|tienen lugar|hay lugar)\b/.test(normalized) ||
+    /\bhorario(?:s)?\b/.test(normalized) ||
     Boolean(Grounding.parseTimePreference(userText, state.collected || {}));
 
   return asksAvailability && !state?.collected?.service_id;
@@ -1093,7 +1113,7 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
     availabilityQuestionWithoutService(userText, state)
   ) {
     const reply =
-      'Claro. Para revisar la disponibilidad real necesito saber qué servicio deseas, porque el tiempo de cada tratamiento es diferente. ¿Qué servicio necesitas?';
+      'Para revisar la disponibilidad real necesito saber qué servicio deseas, porque el tiempo de cada tratamiento es diferente. ¿Qué servicio necesitas?';
 
     state.collected.availability_pending = true;
 
@@ -1802,9 +1822,11 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
     used = 'handoff';
   }
 
-  const availabilityLanguage = /\b(horario|horarios|disponible|disponibilidad|espacio|espacios)\b/.test(
-    Grounding.normalize(userText)
-  );
+  const availabilityLanguage =
+    !businessHoursOnlyQuestion(userText) &&
+    /\b(horario|horarios|disponible|disponibilidad|espacio|espacios|lugar|lugares|se podra|se puede|tienen lugar|hay lugar)\b/.test(
+      Grounding.normalize(userText)
+    );
 
   const filteredInformationIntents = (grounding.detected.information_intents || []).filter(
     intent => !(intent === 'business_hours' && (wantsBooking || availabilityLanguage))
