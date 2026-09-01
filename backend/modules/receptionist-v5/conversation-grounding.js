@@ -363,8 +363,36 @@ function deriveFacts(text, knowledge, state, options = {}) {
   if (appointmentAction) {
     collected.booking_mode = appointmentAction;
   }
-  const branch = findBranch(text, knowledge.branches);
-  const service = findService(text, knowledge.services);
+  const branchMention = findBranch(text, knowledge.branches);
+  const infoIntents = informationIntents(text);
+  const branchIsInformationalOnly = Boolean(
+    branchMention &&
+    infoIntents.length &&
+    !bookingIntent(text, collected) &&
+    !appointmentAction
+  );
+  const branch = branchIsInformationalOnly ? null : branchMention;
+
+  const targetBranchKey = branch?.branch_key || collected.branch_key || null;
+  const servicePool = targetBranchKey
+    ? knowledge.services.filter(item => item.branch_key === targetBranchKey)
+    : knowledge.services;
+
+  let service = findService(text, servicePool);
+  const rememberedServiceName =
+    collected.service_name ||
+    knowledge.services.find(item => String(item.id) === String(collected.service_id || ''))?.name ||
+    null;
+
+  // Si el paciente selecciona/cambia sucursal sin repetir el tratamiento,
+  // volver a resolver el mismo servicio DENTRO de la nueva sucursal.
+  if (branch && !service && rememberedServiceName) {
+    service = findService(
+      rememberedServiceName,
+      knowledge.services.filter(item => item.branch_key === branch.branch_key)
+    );
+  }
+
   const phone = extractPhone(text);
   const patient = extractPatient(text);
   const patientAge = extractPatientAge(text);
@@ -409,10 +437,26 @@ function deriveFacts(text, knowledge, state, options = {}) {
     collected.branch_key = branch.branch_key;
     collected.branch_name = branch.name;
   }
+
   if (service) {
-    collected.service_id = service.id;
     collected.service_name = service.name;
-    if (service.duration_hours != null) collected.duration_hours = service.duration_hours;
+
+    // service_id es una identidad propia de cada sucursal.
+    // Sin sucursal elegida conservamos el concepto/nombre, pero NO amarramos
+    // la conversación al registro de la primera sucursal encontrada.
+    if (targetBranchKey) {
+      collected.service_id = service.id;
+      if (service.duration_hours != null) collected.duration_hours = service.duration_hours;
+    } else {
+      delete collected.service_id;
+      delete collected.duration_hours;
+    }
+  } else if (branch && rememberedServiceName) {
+    // La sucursal cambió y el servicio anterior no existe allí: no conservar
+    // un ID perteneciente a otra sucursal.
+    delete collected.service_id;
+    delete collected.duration_hours;
+    collected.service_name = rememberedServiceName;
   }
   if (phone) collected.phone = phone;
   if (patient) collected.patient = patient;
@@ -464,13 +508,18 @@ function deriveFacts(text, knowledge, state, options = {}) {
     collected,
     detected: {
       branch: branch ? { branch_key: branch.branch_key, name: branch.name } : null,
-      service: service ? { id: service.id, name: service.name } : null,
+      information_branch: branchIsInformationalOnly && branchMention
+        ? { branch_key: branchMention.branch_key, name: branchMention.name }
+        : null,
+      service: service
+        ? { id: targetBranchKey ? service.id : null, name: service.name }
+        : null,
       phone,
       patient,
       patient_age: patientAge,
       date,
       time,
-      information_intents: informationIntents(text),
+      information_intents: infoIntents,
       appointment_action: appointmentAction,
       negative: isNegative(text),
     },

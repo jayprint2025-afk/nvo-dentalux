@@ -286,22 +286,6 @@ function resolveServiceIdentity(data, knowledge) {
     ? knowledge.services
     : [];
 
-  if (data.service_id) {
-    const current = services.find(
-      item => String(item.id) === String(data.service_id)
-    );
-    if (current && !data.service_name) data.service_name = current.name;
-    return data;
-  }
-
-  const requestedName = String(
-    data.service_name ||
-    data.service ||
-    ''
-  ).trim();
-
-  if (!requestedName) return data;
-
   const normalize = value =>
     String(value || '')
       .normalize('NFD')
@@ -311,20 +295,48 @@ function resolveServiceIdentity(data, knowledge) {
       .replace(/\s+/g, ' ')
       .trim();
 
+  const branchKey = String(data.branch_key || data.sucursal_id || '').trim() || null;
+  const inBranch = branchKey
+    ? services.filter(item => String(item.branch_key || '') === branchKey)
+    : services;
+
+  let requestedName = String(data.service_name || data.service || '').trim();
+
+  if (data.service_id) {
+    const current = services.find(
+      item => String(item.id) === String(data.service_id)
+    );
+
+    if (current && !requestedName) requestedName = String(current.name || '').trim();
+
+    // Si el ID pertenece a la sucursal elegida, está bien.
+    if (current && (!branchKey || String(current.branch_key || '') === branchKey)) {
+      data.service_name = data.service_name || current.name;
+      if (current.duration_hours != null) data.duration_hours = current.duration_hours;
+      return data;
+    }
+
+    // El ID era de otra sucursal. Nunca dejarlo pasar a appointment-tools.
+    delete data.service_id;
+    delete data.duration_hours;
+  }
+
+  if (!requestedName) return data;
   const requested = normalize(requestedName);
 
-  const service = services.find(item => {
+  const service = inBranch.find(item => {
     const candidate = normalize(item.name);
     return (
       candidate === requested ||
       candidate.includes(requested) ||
       requested.includes(candidate)
     );
-  });
+  }) || Grounding.findService(requestedName, inBranch);
 
   if (service) {
     data.service_id = service.id;
     data.service_name = service.name;
+    if (service.duration_hours != null) data.duration_hours = service.duration_hours;
   }
 
   return data;
@@ -883,6 +895,40 @@ function naturalPriceReply(service) {
   return `El costo de ${service.name || 'ese servicio'} es de $${price.toLocaleString('es-MX')}.`;
 }
 
+
+function naturalPriceReplyForContext(knowledge, state, grounding) {
+  const services = Array.isArray(knowledge?.services) ? knowledge.services : [];
+  const selected = services.find(
+    item => String(item.id) === String(state.collected.service_id || '')
+  );
+  if (selected) return naturalPriceReply(selected);
+
+  const requestedName = String(
+    state.collected.service_name || grounding?.detected?.service?.name || ''
+  ).trim();
+  if (!requestedName) return null;
+
+  const matches = [];
+  for (const branch of knowledge.branches || []) {
+    const match = Grounding.findService(
+      requestedName,
+      services.filter(item => item.branch_key === branch.branch_key)
+    );
+    if (match) matches.push({ branch, service: match });
+  }
+
+  if (!matches.length) return null;
+  const valid = matches.filter(item => Number.isFinite(Number(item.service.price)));
+  if (!valid.length) return null;
+
+  const uniquePrices = [...new Set(valid.map(item => Number(item.service.price)))];
+  if (uniquePrices.length === 1) {
+    return `El costo de ${valid[0].service.name || requestedName} es de $${uniquePrices[0].toLocaleString('es-MX')}.`;
+  }
+
+  return `El precio varía por sucursal: ${valid.map(item => `${item.branch.name}: $${Number(item.service.price).toLocaleString('es-MX')}`).join('; ')}.`;
+}
+
 function formatBusinessHours(value) {
   const raw = String(value || '').trim();
   if (!raw) return null;
@@ -918,9 +964,10 @@ function formatBusinessHours(value) {
   return normalized;
 }
 
-function naturalInformationReply(knowledge, state, intents = []) {
+function naturalInformationReply(knowledge, state, intents = [], options = {}) {
+  const infoBranchKey = options.branch_key || state.collected.branch_key || null;
   const branch = knowledge.branches.find(
-    item => item.branch_key === state.collected.branch_key
+    item => item.branch_key === infoBranchKey
   );
   const service = knowledge.services.find(
     item => String(item.id) === String(state.collected.service_id)
@@ -957,11 +1004,16 @@ function naturalInformationReply(knowledge, state, intents = []) {
   }
 
   if (intents.includes('location')) {
-    parts.push(
-      branch?.address
-        ? `Estamos en ${branch.address}${branch?.name ? `, sucursal ${branch.name}` : ''}.`
-        : knowledge.unknown_information_policy
-    );
+    if (branch?.address) {
+      parts.push(`Estamos en ${branch.address}${branch?.name ? `, sucursal ${branch.name}` : ''}.`);
+    } else {
+      const locations = (knowledge.branches || [])
+        .filter(item => item.address)
+        .map(item => `${item.name}: ${item.address}`);
+      parts.push(locations.length
+        ? `Tenemos estas ubicaciones: ${locations.join('; ')}.`
+        : knowledge.unknown_information_policy);
+    }
   }
 
   if (intents.includes('maps')) {
@@ -977,9 +1029,17 @@ function naturalInformationReply(knowledge, state, intents = []) {
   if (intents.includes('business_hours')) {
     if (branch?.business_hours) {
       const formattedHours = String(formatBusinessHours(branch.business_hours) || '').trim();
-      parts.push(`Nuestro horario es ${formattedHours}${/[.!?]$/.test(formattedHours) ? '' : '.'}`);
+      parts.push(`El horario de ${branch.name} es ${formattedHours}${/[.!?]$/.test(formattedHours) ? '' : '.'}`);
     } else {
-      parts.push(knowledge.unknown_information_policy);
+      const branchHours = (knowledge.branches || [])
+        .filter(item => item.business_hours)
+        .map(item => {
+          const formatted = String(formatBusinessHours(item.business_hours) || '').trim();
+          return `${item.name}: ${formatted}`;
+        });
+      parts.push(branchHours.length
+        ? `Estos son nuestros horarios por sucursal: ${branchHours.join('; ')}.`
+        : knowledge.unknown_information_policy);
     }
   }
 
@@ -1242,7 +1302,9 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
     state.collected.booking_mode !== 'reschedule' &&
     businessHoursOnlyQuestion(userText)
   ) {
-    const reply = naturalInformationReply(knowledge, state, ['business_hours']) || knowledge.unknown_information_policy;
+    const reply = naturalInformationReply(knowledge, state, ['business_hours'], {
+      branch_key: grounding.detected?.information_branch?.branch_key || grounding.detected?.branch?.branch_key || null,
+    }) || knowledge.unknown_information_policy;
     Memory.recordTurn(state, userText, reply, {
       used: 'business_hours_authoritative',
       objective: ObjectivePlanner.nextObjective(state),
@@ -2050,10 +2112,7 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
   );
 
   if (currentInfoIntents.includes('price')) {
-    const authoritativeService = knowledge.services.find(
-      item => String(item.id) === String(state.collected.service_id)
-    );
-    const priceReply = naturalPriceReply(authoritativeService);
+    const priceReply = naturalPriceReplyForContext(knowledge, state, grounding);
     if (priceReply && !wantsBooking && !authoritativeReplyLocked) {
       plan.reply = priceReply;
       used = 'natural_price_authoritative';
@@ -2062,7 +2121,8 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
     const infoReply = naturalInformationReply(
       knowledge,
       state,
-      authoritativeInfoIntents
+      authoritativeInfoIntents,
+      { branch_key: grounding.detected?.information_branch?.branch_key || null }
     );
     if (infoReply) {
       plan.reply = infoReply;
