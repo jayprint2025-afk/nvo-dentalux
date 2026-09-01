@@ -511,7 +511,12 @@ function detectBookingModification({
   previousPending,
   grounding,
 }) {
-  if (!previousPending) {
+  const hadValidatedSlot = Boolean(
+    previousPending ||
+    previousCollected?.selected_slot?.verified ||
+    (previousCollected?.start_time && previousCollected?.doctor_id)
+  );
+  if (!hadValidatedSlot) {
     return { changed: false, fields: {}, changed_fields: [] };
   }
 
@@ -519,7 +524,7 @@ function detectBookingModification({
   const changedFields = [];
   const before = {
     ...previousCollected,
-    ...previousPending,
+    ...(previousPending || {}),
   };
 
   const explicitTime = extractLastExplicitTime(userText);
@@ -1028,13 +1033,86 @@ function requestedTimeFromCurrentMessage(userText, state = {}) {
   return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
 }
 
+function businessHoursOnlyQuestion(userText) {
+  const normalized = Grounding.normalize(userText);
+  const hasHoursLanguage =
+    /\b(horario|horarios|a que hora|abren|abre|cierran|cierra|hora de apertura|hora de cierre)\b/.test(normalized);
+  const hasAvailabilityLanguage =
+    /\b(disponible|disponibilidad|espacio|espacios|lugar|lugares|se podra|se puede|tienen lugar|hay lugar|cita|agendar|agenda)\b/.test(normalized);
+  return hasHoursLanguage && !hasAvailabilityLanguage;
+}
+
+function symptomWithoutService(userText, state = {}) {
+  const normalized = Grounding.normalize(userText);
+  const hasSymptom = /\b(duele|dolor|muela|diente|inflamad|hinchad|sensibilidad|sangra|sangrado)\b/.test(normalized);
+  return hasSymptom && !state?.collected?.service_id;
+}
+
 function availabilityQuestionWithoutService(userText, state = {}) {
   const normalized = Grounding.normalize(userText);
+  if (businessHoursOnlyQuestion(userText)) return false;
   const asksAvailability =
-    /\b(horario|horarios|disponible|disponibilidad|espacio|espacios|lugar|lugares|se podra|se puede|tienen lugar|hay lugar)\b/.test(normalized) ||
+    /\b(disponible|disponibilidad|espacio|espacios|lugar|lugares|se podra|se puede|tienen lugar|hay lugar|cita|agendar|agenda)\b/.test(normalized) ||
     Boolean(Grounding.parseTimePreference(userText, state.collected || {}));
 
   return asksAvailability && !state?.collected?.service_id;
+}
+
+function resolveAmbiguousTimeAgainstSlots(userText, proposedTime, slots = [], state = {}) {
+  const normalized = Grounding.normalize(userText);
+  const proposed = String(proposedTime || '').slice(0, 5);
+  if (!proposed) return proposed;
+
+  // Si el paciente indicó AM/PM o una parte del día, respetar esa indicación.
+  if (/\b(am|a m|pm|p m|manana|tarde|noche)\b/.test(normalized)) return proposed;
+
+  // Sólo resolver ambigüedad en respuestas horarias naturales como "a las 3" o "3".
+  const explicitHour = normalized.match(/(?:^|\b(?:a las?|como a las?|mejor a las?)\s*)(\d{1,2})(?::(\d{2}))?\s*$/);
+  if (!explicitHour) return proposed;
+
+  const available = new Set((Array.isArray(slots) ? slots : [])
+    .map(slot => String(slot.start_time || '').slice(0, 5))
+    .filter(Boolean));
+
+  if (available.has(proposed)) return proposed;
+
+  const [hRaw, mRaw] = proposed.split(':');
+  const h = Number(hRaw);
+  const m = Number(mRaw || 0);
+  if (!Number.isFinite(h) || h >= 12) return proposed;
+
+  const pmCandidate = `${String(h + 12).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+  if (available.has(pmCandidate)) return pmCandidate;
+
+  // Si el último resultado ofreció explícitamente una de las dos variantes, usarla.
+  const priorSlots = state?.last_tool_result?.result?.slots || [];
+  const prior = new Set(priorSlots.map(slot => String(slot.start_time || '').slice(0, 5)).filter(Boolean));
+  if (prior.has(proposed)) return proposed;
+  if (prior.has(pmCandidate)) return pmCandidate;
+
+  return proposed;
+}
+
+function currentAuthoritativeInformationReply(knowledge, state, intents = []) {
+  const pieces = [];
+  const service = knowledge.services.find(
+    item => String(item.id) === String(state.collected.service_id)
+  );
+
+  if (intents.includes('price')) {
+    const price = naturalPriceReply(service);
+    if (price) pieces.push(price);
+  }
+
+  const otherIntents = intents.filter(intent =>
+    ['duration', 'location', 'maps', 'payment_methods', 'parking', 'promotion', 'preparation'].includes(intent)
+  );
+  if (otherIntents.length) {
+    const info = naturalInformationReply(knowledge, state, otherIntents);
+    if (info) pieces.push(info);
+  }
+
+  return pieces.join(' ').trim();
 }
 
 function nearbyAvailabilityReply(slots, requestedTime) {
@@ -1084,6 +1162,36 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
   const grounding = Grounding.deriveFacts(userText, knowledge, state);
   state.collected = grounding.collected;
 
+
+  // Preguntas de horario comercial no son consultas de agenda.
+  if (
+    state.collected.booking_mode !== 'cancel' &&
+    state.collected.booking_mode !== 'reschedule' &&
+    businessHoursOnlyQuestion(userText)
+  ) {
+    const reply = naturalInformationReply(knowledge, state, ['business_hours']) || knowledge.unknown_information_policy;
+    Memory.recordTurn(state, userText, reply, {
+      used: 'business_hours_authoritative',
+      objective: ObjectivePlanner.nextObjective(state),
+    });
+    return { reply, state, used: 'business_hours_authoritative', engine_version: 'v5' };
+  }
+
+  // Si el paciente describe dolor/síntomas y quiere cita, no inventar un tratamiento.
+  if (
+    state.collected.booking_mode !== 'cancel' &&
+    state.collected.booking_mode !== 'reschedule' &&
+    symptomWithoutService(userText, state)
+  ) {
+    state.collected.availability_pending = true;
+    const reply =
+      'Podemos ayudarte a revisarlo. ¿Buscas una consulta o valoración, o ya te indicaron algún tratamiento específico?';
+    Memory.recordTurn(state, userText, reply, {
+      used: 'symptom_service_clarification',
+      objective: ObjectivePlanner.nextObjective(state),
+    });
+    return { reply, state, used: 'symptom_service_clarification', engine_version: 'v5' };
+  }
 
   // La disponibilidad depende de la duración del servicio.
   // Si aún no sabemos qué tratamiento desea, no afirmar horarios ni disponibilidad.
@@ -1264,6 +1372,16 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
 
   plan = ObjectivePlanner.applyObjectiveOverride({ state, userText, plan });
 
+  // Los cambios sobre una cita ya validada siempre obligan a consultar de nuevo.
+  // Ningún override del modelo/objetivo puede reutilizar el slot anterior.
+  if (bookingModification.changed) {
+    plan.action = {
+      type: 'check_availability',
+      args: { ...state.collected },
+    };
+    plan.reason = 'Cambio de fecha, hora, sucursal o servicio; revalidar el slot con agenda real.';
+  }
+
   // CURRENT MESSAGE service lock:
   // si el paciente menciona un servicio en este turno, ese servicio manda sobre
   // cualquier sugerencia previa del modelo.
@@ -1305,13 +1423,16 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
     );
 
   const availabilityQuestion =
-    availabilityContinuation ||
+    !businessHoursOnlyQuestion(userText) &&
     (
-      wantsBooking &&
-      Grounding.availabilityReady(state.collected) &&
-      Boolean(
-        grounding.detected?.time ||
-        /\b(horario|horarios|disponible|disponibilidad|espacio|espacios|lugar|lugares|se podra|se puede|tienen lugar|hay lugar)\b/.test(Grounding.normalize(userText))
+      availabilityContinuation ||
+      (
+        wantsBooking &&
+        Grounding.availabilityReady(state.collected) &&
+        Boolean(
+          grounding.detected?.time ||
+          /\b(disponible|disponibilidad|espacio|espacios|lugar|lugares|se podra|se puede|tienen lugar|hay lugar)\b/.test(Grounding.normalize(userText))
+        )
       )
     );
   const availabilityReady = Grounding.availabilityReady(state.collected);
@@ -1383,7 +1504,7 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
       const detectedCurrentTime = grounding.detected?.time || null;
       const currentMessageTime =
         detectedCurrentTime?.type === 'exact'
-          ? String(detectedCurrentTime.exact_time || '').slice(0, 5)
+          ? (requestedTimeFromCurrentMessage(userText, state) || String(detectedCurrentTime.exact_time || '').slice(0, 5))
           : requestedTimeFromCurrentMessage(userText, state);
       const currentMessageHasBroadRange = detectedCurrentTime?.type === 'range';
       if (currentMessageHasBroadRange) {
@@ -1412,12 +1533,13 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
       let slots = Array.isArray(toolResult.slots) ? toolResult.slots : [];
       slots = slots.filter(slot => !state.rejected_slots.includes(String(slot.start_time).slice(0, 5)));
 
-      const requestedTime = String(
+      let requestedTime = String(
         currentMessageTime ||
         state.collected.exact_time ||
         state.collected.start_time ||
         ''
       ).slice(0, 5);
+      requestedTime = resolveAmbiguousTimeAgainstSlots(userText, requestedTime, slots, state);
 
       // Una consulta amplia ("mañana por la tarde") NO selecciona automáticamente
       // el primer horario. Sólo existe selected cuando el paciente pidió una hora exacta.
@@ -1485,6 +1607,17 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
           state.collected.date || toolResult.date,
           resolveClinicTimeZone(knowledge, state)
         );
+      }
+
+      // Si el turno también preguntó precio, duración u otra información, responderla
+      // en la misma respuesta junto con la disponibilidad verificada.
+      const bookingInfoReply = currentAuthoritativeInformationReply(
+        knowledge,
+        state,
+        grounding.detected.information_intents || []
+      );
+      if (bookingInfoReply) {
+        plan.reply = `${bookingInfoReply} ${plan.reply}`.trim();
       }
 
       // Guardar el horario únicamente cuando el paciente pidió una hora exacta
@@ -1848,11 +1981,11 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
       item => String(item.id) === String(state.collected.service_id)
     );
     const priceReply = naturalPriceReply(authoritativeService);
-    if (priceReply && !wantsBooking) {
+    if (priceReply && !wantsBooking && !authoritativeReplyLocked) {
       plan.reply = priceReply;
       used = 'natural_price_authoritative';
     }
-  } else if (authoritativeInfoIntents.length && !wantsBooking) {
+  } else if (authoritativeInfoIntents.length && !wantsBooking && !authoritativeReplyLocked) {
     const infoReply = naturalInformationReply(
       knowledge,
       state,
@@ -1947,4 +2080,8 @@ module.exports = {
   detectBookingModification,
   invalidateSelectedSlot,
   updatedConfirmationReply,
+  businessHoursOnlyQuestion,
+  availabilityQuestionWithoutService,
+  resolveAmbiguousTimeAgainstSlots,
+  currentAuthoritativeInformationReply,
 };

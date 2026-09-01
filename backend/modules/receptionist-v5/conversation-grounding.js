@@ -106,6 +106,21 @@ function extractPhone(text) {
   return null;
 }
 
+function genericPatientDescription(value) {
+  const n = normalize(value);
+  if (!n) return false;
+  return /^(?:una?|el|la)?\s*(?:nina|nino|menor|bebe|paciente|persona)(?:\s+de\s+\d{1,2}\s+anos?)?\b/.test(n) ||
+    /^(?:mi\s+)?(?:hija|hijo)(?:\s+de\s+\d{1,2}\s+anos?)?\b/.test(n);
+}
+
+function extractPatientAge(text) {
+  const n = normalize(text);
+  const match = n.match(/\b(?:nina|nino|menor|hija|hijo|paciente)?\s*(?:de\s+)?(\d{1,2})\s+anos?\b/);
+  if (!match) return null;
+  const age = Number(match[1]);
+  return Number.isInteger(age) && age >= 0 && age <= 120 ? age : null;
+}
+
 function extractPatient(text) {
   const raw = String(text || '').trim();
   const patterns = [
@@ -115,9 +130,10 @@ function extractPatient(text) {
   for (const pattern of patterns) {
     const match = raw.match(pattern);
     if (match) {
-      return match[1]
+      const candidate = match[1]
         .replace(/\b(?:y|con|tel[eé]fono|para|en)\b.*$/i, '')
         .trim();
+      if (candidate && !genericPatientDescription(candidate)) return candidate;
     }
   }
 
@@ -140,7 +156,7 @@ function extractPatient(text) {
       words.length <= 6 &&
       words.every(word => /^[A-Za-zÁÉÍÓÚÜÑáéíóúüñ'-]+$/.test(word))
     ) {
-      return withoutPhone;
+      if (!genericPatientDescription(withoutPhone)) return withoutPhone;
     }
   }
 
@@ -343,6 +359,16 @@ function deriveFacts(text, knowledge, state, options = {}) {
   const service = findService(text, knowledge.services);
   const phone = extractPhone(text);
   const patient = extractPatient(text);
+  const patientAge = extractPatientAge(text);
+
+  // Limpiar estados persistidos que hayan confundido una descripción
+  // ("una niña de 9 años") con el nombre real del paciente.
+  if (collected.patient && genericPatientDescription(collected.patient)) {
+    delete collected.patient;
+  }
+  if (collected.patient_name && genericPatientDescription(collected.patient_name)) {
+    delete collected.patient_name;
+  }
 
   const rememberedBranch =
     branch ||
@@ -382,6 +408,7 @@ function deriveFacts(text, knowledge, state, options = {}) {
   }
   if (phone) collected.phone = phone;
   if (patient) collected.patient = patient;
+  if (patientAge != null) collected.patient_age = patientAge;
   if (date) collected.date = date;
   if (time) {
     if (time.type === 'exact') {
@@ -432,6 +459,7 @@ function deriveFacts(text, knowledge, state, options = {}) {
       service: service ? { id: service.id, name: service.name } : null,
       phone,
       patient,
+      patient_age: patientAge,
       date,
       time,
       information_intents: informationIntents(text),
@@ -512,7 +540,9 @@ function bookingIntent(text, collected = {}) {
     /\b(hoy|manana|pasado manana|lunes|martes|miercoles|jueves|viernes|sabado|domingo)\b/.test(n);
 
   const asksAvailability =
-    /\b(horario|horarios|hora|horas|disponible|disponibilidad|espacio|espacios|lugar|lugares|se podra|se puede|tienen lugar|hay lugar)\b/.test(n);
+    /\b(disponible|disponibilidad|espacio|espacios|lugar|lugares|se podra|se puede|tienen lugar|hay lugar)\b/.test(n) ||
+    (/\b(horario|horarios|hora|horas)\b/.test(n) &&
+      /\b(hoy|manana|pasado manana|lunes|martes|miercoles|jueves|viernes|sabado|domingo|cita|agendar|disponible|lugar|espacio)\b/.test(n));
 
   const explicitBooking =
     /\b(agendar|agenda|agendame|ajendame|cita|consulta|limpieza|valoracion|revision|tratamiento|quiero|necesito|me gustaria)\b/.test(n);
@@ -560,6 +590,8 @@ module.exports = {
   findService,
   extractPhone,
   extractPatient,
+  extractPatientAge,
+  genericPatientDescription,
   parseDate,
   normalizeStoredDate,
   naturalDateLabel,
