@@ -145,16 +145,22 @@ function extractPatient(text) {
   if (phone) {
     const withoutPhone = raw
       .replace(/(?:\+?\d[\d\s().-]{8,}\d)/g, ' ')
+      // Si hora + teléfono + nombre vienen en el mismo mensaje, quitar primero la hora.
+      // Ejemplo: "4 pm 6731234554 Jessica" -> "Jessica", no "pm Jessica".
+      .replace(/\b\d{1,2}(?::\d{2})?\s*(?:a\.?\s*m\.?|p\.?\s*m\.?|am|pm)\b/gi, ' ')
+      .replace(/\b(?:am|pm|a\s*m|p\s*m)\b/gi, ' ')
       .replace(/\b(?:mi nombre es|me llamo|soy|nombre|telefono|teléfono|numero|número|contacto|es)\b/gi, ' ')
       .replace(/[^A-Za-zÁÉÍÓÚÜÑáéíóúüñ' -]/g, ' ')
       .replace(/\s+/g, ' ')
       .trim();
 
     const words = withoutPhone.split(/\s+/).filter(Boolean);
+    const oneWordStop = new Set(['si', 'no', 'ok', 'okay', 'gracias', 'extraccion', 'limpieza', 'profilaxis', 'cita']);
     if (
-      words.length >= 2 &&
+      words.length >= 1 &&
       words.length <= 6 &&
-      words.every(word => /^[A-Za-zÁÉÍÓÚÜÑáéíóúüñ'-]+$/.test(word))
+      words.every(word => /^[A-Za-zÁÉÍÓÚÜÑáéíóúüñ'-]+$/.test(word)) &&
+      !(words.length === 1 && oneWordStop.has(normalize(words[0])))
     ) {
       if (!genericPatientDescription(withoutPhone)) return withoutPhone;
     }
@@ -254,9 +260,11 @@ function naturalDateLabel(dateValue, timeZone = 'America/Tijuana', now = new Dat
 
 function parseTimePreference(text, previous = {}) {
   const n = normalize(text);
+  // Aceptar tanto "a las 4 pm" como una corrección breve "4 pm".
+  // La forma breve exige AM/PM explícito para no confundir edades, teléfonos u otros números.
   const match = n.match(
     /\b(?:(?:como|aprox(?:imadamente)?|alrededor de|cerca de|tipo)\s+)?(?:a las?|despues de las?|antes de las?|desde las?)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/
-  );
+  ) || n.match(/\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/);
 
   if (!match) {
     // Para agenda dental tratamos "por la tarde" como 13:00-18:00.

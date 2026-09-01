@@ -527,7 +527,11 @@ function detectBookingModification({
     ...(previousPending || {}),
   };
 
-  const explicitTime = extractLastExplicitTime(userText);
+  const detectedExactTime =
+    grounding?.detected?.time?.type === 'exact'
+      ? String(grounding.detected.time.exact_time || '').slice(0, 5)
+      : null;
+  const explicitTime = extractLastExplicitTime(userText) || detectedExactTime;
   const detectedDate = grounding?.detected?.date || null;
   const detectedBranch = grounding?.detected?.branch || null;
   const detectedService = grounding?.detected?.service || null;
@@ -971,11 +975,12 @@ function naturalInformationReply(knowledge, state, intents = []) {
   }
 
   if (intents.includes('business_hours')) {
-    parts.push(
-      branch?.business_hours
-        ? `Nuestro horario es ${formatBusinessHours(branch.business_hours)}.`
-        : knowledge.unknown_information_policy
-    );
+    if (branch?.business_hours) {
+      const formattedHours = String(formatBusinessHours(branch.business_hours) || '').trim();
+      parts.push(`Nuestro horario es ${formattedHours}${/[.!?]$/.test(formattedHours) ? '' : '.'}`);
+    } else {
+      parts.push(knowledge.unknown_information_policy);
+    }
   }
 
   if (intents.includes('parking')) {
