@@ -879,6 +879,41 @@ function naturalPriceReply(service) {
   return `El costo de ${service.name || 'ese servicio'} es de $${price.toLocaleString('es-MX')}.`;
 }
 
+function formatBusinessHours(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+
+  const normalized = raw
+    .replace(/\s+/g, ' ')
+    .replace(/\s*;\s*/g, '; ')
+    .replace(/(\d{1,2}:\d{2}):\s*a\s*/gi, '$1 a ')
+    .trim();
+
+  const toNatural = time => {
+    const match = String(time || '').match(/^(\d{1,2})(?::(\d{2}))?$/);
+    if (!match) return time;
+    let hour = Number(match[1]);
+    const minute = Number(match[2] || 0);
+    if (!Number.isFinite(hour) || hour > 23 || minute > 59) return time;
+    const suffix = hour >= 12 ? 'p. m.' : 'a. m.';
+    const h12 = hour % 12 || 12;
+    return `${h12}:${String(minute).padStart(2, '0')} ${suffix}`;
+  };
+
+  const weekday = normalized.match(/L\s*-\s*V\s*(\d{1,2}:\d{2})\s*a\s*(\d{1,2}:\d{2})/i);
+  const saturday = normalized.match(/s[aá]b(?:ado)?\.?\s*(\d{1,2}:\d{2})\s*a\s*(\d{1,2}:\d{2})/i);
+
+  if (weekday || saturday) {
+    const parts = [];
+    if (weekday) parts.push(`de lunes a viernes de ${toNatural(weekday[1])} a ${toNatural(weekday[2])}`);
+    if (saturday) parts.push(`los sábados de ${toNatural(saturday[1])} a ${toNatural(saturday[2])}`);
+    if (parts.length === 2) return `${parts[0]}, y ${parts[1]}`;
+    return parts[0];
+  }
+
+  return normalized;
+}
+
 function naturalInformationReply(knowledge, state, intents = []) {
   const branch = knowledge.branches.find(
     item => item.branch_key === state.collected.branch_key
@@ -938,7 +973,7 @@ function naturalInformationReply(knowledge, state, intents = []) {
   if (intents.includes('business_hours')) {
     parts.push(
       branch?.business_hours
-        ? `Nuestro horario es ${branch.business_hours}.`
+        ? `Nuestro horario es ${formatBusinessHours(branch.business_hours)}.`
         : knowledge.unknown_information_policy
     );
   }
@@ -960,6 +995,39 @@ function naturalInformationReply(knowledge, state, intents = []) {
   }
 
   return parts.filter(Boolean).join(' ');
+}
+
+function guardPrematureBookingClaim(reply, state, knowledge) {
+  const text = String(reply || '').trim();
+  if (!text || state?.appointment_id) return text;
+
+  const claimsCreated = /\b(agendada|agendado|programada|programado|reservada|reservado|confirmada|confirmado|quedo registrada|quedó registrada|cita registrada|cita creada)\b/i.test(text);
+  if (!claimsCreated) return text;
+
+  const data = resolveServiceIdentity(canonicalBookingData(state), knowledge);
+  const start = String(data.start_time || state?.collected?.start_time || '').slice(0, 5);
+  const patient = patientText(data.patient || state?.collected?.patient || state?.collected?.patient_name);
+  const phone = String(data.phone || state?.collected?.phone || '').trim();
+
+  if (start && !patient && phone) {
+    return `Las ${formatNaturalTime(start)} están disponibles y ya tengo el teléfono. Solo me falta el nombre completo de la paciente para continuar.`;
+  }
+  if (start && patient && !phone) {
+    return `Las ${formatNaturalTime(start)} están disponibles. Solo me falta un teléfono de contacto para continuar.`;
+  }
+  if (start && !patient && !phone) {
+    return `Las ${formatNaturalTime(start)} están disponibles. Para continuar, necesito el nombre del paciente y un teléfono de contacto.`;
+  }
+
+  // Si todos los datos están presentes, todavía falta presentar/confirmar el resumen formal.
+  if (start && patient && phone) {
+    const summary = confirmationSummary(data, knowledge);
+    return `Antes de agendar, confirma estos datos:\n\n${summary}\n\n¿Confirmas que deseas crear esta cita?`;
+  }
+
+  return text
+    .replace(/\b(est[aá]|qued[oó])\s+(?:ya\s+)?(?:agendada|programada|reservada|confirmada)\b/gi, 'está pendiente de confirmación')
+    .replace(/\b(?:agendada|programada|reservada|confirmada)\b/gi, 'pendiente de confirmación');
 }
 
 function stripSchedulingPitch(reply) {
@@ -1064,7 +1132,7 @@ function resolveAmbiguousTimeAgainstSlots(userText, proposedTime, slots = [], st
   if (!proposed) return proposed;
 
   // Si el paciente indicó AM/PM o una parte del día, respetar esa indicación.
-  if (/\b(am|a m|pm|p m|manana|tarde|noche)\b/.test(normalized)) return proposed;
+  if (/\b(am|a m|pm|p m|tarde|noche)\b/.test(normalized) || /\b(de la manana|por la manana)\b/.test(normalized)) return proposed;
 
   // Sólo resolver ambigüedad en respuestas horarias naturales como "a las 3" o "3".
   const explicitHour = normalized.match(/(?:^|\b(?:a las?|como a las?|mejor a las?)\s*)(\d{1,2})(?::(\d{2}))?\s*$/);
@@ -2002,6 +2070,7 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
     plan.reply = stripSchedulingPitch(plan.reply);
   }
   plan.reply = sanitizeClinicalReply(plan.reply);
+  plan.reply = guardPrematureBookingClaim(plan.reply, state, knowledge);
 
   if (!plan.reply) plan.reply = knowledge.unknown_information_policy;
 
@@ -2084,4 +2153,6 @@ module.exports = {
   availabilityQuestionWithoutService,
   resolveAmbiguousTimeAgainstSlots,
   currentAuthoritativeInformationReply,
+  formatBusinessHours,
+  guardPrematureBookingClaim,
 };
