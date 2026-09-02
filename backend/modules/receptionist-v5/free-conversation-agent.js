@@ -1617,8 +1617,22 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
   let used = plan.action.type || 'none';
   let authoritativeReplyLocked = false;
 
-  // FIX8: disponibilidad siempre consulta agenda antes de pedir datos personales.
-  if (availabilityQuestion) {
+  // Disponibilidad autoritativa antes de pedir datos personales.
+  // También se fuerza cuando el turno actual completa los datos mínimos de agenda
+  // (por ejemplo, el paciente sólo responde "Condesa" después de haber pedido
+  // "limpieza mañana a las 3 pm"). Así una hora exacta nunca avanza a nombre/teléfono
+  // sin haber sido validada contra la agenda real de la sucursal.
+  const exactBookingReadyForValidation = Boolean(
+    state.collected.booking_mode !== 'cancel' &&
+    state.collected.booking_mode !== 'reschedule' &&
+    state.collected.branch_key &&
+    state.collected.service_id &&
+    state.collected.date &&
+    (state.collected.exact_time || state.collected.start_time) &&
+    !state.collected.selected_slot?.verified
+  );
+
+  if (availabilityQuestion || exactBookingReadyForValidation) {
     plan.action = { type: 'check_availability', args: { ...state.collected } };
     delete state.collected.availability_pending;
   }
@@ -2072,16 +2086,71 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
           }
         }
       } else {
-        const created = await Appointment.createAppointment(q, ctx, pending);
+        try {
+          const created = await Appointment.createAppointment(q, ctx, pending);
 
-        publishMessengerAppointmentCreated(created, pending, ctx);
+          publishMessengerAppointmentCreated(created, pending, ctx);
 
-        state.appointment_id = created.id;
-        state.completed_booking_keys.push(pending.booking_key);
-        state.pending_booking = null;
-        plan.reply = `Listo, tu cita quedó registrada correctamente. Número de cita: ${created.id}.`;
-        used = 'appointment_booked';
-        authoritativeReplyLocked = true;
+          state.appointment_id = created.id;
+          state.completed_booking_keys.push(pending.booking_key);
+          state.pending_booking = null;
+          plan.reply = `Listo, tu cita quedó registrada correctamente. Número de cita: ${created.id}.`;
+          used = 'appointment_booked';
+          authoritativeReplyLocked = true;
+        } catch (error) {
+          const slotConflict =
+            /horario seleccionado ya no est[aá] disponible|horario ya fue tomado/i.test(
+              String(error?.message || '')
+            );
+
+          if (!slotConflict) throw error;
+
+          // El motor transaccional es la última autoridad. Si el horario se ocupó
+          // antes del INSERT, invalidamos el slot y consultamos nuevamente la misma
+          // sucursal/servicio/fecha para ofrecer sólo alternativas verificadas.
+          const requestedTime = String(
+            pending.start_time || pending.exact_time || state.collected.exact_time || ''
+          ).slice(0, 5);
+
+          state.pending_booking = null;
+          delete state.collected.start_time;
+          delete state.collected.exact_time;
+          delete state.collected.end_time;
+          delete state.collected.doctor_id;
+          delete state.collected.doctor_name;
+          delete state.collected.selected_slot;
+          delete state.collected.current_slot;
+
+          const refreshed = await Appointment.checkAvailability(q, ctx, {
+            branch_key: pending.branch_key,
+            service_id: pending.service_id,
+            date: pending.date,
+            duration_hours: pending.duration_hours,
+          });
+
+          const refreshedSlots = (Array.isArray(refreshed?.slots) ? refreshed.slots : [])
+            .filter(slot =>
+              !state.rejected_slots.includes(String(slot.start_time || '').slice(0, 5))
+            );
+
+          state.last_tool_result = {
+            type: 'check_availability',
+            result: { ...refreshed, slots: refreshedSlots },
+            selected_time: null,
+          };
+
+          plan.reply = requestedTime
+            ? nearbyAvailabilityReply(refreshedSlots, requestedTime)
+            : naturalAvailabilityReply(
+                refreshedSlots,
+                pending.date,
+                resolveClinicTimeZone(knowledge, state)
+              );
+
+          used = 'appointment_slot_conflict_rechecked';
+          authoritativeReplyLocked = true;
+          plan.action = { type: 'none', args: {} };
+        }
       }
     }
   }
