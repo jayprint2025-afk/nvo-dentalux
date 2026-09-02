@@ -2180,13 +2180,22 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
     ['location', 'maps', 'business_hours', 'payment_methods', 'parking', 'promotion', 'duration', 'preparation'].includes(intent)
   );
 
+  // Una pregunta informativa interrumpe sólo la respuesta, NO el estado de la cita.
+  // Aunque exista un slot validado o el paciente esté en medio del agendamiento,
+  // primero respondemos lo que acaba de preguntar. No volvemos a empujar nombre,
+  // teléfono o confirmación en ese mismo turno.
+  let informationalInterruption = false;
+
   if (currentInfoIntents.includes('price')) {
     const priceReply = naturalPriceReplyForContext(knowledge, state, grounding);
-    if (priceReply && !wantsBooking && !authoritativeReplyLocked) {
+    if (priceReply) {
       plan.reply = priceReply;
       used = 'natural_price_authoritative';
+      informationalInterruption = true;
+      authoritativeReplyLocked = true;
+      plan.action = { type: 'none', args: {} };
     }
-  } else if (authoritativeInfoIntents.length && !wantsBooking && !authoritativeReplyLocked) {
+  } else if (authoritativeInfoIntents.length) {
     const infoReply = naturalInformationReply(
       knowledge,
       state,
@@ -2196,11 +2205,15 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
     if (infoReply) {
       plan.reply = infoReply;
       used = 'natural_information_authoritative';
+      informationalInterruption = true;
+      authoritativeReplyLocked = true;
+      plan.action = { type: 'none', args: {} };
     }
   }
 
-  // Si es una pregunta meramente informativa, evitar la presión comercial repetitiva.
-  if (!wantsBooking && !state.pending_booking) {
+  // Las preguntas informativas deben sonar como respuesta, no como presión
+  // para continuar la reserva. El estado de la cita se conserva para el turno siguiente.
+  if (informationalInterruption || (!wantsBooking && !state.pending_booking)) {
     plan.reply = stripSchedulingPitch(plan.reply);
   }
   plan.reply = sanitizeClinicalReply(plan.reply);
@@ -2246,6 +2259,7 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
     .every(key => Boolean(bookingDataForSummary[key]));
   if (
     bookingSummaryRequired &&
+    !informationalInterruption &&
     !state.pending_booking &&
     !state.appointment_id &&
     state.collected.booking_mode !== 'cancel' &&
