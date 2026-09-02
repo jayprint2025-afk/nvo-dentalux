@@ -2217,7 +2217,14 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
     plan.reply = stripSchedulingPitch(plan.reply);
   }
   plan.reply = sanitizeClinicalReply(plan.reply);
-  plan.reply = guardPrematureBookingClaim(plan.reply, state, knowledge);
+
+  // No pasar respuestas informativas por el guard de "cita confirmada".
+  // Frases legítimas como "no tengo una promoción vigente confirmada" contienen
+  // la palabra "confirmada" y antes eran confundidas con una afirmación de que
+  // la CITA ya estaba confirmada, reemplazando la respuesta por "solo falta teléfono".
+  if (!informationalInterruption) {
+    plan.reply = guardPrematureBookingClaim(plan.reply, state, knowledge);
+  }
 
   if (!plan.reply) plan.reply = knowledge.unknown_information_policy;
 
