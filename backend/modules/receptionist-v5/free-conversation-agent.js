@@ -1178,7 +1178,7 @@ function businessHoursOnlyQuestion(userText) {
 function symptomWithoutService(userText, state = {}) {
   const normalized = Grounding.normalize(userText);
   const hasSymptom = /\b(duele|dolor|muela|diente|inflamad|hinchad|sensibilidad|sangra|sangrado)\b/.test(normalized);
-  return hasSymptom && !state?.collected?.service_id;
+  return hasSymptom && !state?.collected?.service_id && !state?.collected?.service_name;
 }
 
 function availabilityQuestionWithoutService(userText, state = {}) {
@@ -1188,7 +1188,7 @@ function availabilityQuestionWithoutService(userText, state = {}) {
     /\b(disponible|disponibilidad|espacio|espacios|lugar|lugares|se podra|se puede|tienen lugar|hay lugar|cita|agendar|agenda)\b/.test(normalized) ||
     Boolean(Grounding.parseTimePreference(userText, state.collected || {}));
 
-  return asksAvailability && !state?.collected?.service_id;
+  return asksAvailability && !state?.collected?.service_id && !state?.collected?.service_name;
 }
 
 function resolveAmbiguousTimeAgainstSlots(userText, proposedTime, slots = [], state = {}) {

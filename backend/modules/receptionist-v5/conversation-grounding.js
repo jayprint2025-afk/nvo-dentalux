@@ -627,8 +627,20 @@ function availabilityReady(collected = {}) {
 
 function missingBookingFields(collected = {}) {
   const fields = [];
+  const hasServiceConcept = Boolean(collected.service_id || collected.service_name);
+
+  // El nombre del tratamiento cuenta como servicio conocido aunque todavía no
+  // exista service_id. El ID sólo se puede resolver correctamente después de
+  // conocer la sucursal, porque cada sucursal tiene su propio registro.
   if (!collected.branch_key) fields.push('branch_key');
-  if (!collected.service_id) fields.push('service_id');
+  if (!hasServiceConcept) fields.push('service_id');
+
+  // Si ya existe sucursal + nombre de servicio pero no se pudo resolver el ID,
+  // no fingir que el servicio es desconocido: marcar una falla de resolución.
+  if (collected.branch_key && collected.service_name && !collected.service_id) {
+    fields.push('service_resolution');
+  }
+
   if (!collected.date) fields.push('date');
   return fields;
 }
@@ -637,6 +649,7 @@ function nextNaturalQuestion(collected = {}) {
   const missing = missingBookingFields(collected);
   if (missing[0] === 'branch_key') return '¿En cuál sucursal te gustaría atenderte?';
   if (missing[0] === 'service_id') return '¿Qué servicio necesitas?';
+  if (missing[0] === 'service_resolution') return 'Ese servicio no aparece configurado para esa sucursal. ¿Deseas elegir otra sucursal o revisar otro servicio?';
   if (missing[0] === 'date') return '¿Qué día te gustaría asistir?';
   return null;
 }
