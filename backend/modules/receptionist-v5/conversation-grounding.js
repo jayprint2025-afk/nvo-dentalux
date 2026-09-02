@@ -113,6 +113,29 @@ function genericPatientDescription(value) {
     /^(?:mi\s+)?(?:hija|hijo)(?:\s+de\s+\d{1,2}\s+anos?)?\b/.test(n);
 }
 
+function looksLikeShortPatientName(text) {
+  const raw = String(text || '').trim();
+  const n = normalize(raw);
+  if (!n) return null;
+
+  // Sólo una respuesta breve puramente alfabética. La decisión de usarla como
+  // nombre depende del contexto conversacional (que realmente falte el paciente).
+  if (!/^[A-Za-zÁÉÍÓÚÜÑáéíóúüñ' -]{2,60}$/.test(raw)) return null;
+
+  const words = raw.split(/\s+/).filter(Boolean);
+  if (words.length < 1 || words.length > 5) return null;
+
+  const stop = new Set([
+    'si','sí','no','ok','okay','gracias','hola','buenas',
+    'limpieza','profilaxis','consulta','cita','gante','condesa',
+    'manana','mañana','hoy','tarde','temprano','promocion','promociones',
+    'descuento','descuentos','oferta','ofertas'
+  ]);
+  if (words.every(word => stop.has(normalize(word)))) return null;
+
+  return raw.replace(/\s+/g, ' ').trim();
+}
+
 function extractPatientAge(text) {
   const n = normalize(text);
   const match = n.match(/\b(?:nina|nino|menor|hija|hijo|paciente)?\s*(?:de\s+)?(\d{1,2})\s+anos?\b/);
@@ -394,8 +417,29 @@ function deriveFacts(text, knowledge, state, options = {}) {
   }
 
   const phone = extractPhone(text);
-  const patient = extractPatient(text);
+  let patient = extractPatient(text);
   const patientAge = extractPatientAge(text);
+
+  // Una respuesta breve como "Jhony" o "Hector" puede ser el nombre cuando
+  // ya estamos dentro de un flujo de cita y todavía no existe paciente.
+  // No se aplica a preguntas informativas ni cuando el mensaje aporta
+  // sucursal/servicio/fecha/hora/teléfono.
+  if (
+    !patient &&
+    !collected.patient &&
+    collected.branch_key &&
+    (collected.service_id || collected.service_name) &&
+    collected.date &&
+    !phone &&
+    !branchMention &&
+    !service &&
+    !parseDate(text, 'America/Tijuana', options.now || new Date()) &&
+    !parseTimePreference(text, collected) &&
+    infoIntents.length === 0 &&
+    !appointmentAction
+  ) {
+    patient = looksLikeShortPatientName(text);
+  }
 
   // Limpiar estados persistidos que hayan confundido una descripción
   // ("una niña de 9 años") con el nombre real del paciente.
