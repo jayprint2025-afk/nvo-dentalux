@@ -265,40 +265,38 @@ async function computeAvailability(q, { clinic_id, branch_key, date, duration_ho
 
   const appts = await getAppointmentsForDay(q, { clinic_id, branch_key, date });
 
-  const byDoctor = new Map();
-  for (const d of doctors) byDoctor.set(d.id, []);
-  for (const a of appts) {
-    if (!byDoctor.has(a.doctor_id)) byDoctor.set(a.doctor_id, []);
+  // Bloqueo por sucursal: cualquier cita activa ocupa su intervalo para toda
+  // la sucursal, sin importar el doctor. Así la disponibilidad legacy coincide
+  // con appointment-tools V5 y no ofrece horarios encimados.
+  const branchIntervals = appts.map(a => {
     const s = timeToMins(a.start_time);
-    const e = s + Math.round(a.duration_hours * 60);
-    byDoctor.get(a.doctor_id).push([s, e, a.id]);
-  }
-  for (const [k, list] of byDoctor.entries()) list.sort((x, y) => x[0] - y[0]);
+    const mins = Math.max(30, Math.round(Number(a.duration_hours || 1) * 60));
+    return [s, s + mins, a.id];
+  }).sort((a, b) => a[0] - b[0]);
 
   const slots = [];
   for (let t = effectiveStart; t + durationMins <= dayEnd; t += 30) {
     const slotStart = t;
     const slotEnd = t + durationMins;
+    const branchBusy = branchIntervals.some(([s, e]) =>
+      overlaps(slotStart, slotEnd, s, e)
+    );
+    if (branchBusy) continue;
 
-    for (const d of doctors) {
-      const intervals = byDoctor.get(d.id) || [];
-      let ok = true;
-      for (const [s, e] of intervals) {
-        if (overlaps(slotStart, slotEnd, s, e)) { ok = false; break; }
-      }
-      if (ok) {
-        slots.push({
-          clinic_id,
-          sucursal_id: branch_key,
-          date,
-          start_time: minsToTime(slotStart),
-          duration_hours,
-          doctor_id: d.id,
-          doctor_name: d.name,
-        });
-        break;
-      }
-    }
+    // El doctor se conserva únicamente como responsable técnico del registro.
+    // La disponibilidad ya quedó validada a nivel sucursal.
+    const d = doctors[0];
+    if (!d) continue;
+
+    slots.push({
+      clinic_id,
+      sucursal_id: branch_key,
+      date,
+      start_time: minsToTime(slotStart),
+      duration_hours,
+      doctor_id: d.id,
+      doctor_name: d.name,
+    });
 
     if (slots.length >= limit) break;
   }
@@ -428,31 +426,66 @@ async function createAppointmentTransactional(q, {
 
   await q('BEGIN');
   try {
-    // lock de slot si existe clinic_id; si no, lock por doctor+date+time
+    // Serializamos confirmaciones de esta empresa+sucursal+fecha para que dos
+    // solicitudes concurrentes no puedan insertar intervalos encimados.
+    const advisoryKey = `${resolvedTenantId}|${String(branch_key)}|${resolvedSlot.date}`;
+    await q(`SELECT pg_advisory_xact_lock(hashtext($1))`, [advisoryKey]);
+
+    // Revalidación FINAL a nivel sucursal y por intervalo completo. No depende
+    // del doctor: cualquier cita activa que se traslape bloquea el horario.
     const lockWhere = [];
     const lockParams = [];
 
     if (cols.hasTenantId) {
-      if (!resolvedTenantId) throw new Error('tenant_id ausente al confirmar la cita');
       lockParams.push(resolvedTenantId);
       lockWhere.push(`tenant_id=$${lockParams.length}::uuid`);
-    }
-
-    if (cols.hasClinicId) {
-      lockParams.push(String(clinic_id));
+    } else if (cols.hasClinicId) {
+      lockParams.push(String(clinic_id || resolvedTenantId));
       lockWhere.push(`clinic_id=$${lockParams.length}`);
     }
-    lockParams.push(String(resolvedSlot.doctor_id));
-    lockWhere.push(`doctor_id=$${lockParams.length}`);
+
+    if (branch_key != null) {
+      const branchOr = [];
+      if (cols.hasSucursalId) {
+        lockParams.push(String(branch_key));
+        branchOr.push(`sucursal_id=$${lockParams.length}::text`);
+      }
+      if (cols.hasSucursal) {
+        lockParams.push(String(branch_key));
+        branchOr.push(`sucursal=$${lockParams.length}::text`);
+      }
+      if (branchOr.length) lockWhere.push(`(${branchOr.join(' OR ')})`);
+    }
+
     lockParams.push(resolvedSlot.date);
     lockWhere.push(`date=$${lockParams.length}`);
-    lockParams.push(resolvedSlot.start_time);
-    lockWhere.push(`start_time=$${lockParams.length}`);
 
-    if (cols.hasStatus) lockWhere.push(`UPPER(COALESCE(status,'')) NOT IN ('CANCELADA','CANCELADO','CANCELED','CANCELLED')`);
+    const requestedStart = timeToMins(resolvedSlot.start_time);
+    const requestedEnd = requestedStart +
+      Math.max(30, Math.round(Number(resolvedSlot.duration_hours || 1) * 60));
+
+    lockParams.push(requestedEnd);
+    const requestedEndParam = `$${lockParams.length}`;
+    lockParams.push(requestedStart);
+    const requestedStartParam = `$${lockParams.length}`;
+
+    lockWhere.push(`(
+      (EXTRACT(HOUR FROM start_time)::int * 60 + EXTRACT(MINUTE FROM start_time)::int) < ${requestedEndParam}
+      AND
+      (EXTRACT(HOUR FROM start_time)::int * 60 + EXTRACT(MINUTE FROM start_time)::int
+        + GREATEST(30, ROUND(COALESCE(duration_hours,1) * 60)::int)) > ${requestedStartParam}
+    )`);
+
+    if (cols.hasStatus) {
+      lockWhere.push(`UPPER(COALESCE(status,'')) NOT IN ('CANCELADA','CANCELADO','CANCELED','CANCELLED')`);
+    }
 
     const { rows: exists } = await q(
-      `SELECT id FROM appointments WHERE ${lockWhere.join(' AND ')} FOR UPDATE`,
+      `SELECT id, doctor_id, start_time::text AS start_time,
+              COALESCE(duration_hours,1) AS duration_hours
+         FROM appointments
+        WHERE ${lockWhere.join(' AND ')}
+        FOR UPDATE`,
       lockParams
     );
     const p = asText(patient).trim() || 'Paciente';
