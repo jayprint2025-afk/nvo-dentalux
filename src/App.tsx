@@ -1281,6 +1281,7 @@ type EmpresaBranchAI = {
   insuranceInformation: string;
   extraInformation: string;
   promotions: string;
+  promotionImageUrl?: string;
   treatments: EmpresaTreatmentAI[];
   aiEnabled: boolean;
   bookingEnabled: boolean;
@@ -1294,7 +1295,7 @@ const makeEmptyBranchAI = (tenantId: string, branchKey: string, name = ''): Empr
   phone: '', whatsapp: '', address: '', businessHours: '', googleMapsUrl: '',
   directions: '', paymentMethods: '', parkingInfo: '', welcomeMessage: '',
   cancellationPolicy: '', preparationNotes: '', insuranceInformation: '',
-  extraInformation: '', promotions: '', treatments: [], aiEnabled: true, bookingEnabled: true, active: true
+  extraInformation: '', promotions: '', promotionImageUrl: '', treatments: [], aiEnabled: true, bookingEnabled: true, active: true
 });
 
 const emptyEmpresaForm = {
@@ -1710,6 +1711,44 @@ function EmpresasModule() {
     }
   };
 
+  const uploadPromotionImage = async (branchKey: string, file?: File | null) => {
+    if (!aiCompany || !file) return;
+    setAiMessage('');
+    try {
+      if (!/^image\/(png|jpeg|jpg|webp)$/i.test(file.type)) {
+        throw new Error('Selecciona una imagen JPG, PNG o WEBP.');
+      }
+      if (file.size > 5 * 1024 * 1024) throw new Error('La imagen debe pesar máximo 5 MB.');
+
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ''));
+        reader.onerror = () => reject(new Error('No se pudo leer la imagen.'));
+        reader.readAsDataURL(file);
+      });
+
+      const result = await api(`/companies/${aiCompany.id}/branches/${encodeURIComponent(branchKey)}/promotion-image`, {
+        method: 'PUT',
+        body: JSON.stringify({ dataUrl })
+      });
+      updateAiBranch(branchKey, { promotionImageUrl: result?.imageUrl || '' });
+      setAiMessage('Imagen de promoción guardada. Messenger la enviará cuando el paciente pregunte por promociones.');
+    } catch (e: any) {
+      setAiMessage(`Error: ${e?.message || 'No se pudo guardar la imagen de promoción'}`);
+    }
+  };
+
+  const removePromotionImage = async (branchKey: string) => {
+    if (!aiCompany) return;
+    try {
+      await api(`/companies/${aiCompany.id}/branches/${encodeURIComponent(branchKey)}/promotion-image`, { method: 'DELETE' });
+      updateAiBranch(branchKey, { promotionImageUrl: '' });
+      setAiMessage('Imagen de promoción eliminada.');
+    } catch (e: any) {
+      setAiMessage(`Error: ${e?.message || 'No se pudo eliminar la imagen'}`);
+    }
+  };
+
   const saveAIConfig = async () => {
     if (!aiCompany) return;
     setAiLoading(true);
@@ -1853,6 +1892,31 @@ function EmpresasModule() {
                         <textarea rows={key === 'extraInformation' || key === 'promotions' ? 4 : 2} value={(branch as any)[key]} onChange={e => updateAiBranch(branch.branchKey,{[key]:e.target.value} as any)} placeholder={placeholder} className="w-full border rounded-lg px-3 py-2 resize-y" />
                       </label>
                     ))}
+
+                    <div className="rounded-xl border border-violet-200 bg-violet-50/40 p-4 space-y-3">
+                      <div>
+                        <h5 className="font-semibold text-gray-900">Imagen de promociones para Messenger</h5>
+                        <p className="text-xs text-gray-600">Sube el mismo flyer que publicaste en Facebook. Cuando el paciente pregunte por promociones, Messenger enviará el texto de la IA y esta imagen.</p>
+                      </div>
+                      {branch.promotionImageUrl ? (
+                        <div className="flex flex-col sm:flex-row gap-3 sm:items-center">
+                          <img src={branch.promotionImageUrl} alt="Promoción vigente" className="w-40 max-h-40 object-contain rounded-lg border bg-white" />
+                          <div className="flex gap-2">
+                            <label className="px-3 py-2 rounded-lg bg-violet-600 text-white text-sm cursor-pointer">
+                              Cambiar imagen
+                              <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={async e => { const input=e.currentTarget; await uploadPromotionImage(branch.branchKey,input.files?.[0]); input.value=''; }} />
+                            </label>
+                            <button type="button" onClick={() => removePromotionImage(branch.branchKey)} className="px-3 py-2 rounded-lg border border-red-200 text-red-600 text-sm">Quitar</button>
+                          </div>
+                        </div>
+                      ) : (
+                        <label className="inline-flex px-3 py-2 rounded-lg bg-violet-600 text-white text-sm cursor-pointer">
+                          Subir imagen de promoción
+                          <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={async e => { const input=e.currentTarget; await uploadPromotionImage(branch.branchKey,input.files?.[0]); input.value=''; }} />
+                        </label>
+                      )}
+                      <div className="text-[11px] text-gray-500">JPG, PNG o WEBP · máximo 5 MB · una imagen vigente por sucursal.</div>
+                    </div>
 
 
                     <div className="rounded-xl border border-emerald-200 bg-emerald-50/40 p-4 space-y-3">

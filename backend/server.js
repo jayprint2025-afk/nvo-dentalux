@@ -4016,6 +4016,19 @@ async function ensureMultiTenantSchema() {
   await q(`ALTER TABLE branches ADD COLUMN IF NOT EXISTS ai_enabled BOOLEAN NOT NULL DEFAULT TRUE`);
   await q(`ALTER TABLE branches ADD COLUMN IF NOT EXISTS booking_enabled BOOLEAN NOT NULL DEFAULT TRUE`);
 
+  // Flyer/imagen vigente de promociones por empresa + sucursal.
+  // Se guarda en PostgreSQL para no depender de URLs temporales de Facebook.
+  await q(`
+    CREATE TABLE IF NOT EXISTS branch_promotion_media (
+      tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      branch_key TEXT NOT NULL,
+      image_data BYTEA NOT NULL,
+      image_mime TEXT NOT NULL DEFAULT 'image/jpeg',
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (tenant_id, branch_key)
+    )
+  `);
+
   // Índices
   await q(`
     CREATE INDEX IF NOT EXISTS idx_tenant_users_tenant_id
@@ -4359,6 +4372,37 @@ async function fbSendText(psid, text, pageId) {
   if (!r.ok) {
     console.error('❌ Error enviando a Messenger:', r.status, j);
   }
+}
+
+async function fbSendImage(psid, imageUrl, pageId) {
+  const safeUrl = String(imageUrl || '').trim();
+  if (!safeUrl) return;
+  const token = await getFbPageToken(pageId);
+  if (!token) return;
+
+  const targetId = String(pageId || 'me').trim() || 'me';
+  const url = `https://graph.facebook.com/v20.0/${encodeURIComponent(targetId)}/messages`;
+  const body = {
+    recipient: { id: psid },
+    messaging_type: 'RESPONSE',
+    message: {
+      attachment: {
+        type: 'image',
+        payload: { url: safeUrl, is_reusable: true }
+      }
+    }
+  };
+
+  const r = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`
+    },
+    body: JSON.stringify(body)
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) console.error('❌ Error enviando imagen a Messenger:', r.status, j);
 }
 
 async function callAiChatFromServer({ phone, message, channel, extra = {} }, req) {
@@ -4829,6 +4873,44 @@ async function getOrCreateAiConversationIdForMessenger(pageId, psid, dbKey, tena
   }
 }
 
+async function promotionImageForConversation(pool, tenantId, conversationId, req) {
+  try {
+    const { rows: convRows } = await pool.query(
+      `SELECT COALESCE(state->'collected'->>'branch_key', state->>'branch_key', sucursal_id) AS branch_key
+         FROM ai_conversations
+        WHERE id=$1 AND tenant_id=$2::uuid
+        LIMIT 1`,
+      [conversationId, tenantId]
+    );
+    let branchKey = String(convRows?.[0]?.branch_key || '').trim();
+
+    if (!branchKey) {
+      const { rows } = await pool.query(
+        `SELECT branch_key
+           FROM branch_promotion_media
+          WHERE tenant_id=$1::uuid
+          ORDER BY updated_at DESC
+          LIMIT 2`,
+        [tenantId]
+      );
+      if (rows.length === 1) branchKey = String(rows[0].branch_key || '').trim();
+    }
+    if (!branchKey) return null;
+
+    const { rows } = await pool.query(
+      `SELECT 1 FROM branch_promotion_media
+        WHERE tenant_id=$1::uuid AND branch_key=$2 LIMIT 1`,
+      [tenantId, branchKey]
+    );
+    if (!rows[0]) return null;
+
+    return `${getPublicBaseUrl(req)}/api/public/promotions/${encodeURIComponent(tenantId)}/${encodeURIComponent(branchKey)}/image`;
+  } catch (error) {
+    console.warn('⚠️ No se pudo resolver imagen de promoción Messenger:', error.message);
+    return null;
+  }
+}
+
 async function callClinicAiForMessenger(senderId, pageId, msgText, req) {
   const safeText = String(msgText || '').trim();
   if (!safeText) return { reply: '' };
@@ -4923,6 +5005,12 @@ async function callClinicAiForMessenger(senderId, pageId, msgText, req) {
     engineVersion: data?.engineVersion || 'desconocida',
     used: data?.used || null
   });
+
+  const promotionIntent = /\b(promocion(?:es)?|promoción(?:es)?|oferta(?:s)?|descuento(?:s)?)\b/i.test(safeText);
+  if (promotionIntent) {
+    const promotionImageUrl = await promotionImageForConversation(pool, tenantId, conversationId, req);
+    if (promotionImageUrl) data.promotionImageUrl = promotionImageUrl;
+  }
 
   return data;
 }
@@ -5106,6 +5194,9 @@ app.post('/api/messenger/webhook', async (req, res) => {
           (ai?.error ? 'Estoy teniendo un problema técnico. Intenta de nuevo.' : 'Gracias. ¿Te ayudo a agendar o necesitas información?');
 
         await fbSendText(senderId, reply, entry?.id);
+        if (ai?.promotionImageUrl) {
+          await fbSendImage(senderId, ai.promotionImageUrl, entry?.id);
+        }
       }
     }
   } catch (e) {
@@ -5500,6 +5591,13 @@ app.get('/api/companies/:id/branches/ai-config', authRequired, companiesSuperAdm
   const { rows: tenantRows } = await poolDB1.query('SELECT id FROM tenants WHERE id=$1::uuid LIMIT 1', [tenantId]);
   if (!tenantRows[0]) return res.status(404).json({ error: 'Empresa no encontrada' });
   const { rows } = await poolDB1.query(branchAiSelect, [tenantId]);
+  const { rows: promotionMediaRows } = await poolDB1.query(
+    `SELECT branch_key, updated_at FROM branch_promotion_media WHERE tenant_id=$1::uuid`,
+    [tenantId]
+  ).catch(() => ({ rows: [] }));
+  const promotionMediaByBranch = new Map(
+    promotionMediaRows.map(item => [String(item.branch_key), item])
+  );
   const { rows: serviceRows } = await poolDB1.query(
     `SELECT id, name, price, duration_hours, description, active, sucursal_id
        FROM services
@@ -5508,6 +5606,9 @@ app.get('/api/companies/:id/branches/ai-config', authRequired, companiesSuperAdm
   );
   res.json(rows.map(row => ({
     ...mapBranchAI(row),
+    promotionImageUrl: promotionMediaByBranch.has(String(row.branch_key))
+      ? `/api/public/promotions/${encodeURIComponent(tenantId)}/${encodeURIComponent(row.branch_key)}/image?v=${encodeURIComponent(String(promotionMediaByBranch.get(String(row.branch_key))?.updated_at || ''))}`
+      : '',
     treatments: serviceRows
       .filter(service => String(service.sucursal_id || '') === String(row.branch_key))
       .map(service => ({
@@ -5519,6 +5620,65 @@ app.get('/api/companies/:id/branches/ai-config', authRequired, companiesSuperAdm
         active: service.active !== false
       }))
   })));
+}));
+
+// Imagen de promoción: una imagen vigente por sucursal.
+// El frontend manda Data URL; el backend guarda bytes y expone una URL pública estable para Meta.
+app.put('/api/companies/:id/branches/:branchKey/promotion-image', authRequired, companiesSuperAdminOnly, ah(async (req, res) => {
+  const tenantId = String(req.params.id || '').trim();
+  const branchKey = normalizeSucursal(req.params.branchKey);
+  const dataUrl = String(req.body?.dataUrl || '').trim();
+  const match = dataUrl.match(/^data:(image\/(?:png|jpeg|jpg|webp));base64,([A-Za-z0-9+/=]+)$/i);
+  if (!branchKey || !match) return res.status(400).json({ error: 'Imagen inválida. Usa JPG, PNG o WEBP.' });
+
+  const mime = match[1].toLowerCase() === 'image/jpg' ? 'image/jpeg' : match[1].toLowerCase();
+  const image = Buffer.from(match[2], 'base64');
+  if (!image.length || image.length > 5 * 1024 * 1024) {
+    return res.status(400).json({ error: 'La imagen debe pesar máximo 5 MB.' });
+  }
+
+  const branch = await poolDB1.query(
+    `SELECT 1 FROM branches WHERE tenant_id=$1::uuid AND branch_key=$2 LIMIT 1`,
+    [tenantId, branchKey]
+  );
+  if (!branch.rows[0]) return res.status(404).json({ error: 'Sucursal no encontrada' });
+
+  await poolDB1.query(
+    `INSERT INTO branch_promotion_media(tenant_id, branch_key, image_data, image_mime, updated_at)
+     VALUES ($1::uuid,$2,$3,$4,NOW())
+     ON CONFLICT (tenant_id, branch_key) DO UPDATE SET
+       image_data=EXCLUDED.image_data, image_mime=EXCLUDED.image_mime, updated_at=NOW()`,
+    [tenantId, branchKey, image, mime]
+  );
+
+  res.json({
+    ok: true,
+    imageUrl: `/api/public/promotions/${encodeURIComponent(tenantId)}/${encodeURIComponent(branchKey)}/image?v=${Date.now()}`
+  });
+}));
+
+app.delete('/api/companies/:id/branches/:branchKey/promotion-image', authRequired, companiesSuperAdminOnly, ah(async (req, res) => {
+  const tenantId = String(req.params.id || '').trim();
+  const branchKey = normalizeSucursal(req.params.branchKey);
+  await poolDB1.query(
+    `DELETE FROM branch_promotion_media WHERE tenant_id=$1::uuid AND branch_key=$2`,
+    [tenantId, branchKey]
+  );
+  res.json({ ok: true });
+}));
+
+app.get('/api/public/promotions/:tenantId/:branchKey/image', ah(async (req, res) => {
+  const tenantId = String(req.params.tenantId || '').trim();
+  const branchKey = normalizeSucursal(req.params.branchKey);
+  const { rows } = await poolDB1.query(
+    `SELECT image_data, image_mime FROM branch_promotion_media
+      WHERE tenant_id=$1::uuid AND branch_key=$2 LIMIT 1`,
+    [tenantId, branchKey]
+  );
+  if (!rows[0]?.image_data) return res.sendStatus(404);
+  res.set('Content-Type', rows[0].image_mime || 'image/jpeg');
+  res.set('Cache-Control', 'public, max-age=3600');
+  res.send(rows[0].image_data);
 }));
 
 app.put('/api/companies/:id/branches/ai-config', authRequired, companiesSuperAdminOnly, ah(async (req, res) => {
