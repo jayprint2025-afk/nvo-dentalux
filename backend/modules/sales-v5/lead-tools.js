@@ -56,7 +56,13 @@ async function createOnboarding(pool, lead, profile = {}) {
       [lead.id, token, String(profile.email).toLowerCase(), profile.name, profile.clinic_name]
     );
   }
-  const base = String(process.env.PUBLIC_APP_URL || process.env.FRONTEND_ORIGIN || process.env.RENDER_EXTERNAL_URL || '').split(',')[0].trim().replace(/\/$/, '');
+  const base = String(
+    process.env.ONBOARDING_BASE_URL ||
+    process.env.PUBLIC_BASE_URL ||
+    process.env.RENDER_EXTERNAL_URL ||
+    process.env.PUBLIC_APP_URL ||
+    ''
+  ).split(',')[0].trim().replace(/\/$/, '');
   if (!base) return { token, url: `/api/sales/onboarding/${token}/page` };
   return { token, url: `${base}/api/sales/onboarding/${encodeURIComponent(token)}/page` };
 }
