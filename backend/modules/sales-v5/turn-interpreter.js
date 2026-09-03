@@ -62,6 +62,12 @@ function inferSignals(text) {
   const email = extractEmail(text);
   if (email) patch.email = email;
 
+  const raw = String(text || '').trim();
+  const nameMatch = raw.match(/(?:me llamo|mi nombre es|soy)\s+([A-Za-zÁÉÍÓÚÜÑáéíóúüñ][A-Za-zÁÉÍÓÚÜÑáéíóúüñ .'-]{1,60})/i);
+  if (nameMatch?.[1]) patch.name = nameMatch[1].trim().replace(/[,.].*$/, '').trim();
+  const clinicMatch = raw.match(/(?:mi (?:clinica|clínica|consultorio) (?:se llama|es)|(?:clinica|clínica|consultorio):?)\s+([A-Za-z0-9ÁÉÍÓÚÜÑáéíóúüñ .&'-]{2,80})/i);
+  if (clinicMatch?.[1]) patch.clinic_name = clinicMatch[1].trim().split(/\s+y\s+mi\s+(?:correo|email|telefono|teléfono|whatsapp|nombre)\b/i)[0].replace(/[,.].*$/, '').trim();
+
   const software = String(text || '').match(/(?:uso|utilizo|trabajo con)\s+([A-Za-z0-9 ._-]{2,40})/i)?.[1]?.trim();
   if (software && software.length <= 40) patch.current_software = software;
 

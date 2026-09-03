@@ -11,7 +11,10 @@ const DEFAULT_PROFILE = Object.freeze({
   pain_points: [],
   interested_features: [],
   objections: [],
-  recommended_plan: null,
+  recommended_plan: 'cliniqone_complete',
+  onboarding_url: null,
+  onboarding_token_created: false,
+  onboarding_completed: false,
   buying_intent: 'unknown',
   next_step: null
 });

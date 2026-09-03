@@ -1349,6 +1349,8 @@ function EmpresasModule({ isSuperAdmin }: { isSuperAdmin: boolean }) {
   const [salesLoading, setSalesLoading] = React.useState(false);
   const [salesReply, setSalesReply] = React.useState('');
   const [salesSearch, setSalesSearch] = React.useState('');
+  const [salesPrice, setSalesPrice] = React.useState('1490');
+  const [salesSettingsSaving, setSalesSettingsSaving] = React.useState(false);
 
   const loadSalesLeads = React.useCallback(async (search = '') => {
     if (!isSuperAdmin) return;
@@ -1365,7 +1367,22 @@ function EmpresasModule({ isSuperAdmin }: { isSuperAdmin: boolean }) {
     setSalesOpen(true);
     setSalesSelected(null);
     setSalesMessages([]);
+    try {
+      const settings = await api('/sales/admin/settings');
+      setSalesPrice(String(settings?.offer?.price_mxn || 1490));
+    } catch {}
     await loadSalesLeads('');
+  };
+
+  const saveSalesSettings = async () => {
+    const price = Number(salesPrice);
+    if (!Number.isFinite(price) || price <= 0) { setMessage('Ingresa un precio mensual válido.'); return; }
+    setSalesSettingsSaving(true);
+    try {
+      const data = await api('/sales/admin/settings', { method:'PUT', body:JSON.stringify({price_mxn:price}) });
+      setSalesPrice(String(data?.offer?.price_mxn || price));
+      setMessage('Precio comercial de CliniqOne actualizado.');
+    } finally { setSalesSettingsSaving(false); }
   };
 
   const openSalesLead = async (lead: any) => {
@@ -1955,7 +1972,7 @@ function EmpresasModule({ isSuperAdmin }: { isSuperAdmin: boolean }) {
             <div className="flex items-center justify-between border-b px-5 py-4">
               <div>
                 <h3 className="text-xl font-bold text-gray-900 flex items-center gap-2"><Bot className="w-5 h-5 text-violet-600" /> CliniqOne · Ventas IA V5</h3>
-                <p className="text-sm text-gray-500">Prospectos, conversación, perfil comercial y control manual de la IA.</p>
+                <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-gray-500"><span>Prospectos, conversación, perfil comercial y control manual de la IA.</span><span className="ml-2 font-medium text-gray-700">Precio único:</span><div className="flex items-center rounded-lg border bg-white"><span className="pl-2 text-gray-500">$</span><input value={salesPrice} onChange={e=>setSalesPrice(e.target.value.replace(/[^0-9]/g,''))} className="w-20 px-1 py-1.5 text-sm outline-none" inputMode="numeric"/><span className="pr-2 text-xs text-gray-400">MXN/mes</span></div><button onClick={saveSalesSettings} disabled={salesSettingsSaving} className="rounded-lg bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50">{salesSettingsSaving?'Guardando...':'Guardar precio'}</button></div>
               </div>
               <button onClick={() => setSalesOpen(false)} className="rounded-lg p-2 hover:bg-gray-100"><X className="w-5 h-5" /></button>
             </div>
@@ -2044,7 +2061,8 @@ function EmpresasModule({ isSuperAdmin }: { isSuperAdmin: boolean }) {
                         <Row label="Necesidades" value={(p.pain_points || []).join(', ')} />
                         <Row label="Intereses" value={(p.interested_features || []).join(', ')} />
                         <Row label="Objeciones" value={(p.objections || []).join(', ')} />
-                        <Row label="Plan recomendado" value={p.recommended_plan} />
+                        <Row label="Producto" value="CliniqOne completo" />
+                        <Row label="Registro" value={p.onboarding_completed ? 'Cuenta creada' : p.onboarding_token_created ? 'Enlace enviado' : 'Pendiente'} />
                         <Row label="Intención" value={p.buying_intent} />
                         <Row label="Siguiente paso" value={salesSelected.next_step || p.next_step} />
                       </div>
