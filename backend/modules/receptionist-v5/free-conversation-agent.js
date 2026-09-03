@@ -1051,31 +1051,49 @@ function naturalInformationReply(knowledge, state, intents = [], options = {}) {
   }
 
   if (intents.includes('promotion')) {
-    // Las promociones son información general de la clínica. No exigir sucursal
-    // y no filtrarlas por un servicio que quedó en memoria de una cita en curso.
-    // La sucursal guardada en una cita NO debe limitar una pregunta nueva de promociones.
-    // Sólo filtramos por sucursal cuando el paciente la menciona explícitamente en ESTE mensaje.
+    // Una pregunta de promociones es independiente de la sucursal/servicio que haya
+    // quedado guardado en una cita anterior. Sólo se filtra por sucursal cuando el
+    // paciente la menciona explícitamente EN ESTE MENSAJE.
     const selectedBranchKey = options.branch_key || null;
-    const explicitlyRequestedServiceId = options.service_id || null;
-
-    // Los IDs de servicios son distintos por sucursal. Si el paciente pregunta, por ejemplo,
-    // por "limpieza", resolvemos el nombre del servicio y aceptamos los IDs equivalentes
-    // de todas las sucursales para no ocultar una promoción válida por un ID de otra sede.
-    const requestedService = explicitlyRequestedServiceId
-      ? knowledge.services.find(item => String(item.id) === String(explicitlyRequestedServiceId))
+    const explicitBranch = selectedBranchKey
+      ? knowledge.branches.find(item => item.branch_key === selectedBranchKey)
       : null;
-    const requestedServiceName = Grounding.normalize(requestedService?.name || '');
-    const equivalentServiceIds = new Set(
-      (knowledge.services || [])
-        .filter(item => requestedServiceName && Grounding.normalize(item.name || '') === requestedServiceName)
-        .map(item => String(item.id))
-    );
-    if (explicitlyRequestedServiceId) equivalentServiceIds.add(String(explicitlyRequestedServiceId));
 
-    const promotions = knowledge.promotions.filter(item =>
-      (!selectedBranchKey || item.branch_key === selectedBranchKey) &&
-      (!explicitlyRequestedServiceId || !item.service_id || equivalentServiceIds.has(String(item.service_id)))
+    let promotions = knowledge.promotions.filter(item =>
+      !selectedBranchKey || item.branch_key === selectedBranchKey
     );
+
+    // Para preguntas específicas ("promoción de limpieza", "promo de resinas")
+    // filtrar por el texto actual, no por un service_id persistido. Los IDs de un
+    // mismo tratamiento pueden ser distintos entre sucursales.
+    const normalizePromoText = value => String(value || '')
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+    const stop = new Set([
+      'que','cual','cuales','tienen','tiene','promocion','promociones','promo','promos',
+      'oferta','ofertas','descuento','descuentos','vigente','vigentes','para','por','del',
+      'las','los','una','uno','hay','disponible','disponibles'
+    ]);
+    const tokens = normalizePromoText(options.user_text || '')
+      .split(/[^a-z0-9]+/)
+      .filter(token => token.length >= 4 && !stop.has(token));
+
+    if (tokens.length) {
+      const specific = promotions.filter(promo => {
+        const linkedService = promo?.service_id == null
+          ? null
+          : knowledge.services.find(service => String(service.id) === String(promo.service_id));
+        const haystack = normalizePromoText(
+          `${promo?.title || ''} ${promo?.description || ''} ${linkedService?.name || ''}`
+        );
+        return tokens.some(token =>
+          haystack.includes(token) ||
+          (token.endsWith('s') && token.length > 4 && haystack.includes(token.slice(0, -1)))
+        );
+      });
+      // Si el paciente preguntó por un tratamiento concreto y no coincide ninguna
+      // promoción, la respuesta correcta es que no hay una promoción confirmada.
+      promotions = specific;
+    }
 
     const byTitle = new Map();
     for (const promo of promotions) {
@@ -1098,7 +1116,7 @@ function naturalInformationReply(knowledge, state, intents = [], options = {}) {
     parts.push(
       labels.length
         ? `Promociones vigentes: ${labels.join(', ')}.`
-        : `Por el momento no tengo una promoción vigente confirmada${branch ? ` para ${branch.name}` : ''}.`
+        : `Por el momento no tengo una promoción vigente confirmada${explicitBranch ? ` para ${explicitBranch.name}` : ''}.`
     );
   }
 
@@ -2246,6 +2264,8 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
       {
         branch_key: grounding.detected?.information_branch?.branch_key || null,
         service_id: grounding.detected?.service?.id || null,
+        service_name: grounding.detected?.service?.name || null,
+        user_text: userText,
       }
     );
     if (infoReply) {
