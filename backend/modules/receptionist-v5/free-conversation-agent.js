@@ -1069,7 +1069,7 @@ function naturalInformationReply(knowledge, state, intents = [], options = {}) {
     const normalizePromoText = value => String(value || '')
       .normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
     const stop = new Set([
-      'que','cual','cuales','tienen','tiene','promocion','promociones','promo','promos',
+      'que','cual','cuales','tienes','tienen','tiene','tenemos','tengo','promocion','promociones','promo','promos',
       'oferta','ofertas','descuento','descuentos','vigente','vigentes','para','por','del',
       'las','los','una','uno','hay','disponible','disponibles'
     ]);

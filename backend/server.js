@@ -4933,7 +4933,7 @@ async function promotionImagesForConversation(pool, tenantId, conversationId, re
     let selectedRows = rows || [];
     const normalizePromoText = value => String(value || '')
       .normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
-    const stop = new Set(['que','cual','cuales','tienen','tiene','promocion','promociones','promo','promos','oferta','ofertas','descuento','descuentos','vigente','vigentes','para','por','del','las','los','una','uno','hay']);
+    const stop = new Set(['que','cual','cuales','tienes','tienen','tiene','tenemos','tengo','promocion','promociones','promo','promos','oferta','ofertas','descuento','descuentos','vigente','vigentes','para','por','del','las','los','una','uno','hay']);
     const tokens = normalizePromoText(userText).split(/[^a-z0-9]+/).filter(token => token.length >= 4 && !stop.has(token));
     if (tokens.length) {
       const specific = selectedRows.filter(row => {
