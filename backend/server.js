@@ -5574,6 +5574,18 @@ function companiesSuperAdminOnly(req, res, next) {
   next();
 }
 
+// Permite al superadmin administrar cualquier empresa y a cada usuario autenticado
+// únicamente consultar/configurar IA y sucursales de su propio tenant.
+function companySelfOrSuperAdmin(req, res, next) {
+  if (req.auth?.role === 'superadmin') return next();
+  const requestedTenantId = String(req.params?.id || '').trim();
+  const sessionTenantId = String(req.auth?.tenantId || '').trim();
+  if (!requestedTenantId || !sessionTenantId || requestedTenantId !== sessionTenantId) {
+    return res.status(403).json({ error: 'No tienes acceso a esta empresa' });
+  }
+  next();
+}
+
 function companySlug(name) {
   return String(name || 'empresa').normalize('NFD').replace(/[\u0300-\u036f]/g, '')
     .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 50) || 'empresa';
@@ -5621,8 +5633,14 @@ function mapCompany(row) {
   };
 }
 
-app.get('/api/companies', authRequired, companiesSuperAdminOnly, ah(async (_req, res) => {
-  const { rows } = await poolDB1.query(`${companySelectSql} ORDER BY t.created_at DESC`);
+app.get('/api/companies', authRequired, ah(async (req, res) => {
+  if (req.auth?.role === 'superadmin') {
+    const { rows } = await poolDB1.query(`${companySelectSql} ORDER BY t.created_at DESC`);
+    return res.json(rows.map(mapCompany));
+  }
+
+  const tenantId = getTenantId(req);
+  const { rows } = await poolDB1.query(`${companySelectSql} WHERE t.id=$1::uuid LIMIT 1`, [tenantId]);
   res.json(rows.map(mapCompany));
 }));
 
@@ -5663,7 +5681,7 @@ const branchAiSelect = `
    WHERE tenant_id = $1::uuid
    ORDER BY created_at ASC, name ASC, branch_key ASC`;
 
-app.get('/api/companies/:id/branches/ai-config', authRequired, companiesSuperAdminOnly, ah(async (req, res) => {
+app.get('/api/companies/:id/branches/ai-config', authRequired, companySelfOrSuperAdmin, ah(async (req, res) => {
   const tenantId = req.params.id;
   const { rows: tenantRows } = await poolDB1.query('SELECT id FROM tenants WHERE id=$1::uuid LIMIT 1', [tenantId]);
   if (!tenantRows[0]) return res.status(404).json({ error: 'Empresa no encontrada' });
@@ -5733,7 +5751,7 @@ app.get('/api/companies/:id/branches/ai-config', authRequired, companiesSuperAdm
 }));
 
 // Imagen propia de cada promoción estructurada.
-app.put('/api/companies/:id/promotions/:promotionId/image', authRequired, companiesSuperAdminOnly, ah(async (req, res) => {
+app.put('/api/companies/:id/promotions/:promotionId/image', authRequired, companySelfOrSuperAdmin, ah(async (req, res) => {
   const tenantId = String(req.params.id || '').trim();
   const promotionId = Number(req.params.promotionId);
   const dataUrl = String(req.body?.dataUrl || '').trim();
@@ -5758,7 +5776,7 @@ app.put('/api/companies/:id/promotions/:promotionId/image', authRequired, compan
   });
 }));
 
-app.delete('/api/companies/:id/promotions/:promotionId/image', authRequired, companiesSuperAdminOnly, ah(async (req, res) => {
+app.delete('/api/companies/:id/promotions/:promotionId/image', authRequired, companySelfOrSuperAdmin, ah(async (req, res) => {
   const tenantId = String(req.params.id || '').trim();
   const promotionId = Number(req.params.promotionId);
   const updated = await poolDB1.query(
@@ -5786,7 +5804,7 @@ app.get('/api/public/promotions/:tenantId/items/:promotionId/image', ah(async (r
 
 // Imagen de promoción: una imagen vigente por sucursal.
 // El frontend manda Data URL; el backend guarda bytes y expone una URL pública estable para Meta.
-app.put('/api/companies/:id/branches/:branchKey/promotion-image', authRequired, companiesSuperAdminOnly, ah(async (req, res) => {
+app.put('/api/companies/:id/branches/:branchKey/promotion-image', authRequired, companySelfOrSuperAdmin, ah(async (req, res) => {
   const tenantId = String(req.params.id || '').trim();
   const branchKey = normalizeSucursal(req.params.branchKey);
   const dataUrl = String(req.body?.dataUrl || '').trim();
@@ -5819,7 +5837,7 @@ app.put('/api/companies/:id/branches/:branchKey/promotion-image', authRequired, 
   });
 }));
 
-app.delete('/api/companies/:id/branches/:branchKey/promotion-image', authRequired, companiesSuperAdminOnly, ah(async (req, res) => {
+app.delete('/api/companies/:id/branches/:branchKey/promotion-image', authRequired, companySelfOrSuperAdmin, ah(async (req, res) => {
   const tenantId = String(req.params.id || '').trim();
   const branchKey = normalizeSucursal(req.params.branchKey);
   await poolDB1.query(
@@ -5843,7 +5861,7 @@ app.get('/api/public/promotions/:tenantId/:branchKey/image', ah(async (req, res)
   res.send(rows[0].image_data);
 }));
 
-app.put('/api/companies/:id/branches/ai-config', authRequired, companiesSuperAdminOnly, ah(async (req, res) => {
+app.put('/api/companies/:id/branches/ai-config', authRequired, companySelfOrSuperAdmin, ah(async (req, res) => {
   const tenantId = req.params.id;
   const branches = Array.isArray(req.body?.branches) ? req.body.branches : [];
   if (!branches.length) return res.status(400).json({ error: 'Envía la configuración de las sucursales' });
@@ -6057,7 +6075,7 @@ app.put('/api/companies/:id/branches/ai-config', authRequired, companiesSuperAdm
 // ===============================================================================
 
 
-app.delete('/api/companies/:id/branches/:branchKey', authRequired, companiesSuperAdminOnly, ah(async (req, res) => {
+app.delete('/api/companies/:id/branches/:branchKey', authRequired, companySelfOrSuperAdmin, ah(async (req, res) => {
   const tenantId = req.params.id;
   const branchKey = normalizeSucursal(req.params.branchKey);
   const client = await poolDB1.connect();

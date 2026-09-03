@@ -1324,7 +1324,7 @@ const emptyChannelForm = {
   active: true
 };
 
-function EmpresasModule() {
+function EmpresasModule({ isSuperAdmin }: { isSuperAdmin: boolean }) {
   const [empresas, setEmpresas] = React.useState<Empresa[]>([]);
   const [loading, setLoading] = React.useState(false);
   const [showForm, setShowForm] = React.useState(false);
@@ -1815,14 +1815,16 @@ function EmpresasModule() {
           <h2 className="text-2xl font-bold text-gray-800 flex items-center gap-2"><Building2 className="w-6 h-6" /> Empresas</h2>
           <p className="text-sm text-gray-500">Administra cuentas y conecta Messenger o WhatsApp con la empresa correcta.</p>
         </div>
-        <button onClick={openNew} className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg flex items-center gap-2">
-          <Plus className="w-4 h-4" /> Nueva Empresa
-        </button>
+        {isSuperAdmin && (
+          <button onClick={openNew} className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg flex items-center gap-2">
+            <Plus className="w-4 h-4" /> Nueva Empresa
+          </button>
+        )}
       </div>
 
       {message && <div className={`p-3 rounded-lg border text-sm ${message.startsWith('Error') ? 'bg-red-50 border-red-200 text-red-700' : 'bg-green-50 border-green-200 text-green-700'}`}>{message}</div>}
 
-      {showForm && (
+      {isSuperAdmin && showForm && (
         <form onSubmit={save} className="border rounded-xl p-5 bg-gray-50 space-y-4">
           <div className="flex items-center justify-between"><h3 className="font-semibold text-lg">{editing ? 'Editar Empresa' : 'Nueva Empresa'}</h3><button type="button" onClick={() => setShowForm(false)}><X className="w-5 h-5" /></button></div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -1853,12 +1855,12 @@ function EmpresasModule() {
                 <td className="p-3"><span className={`px-2 py-1 rounded-full text-xs font-medium ${empresa.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>{empresa.status === 'active' ? 'Activa' : 'Suspendida'}</span></td>
                 <td className="p-3">
                   <div className="flex flex-wrap gap-2">
-                    <button onClick={() => openEdit(empresa)} className="px-3 py-1.5 border rounded flex items-center gap-1"><Edit className="w-3 h-3" /> Editar</button>
-                    <button onClick={() => openChannels(empresa)} className="px-3 py-1.5 border border-blue-300 text-blue-700 bg-blue-50 rounded flex items-center gap-1"><MessageCircle className="w-3 h-3" /> Canales</button>
+                    {isSuperAdmin && <button onClick={() => openEdit(empresa)} className="px-3 py-1.5 border rounded flex items-center gap-1"><Edit className="w-3 h-3" /> Editar</button>}
+                    {isSuperAdmin && <button onClick={() => openChannels(empresa)} className="px-3 py-1.5 border border-blue-300 text-blue-700 bg-blue-50 rounded flex items-center gap-1"><MessageCircle className="w-3 h-3" /> Canales</button>}
                     <button onClick={() => openAIConfig(empresa)} className="px-3 py-1.5 border border-violet-300 text-violet-700 bg-violet-50 rounded flex items-center gap-1"><Bot className="w-3 h-3" /> IA y sucursales</button>
-                    {empresa.status === 'active'
+                    {isSuperAdmin && (empresa.status === 'active'
                       ? <button onClick={() => changeStatus(empresa,'suspend')} className="px-3 py-1.5 border border-red-300 text-red-600 rounded">Suspender</button>
-                      : <button onClick={() => changeStatus(empresa,'activate')} className="px-3 py-1.5 border border-green-300 text-green-700 rounded">Activar</button>}
+                      : <button onClick={() => changeStatus(empresa,'activate')} className="px-3 py-1.5 border border-green-300 text-green-700 rounded">Activar</button>)}
                   </div>
                 </td>
               </tr>
@@ -4409,10 +4411,8 @@ const [to, setTo] = useState<string>(defaultTo);
               { id: 'analytics', label: 'Productividad', icon: BarChart3 },
               { id: 'laboratorios', label: 'Laboratorios', icon: BarChart3 },
               { id: 'whatsapp', label: 'WhatsApp', icon: MessageCircle },
-              ...(isSuperAdmin ? [
-                { id: 'facturacion', label: 'Facturación', icon: CreditCard },
-                { id: 'empresas', label: 'Empresas', icon: Building2 },
-              ] : []),
+              ...(isSuperAdmin ? [{ id: 'facturacion', label: 'Facturación', icon: CreditCard }] : []),
+              { id: 'empresas', label: 'Empresa', icon: Building2 },
             ].map(tab => (
   <button 
     key={tab.id as string} 
@@ -6614,7 +6614,7 @@ const [to, setTo] = useState<string>(defaultTo);
         </div>
 
 {/* ========== EMPRESAS ========== */}
-{activeTab === 'empresas' && isSuperAdmin && <EmpresasModule />}
+{activeTab === 'empresas' && <EmpresasModule isSuperAdmin={isSuperAdmin} />}
 
 {/* ========== FACTURACIÓN ELECTRÓNICA ========== */}
 {activeTab === 'facturacion' && isSuperAdmin && (
