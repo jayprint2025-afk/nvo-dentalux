@@ -1262,6 +1262,17 @@ type EmpresaTreatmentAI = {
   active: boolean;
 };
 
+type EmpresaPromotionAI = {
+  id?: number;
+  title: string;
+  description: string;
+  startDate: string;
+  endDate: string;
+  serviceId: number | '';
+  active: boolean;
+  imageUrl?: string;
+};
+
 type EmpresaBranchAI = {
   id?: string;
   tenantId: string;
@@ -1282,6 +1293,7 @@ type EmpresaBranchAI = {
   extraInformation: string;
   promotions: string;
   promotionImageUrl?: string;
+  promotionItems: EmpresaPromotionAI[];
   treatments: EmpresaTreatmentAI[];
   aiEnabled: boolean;
   bookingEnabled: boolean;
@@ -1295,7 +1307,7 @@ const makeEmptyBranchAI = (tenantId: string, branchKey: string, name = ''): Empr
   phone: '', whatsapp: '', address: '', businessHours: '', googleMapsUrl: '',
   directions: '', paymentMethods: '', parkingInfo: '', welcomeMessage: '',
   cancellationPolicy: '', preparationNotes: '', insuranceInformation: '',
-  extraInformation: '', promotions: '', promotionImageUrl: '', treatments: [], aiEnabled: true, bookingEnabled: true, active: true
+  extraInformation: '', promotions: '', promotionImageUrl: '', promotionItems: [], treatments: [], aiEnabled: true, bookingEnabled: true, active: true
 });
 
 const emptyEmpresaForm = {
@@ -1492,7 +1504,7 @@ function EmpresasModule() {
       const branchData = await api(`/companies/${empresa.id}/branches/ai-config`);
       const branches = Array.isArray(branchData) ? branchData : [];
       if (branches.length) {
-        setAiBranches(branches.map((item: EmpresaBranchAI) => ({...item, treatments:Array.isArray(item.treatments) ? item.treatments : []})));
+        setAiBranches(branches.map((item: EmpresaBranchAI) => ({...item, promotionItems:Array.isArray(item.promotionItems) ? item.promotionItems : [], treatments:Array.isArray(item.treatments) ? item.treatments : []})));
         branchKey = branches[0].branchKey || branchKey;
       }
     } catch {}
@@ -1564,6 +1576,7 @@ function EmpresasModule() {
       const data = await api(`/companies/${empresa.id}/branches/ai-config`);
       const received = (Array.isArray(data) ? data : []).map((item: EmpresaBranchAI) => ({
         ...item,
+        promotionItems: Array.isArray(item.promotionItems) ? item.promotionItems : [],
         treatments: Array.isArray(item.treatments) ? item.treatments : []
       }));
       setAiBranches(received.length ? received : [makeEmptyBranchAI(empresa.id, 'sucursal_1', empresa.branchName || 'Sucursal principal')]);
@@ -1711,39 +1724,66 @@ function EmpresasModule() {
     }
   };
 
-  const uploadPromotionImage = async (branchKey: string, file?: File | null) => {
+  const addAiPromotion = (branchKey: string) => {
+    setAiBranches(items => items.map(item => item.branchKey === branchKey ? {
+      ...item,
+      promotionItems: [...(item.promotionItems || []), {
+        title: '', description: '', startDate: '', endDate: '', serviceId: '', active: true, imageUrl: ''
+      }]
+    } : item));
+  };
+
+  const updateAiPromotion = (branchKey: string, index: number, patch: Partial<EmpresaPromotionAI>) => {
+    setAiBranches(items => items.map(item => {
+      if (item.branchKey !== branchKey) return item;
+      const promotionItems = [...(item.promotionItems || [])];
+      promotionItems[index] = { ...promotionItems[index], ...patch };
+      return { ...item, promotionItems };
+    }));
+  };
+
+  const removeAiPromotion = (branchKey: string, index: number) => {
+    setAiBranches(items => items.map(item => item.branchKey === branchKey ? {
+      ...item,
+      promotionItems: (item.promotionItems || []).filter((_, i) => i !== index)
+    } : item));
+  };
+
+  const uploadPromotionItemImage = async (branchKey: string, index: number, file?: File | null) => {
     if (!aiCompany || !file) return;
+    const promo = aiBranches.find(item => item.branchKey === branchKey)?.promotionItems?.[index];
+    if (!promo?.id) {
+      setAiMessage('Primero guarda la configuración para crear la promoción; después podrás subir su imagen.');
+      return;
+    }
     setAiMessage('');
     try {
-      if (!/^image\/(png|jpeg|jpg|webp)$/i.test(file.type)) {
-        throw new Error('Selecciona una imagen JPG, PNG o WEBP.');
-      }
+      if (!/^image\/(png|jpeg|jpg|webp)$/i.test(file.type)) throw new Error('Selecciona una imagen JPG, PNG o WEBP.');
       if (file.size > 5 * 1024 * 1024) throw new Error('La imagen debe pesar máximo 5 MB.');
-
       const dataUrl = await new Promise<string>((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = () => resolve(String(reader.result || ''));
         reader.onerror = () => reject(new Error('No se pudo leer la imagen.'));
         reader.readAsDataURL(file);
       });
-
-      const result = await api(`/companies/${aiCompany.id}/branches/${encodeURIComponent(branchKey)}/promotion-image`, {
-        method: 'PUT',
-        body: JSON.stringify({ dataUrl })
+      const result = await api(`/companies/${aiCompany.id}/promotions/${promo.id}/image`, {
+        method: 'PUT', body: JSON.stringify({ dataUrl })
       });
-      updateAiBranch(branchKey, { promotionImageUrl: result?.imageUrl || '' });
-      setAiMessage('Imagen de promoción guardada. Messenger la enviará cuando el paciente pregunte por promociones.');
+      updateAiPromotion(branchKey, index, { imageUrl: result?.imageUrl || '' });
+      setAiMessage(`Imagen guardada para la promoción “${promo.title || 'sin título'}”.`);
     } catch (e: any) {
       setAiMessage(`Error: ${e?.message || 'No se pudo guardar la imagen de promoción'}`);
     }
   };
 
-  const removePromotionImage = async (branchKey: string) => {
+  const removePromotionItemImage = async (branchKey: string, index: number) => {
     if (!aiCompany) return;
+    const promo = aiBranches.find(item => item.branchKey === branchKey)?.promotionItems?.[index];
+    if (!promo?.id) return updateAiPromotion(branchKey, index, { imageUrl: '' });
     try {
-      await api(`/companies/${aiCompany.id}/branches/${encodeURIComponent(branchKey)}/promotion-image`, { method: 'DELETE' });
-      updateAiBranch(branchKey, { promotionImageUrl: '' });
-      setAiMessage('Imagen de promoción eliminada.');
+      await api(`/companies/${aiCompany.id}/promotions/${promo.id}/image`, { method: 'DELETE' });
+      updateAiPromotion(branchKey, index, { imageUrl: '' });
+      setAiMessage('Imagen de la promoción eliminada.');
     } catch (e: any) {
       setAiMessage(`Error: ${e?.message || 'No se pudo eliminar la imagen'}`);
     }
@@ -1758,7 +1798,7 @@ function EmpresasModule() {
         method: 'PUT',
         body: JSON.stringify({ branches: aiBranches })
       });
-      setAiBranches(Array.isArray(saved) ? saved : aiBranches);
+      setAiBranches(Array.isArray(saved) ? saved.map((item: EmpresaBranchAI) => ({ ...item, promotionItems: Array.isArray(item.promotionItems) ? item.promotionItems : [], treatments: Array.isArray(item.treatments) ? item.treatments : [] })) : aiBranches);
       setAiMessage('Configuración de sucursales e IA guardada correctamente.');
       await load();
     } catch (e: any) {
@@ -1884,40 +1924,61 @@ function EmpresasModule() {
                       ['cancellationPolicy','Política de cancelación','Condiciones para cancelar o cambiar citas'],
                       ['preparationNotes','Preparación para la cita','Indicaciones previas para el paciente'],
                       ['insuranceInformation','Seguros o convenios','Seguros aceptados o información de convenios'],
-                      ['promotions','Promociones vigentes','Una promoción por línea. Incluye precio y condiciones.'],
                       ['extraInformation','Información adicional','Cualquier información pública que la IA pueda responder']
                     ].map(([key,label,placeholder]) => (
                       <label key={key} className="block">
                         <span className="block text-sm font-medium mb-1">{label}</span>
-                        <textarea rows={key === 'extraInformation' || key === 'promotions' ? 4 : 2} value={(branch as any)[key]} onChange={e => updateAiBranch(branch.branchKey,{[key]:e.target.value} as any)} placeholder={placeholder} className="w-full border rounded-lg px-3 py-2 resize-y" />
+                        <textarea rows={key === 'extraInformation' ? 4 : 2} value={(branch as any)[key]} onChange={e => updateAiBranch(branch.branchKey,{[key]:e.target.value} as any)} placeholder={placeholder} className="w-full border rounded-lg px-3 py-2 resize-y" />
                       </label>
                     ))}
 
-                    <div className="rounded-xl border border-violet-200 bg-violet-50/40 p-4 space-y-3">
-                      <div>
-                        <h5 className="font-semibold text-gray-900">Imagen de promociones para Messenger</h5>
-                        <p className="text-xs text-gray-600">Sube el mismo flyer que publicaste en Facebook. Cuando el paciente pregunte por promociones, Messenger enviará el texto de la IA y esta imagen.</p>
-                      </div>
-                      {branch.promotionImageUrl ? (
-                        <div className="flex flex-col sm:flex-row gap-3 sm:items-center">
-                          <img src={branch.promotionImageUrl} alt="Promoción vigente" className="w-40 max-h-40 object-contain rounded-lg border bg-white" />
-                          <div className="flex gap-2">
-                            <label className="px-3 py-2 rounded-lg bg-violet-600 text-white text-sm cursor-pointer">
-                              Cambiar imagen
-                              <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={async e => { const input=e.currentTarget; await uploadPromotionImage(branch.branchKey,input.files?.[0]); input.value=''; }} />
-                            </label>
-                            <button type="button" onClick={() => removePromotionImage(branch.branchKey)} className="px-3 py-2 rounded-lg border border-red-200 text-red-600 text-sm">Quitar</button>
-                          </div>
+                    <div className="rounded-xl border border-violet-200 bg-violet-50/40 p-4 space-y-4">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                        <div>
+                          <h5 className="font-semibold text-gray-900">Promociones</h5>
+                          <p className="text-xs text-gray-600">Cada promoción puede tener tratamiento, vigencia, estado e imagen propia. Si no eliges tratamiento aplica de forma general.</p>
                         </div>
-                      ) : (
-                        <label className="inline-flex px-3 py-2 rounded-lg bg-violet-600 text-white text-sm cursor-pointer">
-                          Subir imagen de promoción
-                          <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={async e => { const input=e.currentTarget; await uploadPromotionImage(branch.branchKey,input.files?.[0]); input.value=''; }} />
-                        </label>
-                      )}
-                      <div className="text-[11px] text-gray-500">JPG, PNG o WEBP · máximo 5 MB · una imagen vigente por sucursal.</div>
-                    </div>
+                        <button type="button" onClick={() => addAiPromotion(branch.branchKey)} className="px-3 py-1.5 rounded-lg bg-violet-600 text-white text-sm flex items-center gap-1"><Plus className="w-4 h-4" /> Promoción</button>
+                      </div>
 
+                      <div className="space-y-3">
+                        {(branch.promotionItems || []).map((promo, promoIndex) => (
+                          <div key={promo.id ?? `promo-new-${promoIndex}`} className="rounded-xl border bg-white p-3 space-y-3">
+                            <div className="grid grid-cols-1 md:grid-cols-12 gap-2 items-end">
+                              <label className="md:col-span-5"><span className="block text-xs font-medium mb-1">Título</span><input value={promo.title} onChange={e => updateAiPromotion(branch.branchKey,promoIndex,{title:e.target.value})} placeholder="Ej. 3 resinas por $1000" className="w-full border rounded-lg px-3 py-2" /></label>
+                              <label className="md:col-span-4"><span className="block text-xs font-medium mb-1">Tratamiento relacionado</span><select value={promo.serviceId} onChange={e => updateAiPromotion(branch.branchKey,promoIndex,{serviceId:e.target.value === '' ? '' : Number(e.target.value)})} className="w-full border rounded-lg px-3 py-2 bg-white"><option value="">General / varios tratamientos</option>{(branch.treatments || []).filter(t => t.id).map(t => <option key={t.id} value={t.id}>{t.name}</option>)}</select></label>
+                              <label className="md:col-span-2 flex items-center gap-2 h-10"><input type="checkbox" checked={promo.active !== false} onChange={e => updateAiPromotion(branch.branchKey,promoIndex,{active:e.target.checked})} /><span className="text-sm">Activa</span></label>
+                              <div className="md:col-span-1 flex justify-end"><button type="button" onClick={() => removeAiPromotion(branch.branchKey,promoIndex)} className="p-2 rounded-lg border border-red-200 text-red-600" title="Eliminar promoción"><Trash2 className="w-4 h-4" /></button></div>
+                            </div>
+
+                            <label className="block"><span className="block text-xs font-medium mb-1">Descripción / condiciones</span><textarea rows={2} value={promo.description} onChange={e => updateAiPromotion(branch.branchKey,promoIndex,{description:e.target.value})} placeholder="Ej. Incluye resina estética. No acumulable con otras promociones." className="w-full border rounded-lg px-3 py-2 resize-y" /></label>
+
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                              <label><span className="block text-xs font-medium mb-1">Inicia</span><input type="date" value={promo.startDate || ''} onChange={e => updateAiPromotion(branch.branchKey,promoIndex,{startDate:e.target.value})} className="w-full border rounded-lg px-3 py-2" /></label>
+                              <label><span className="block text-xs font-medium mb-1">Termina</span><input type="date" value={promo.endDate || ''} onChange={e => updateAiPromotion(branch.branchKey,promoIndex,{endDate:e.target.value})} className="w-full border rounded-lg px-3 py-2" /></label>
+                            </div>
+
+                            <div className="rounded-lg border border-violet-100 bg-violet-50/50 p-3">
+                              {promo.imageUrl ? (
+                                <div className="flex flex-col sm:flex-row gap-3 sm:items-center">
+                                  <img src={promo.imageUrl} alt={promo.title || 'Promoción'} className="w-36 max-h-40 object-contain rounded-lg border bg-white" />
+                                  <div className="flex flex-wrap gap-2">
+                                    <label className="px-3 py-2 rounded-lg bg-violet-600 text-white text-sm cursor-pointer">Cambiar imagen<input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={async e => { const input=e.currentTarget; await uploadPromotionItemImage(branch.branchKey,promoIndex,input.files?.[0]); input.value=''; }} /></label>
+                                    <button type="button" onClick={() => removePromotionItemImage(branch.branchKey,promoIndex)} className="px-3 py-2 rounded-lg border border-red-200 text-red-600 text-sm">Quitar imagen</button>
+                                  </div>
+                                </div>
+                              ) : promo.id ? (
+                                <label className="inline-flex px-3 py-2 rounded-lg bg-violet-600 text-white text-sm cursor-pointer">Subir flyer<input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={async e => { const input=e.currentTarget; await uploadPromotionItemImage(branch.branchKey,promoIndex,input.files?.[0]); input.value=''; }} /></label>
+                              ) : (
+                                <div className="text-xs text-amber-700">Guarda la configuración para crear esta promoción y habilitar la carga de su flyer.</div>
+                              )}
+                              <div className="mt-2 text-[11px] text-gray-500">JPG, PNG o WEBP · máximo 5 MB.</div>
+                            </div>
+                          </div>
+                        ))}
+                        {(branch.promotionItems || []).length === 0 && <div className="rounded-lg border border-dashed bg-white p-4 text-center text-sm text-gray-500">No hay promociones configuradas para esta sucursal.</div>}
+                      </div>
+                    </div>
 
                     <div className="rounded-xl border border-emerald-200 bg-emerald-50/40 p-4 space-y-3">
                       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">

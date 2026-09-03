@@ -50,7 +50,7 @@ async function loadPromotions(q, tenantId, branches = []) {
   let structured = [];
   try {
     const { rows } = await q(
-      `SELECT branch_key,title,description,start_date,end_date,service_id
+      `SELECT id,branch_key,title,description,start_date,end_date,service_id
          FROM branch_promotions
         WHERE tenant_id=$1::uuid AND COALESCE(active,TRUE)=TRUE
           AND (start_date IS NULL OR start_date<=CURRENT_DATE)

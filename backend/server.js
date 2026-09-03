@@ -4016,8 +4016,38 @@ async function ensureMultiTenantSchema() {
   await q(`ALTER TABLE branches ADD COLUMN IF NOT EXISTS ai_enabled BOOLEAN NOT NULL DEFAULT TRUE`);
   await q(`ALTER TABLE branches ADD COLUMN IF NOT EXISTS booking_enabled BOOLEAN NOT NULL DEFAULT TRUE`);
 
-  // Flyer/imagen vigente de promociones por empresa + sucursal.
-  // Se guarda en PostgreSQL para no depender de URLs temporales de Facebook.
+  // Promociones estructuradas por empresa + sucursal, con vigencia, tratamiento e imagen propia.
+  await q(`
+    CREATE TABLE IF NOT EXISTS branch_promotions (
+      id BIGSERIAL PRIMARY KEY,
+      tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      branch_key TEXT NOT NULL,
+      title TEXT NOT NULL,
+      description TEXT,
+      start_date DATE,
+      end_date DATE,
+      service_id INTEGER,
+      active BOOLEAN NOT NULL DEFAULT TRUE,
+      image_data BYTEA,
+      image_mime TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await q(`ALTER TABLE branch_promotions ADD COLUMN IF NOT EXISTS id BIGSERIAL`);
+  await q(`ALTER TABLE branch_promotions ADD COLUMN IF NOT EXISTS description TEXT`);
+  await q(`ALTER TABLE branch_promotions ADD COLUMN IF NOT EXISTS start_date DATE`);
+  await q(`ALTER TABLE branch_promotions ADD COLUMN IF NOT EXISTS end_date DATE`);
+  await q(`ALTER TABLE branch_promotions ADD COLUMN IF NOT EXISTS service_id INTEGER`);
+  await q(`ALTER TABLE branch_promotions ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT TRUE`);
+  await q(`ALTER TABLE branch_promotions ADD COLUMN IF NOT EXISTS image_data BYTEA`);
+  await q(`ALTER TABLE branch_promotions ADD COLUMN IF NOT EXISTS image_mime TEXT`);
+  await q(`ALTER TABLE branch_promotions ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
+  await q(`ALTER TABLE branch_promotions ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
+  await q(`CREATE UNIQUE INDEX IF NOT EXISTS idx_branch_promotions_tenant_id_id ON branch_promotions(tenant_id, id)`);
+  await q(`CREATE INDEX IF NOT EXISTS idx_branch_promotions_active ON branch_promotions(tenant_id, branch_key, active, start_date, end_date)`);
+
+  // Compatibilidad FIX35: conservar temporalmente el flyer general por sucursal.
   await q(`
     CREATE TABLE IF NOT EXISTS branch_promotion_media (
       tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
@@ -4873,38 +4903,66 @@ async function getOrCreateAiConversationIdForMessenger(pageId, psid, dbKey, tena
   }
 }
 
-async function promotionImagesForConversation(pool, tenantId, conversationId, req) {
+async function promotionImagesForConversation(pool, tenantId, conversationId, req, userText = '') {
   try {
     const { rows: convRows } = await pool.query(
-      `SELECT COALESCE(state->'collected'->>'branch_key', state->>'branch_key', sucursal_id) AS branch_key
+      `SELECT COALESCE(state->'collected'->>'branch_key', state->>'branch_key', sucursal_id) AS branch_key,
+              COALESCE(state->'collected'->>'service_id', state->>'service_id') AS service_id
          FROM ai_conversations
         WHERE id=$1 AND tenant_id=$2::uuid
         LIMIT 1`,
       [conversationId, tenantId]
     );
     const branchKey = String(convRows?.[0]?.branch_key || '').trim();
+    const serviceId = String(convRows?.[0]?.service_id || '').trim() || null;
 
-    // Si ya existe sucursal en la conversación, manda únicamente su flyer.
-    // Si todavía no existe, las promociones siguen siendo consultables: manda
-    // los flyers configurados para la empresa sin forzar selección de sucursal.
-    const { rows } = branchKey
+    const { rows } = await pool.query(
+      `SELECT id, branch_key, title, description, updated_at
+         FROM branch_promotions
+        WHERE tenant_id=$1::uuid
+          AND COALESCE(active, TRUE)=TRUE
+          AND (start_date IS NULL OR start_date<=CURRENT_DATE)
+          AND (end_date IS NULL OR end_date>=CURRENT_DATE)
+          AND image_data IS NOT NULL
+          AND ($2::text IS NULL OR branch_key=$2)
+        ORDER BY updated_at DESC, id DESC
+        LIMIT 8`,
+      [tenantId, branchKey || null]
+    );
+
+    let selectedRows = rows || [];
+    const normalizePromoText = value => String(value || '')
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+    const stop = new Set(['que','cual','cuales','tienen','tiene','promocion','promociones','promo','promos','oferta','ofertas','descuento','descuentos','vigente','vigentes','para','por','del','las','los','una','uno','hay']);
+    const tokens = normalizePromoText(userText).split(/[^a-z0-9]+/).filter(token => token.length >= 4 && !stop.has(token));
+    if (tokens.length) {
+      const specific = selectedRows.filter(row => {
+        const haystack = normalizePromoText(`${row.title || ''} ${row.description || ''}`);
+        return tokens.some(token => haystack.includes(token) || (token.endsWith('s') && haystack.includes(token.slice(0,-1))));
+      });
+      if (specific.length) selectedRows = specific;
+    }
+
+    if (selectedRows.length) {
+      return selectedRows.map(row =>
+        `${getPublicBaseUrl(req)}/api/public/promotions/${encodeURIComponent(tenantId)}/items/${encodeURIComponent(String(row.id))}/image?v=${encodeURIComponent(String(row.updated_at || ''))}`
+      );
+    }
+
+    // Compatibilidad con el flyer general del FIX35 mientras se migran promociones.
+    const legacy = branchKey
       ? await pool.query(
-          `SELECT branch_key, updated_at
-             FROM branch_promotion_media
-            WHERE tenant_id=$1::uuid AND branch_key=$2
-            ORDER BY updated_at DESC`,
+          `SELECT branch_key, updated_at FROM branch_promotion_media
+            WHERE tenant_id=$1::uuid AND branch_key=$2 ORDER BY updated_at DESC`,
           [tenantId, branchKey]
         )
       : await pool.query(
-          `SELECT branch_key, updated_at
-             FROM branch_promotion_media
-            WHERE tenant_id=$1::uuid
-            ORDER BY updated_at DESC
-            LIMIT 8`,
+          `SELECT branch_key, updated_at FROM branch_promotion_media
+            WHERE tenant_id=$1::uuid ORDER BY updated_at DESC LIMIT 8`,
           [tenantId]
         );
 
-    return (rows || []).map(row =>
+    return (legacy.rows || []).map(row =>
       `${getPublicBaseUrl(req)}/api/public/promotions/${encodeURIComponent(tenantId)}/${encodeURIComponent(String(row.branch_key || ''))}/image?v=${encodeURIComponent(String(row.updated_at || ''))}`
     );
   } catch (error) {
@@ -5010,7 +5068,7 @@ async function callClinicAiForMessenger(senderId, pageId, msgText, req) {
 
   const promotionIntent = /\b(promocion(?:es)?|promoción(?:es)?|oferta(?:s)?|descuento(?:s)?)\b/i.test(safeText);
   if (promotionIntent) {
-    const promotionImageUrls = await promotionImagesForConversation(pool, tenantId, conversationId, req);
+    const promotionImageUrls = await promotionImagesForConversation(pool, tenantId, conversationId, req, safeText);
     if (promotionImageUrls.length) {
       data.promotionImageUrls = promotionImageUrls;
       data.promotionImageUrl = promotionImageUrls[0]; // compatibilidad
@@ -5605,13 +5663,25 @@ app.get('/api/companies/:id/branches/ai-config', authRequired, companiesSuperAdm
   const { rows: tenantRows } = await poolDB1.query('SELECT id FROM tenants WHERE id=$1::uuid LIMIT 1', [tenantId]);
   if (!tenantRows[0]) return res.status(404).json({ error: 'Empresa no encontrada' });
   const { rows } = await poolDB1.query(branchAiSelect, [tenantId]);
+  const { rows: promotionRows } = await poolDB1.query(
+    `SELECT id, branch_key, title, description, start_date, end_date, service_id, active,
+            (image_data IS NOT NULL) AS has_image, updated_at
+       FROM branch_promotions
+      WHERE tenant_id=$1::uuid
+      ORDER BY branch_key, active DESC, start_date DESC NULLS LAST, id DESC`,
+    [tenantId]
+  ).catch(() => ({ rows: [] }));
+  const promotionsByBranch = new Map();
+  for (const promo of promotionRows) {
+    const key = String(promo.branch_key || '');
+    if (!promotionsByBranch.has(key)) promotionsByBranch.set(key, []);
+    promotionsByBranch.get(key).push(promo);
+  }
   const { rows: promotionMediaRows } = await poolDB1.query(
     `SELECT branch_key, updated_at FROM branch_promotion_media WHERE tenant_id=$1::uuid`,
     [tenantId]
   ).catch(() => ({ rows: [] }));
-  const promotionMediaByBranch = new Map(
-    promotionMediaRows.map(item => [String(item.branch_key), item])
-  );
+  const promotionMediaByBranch = new Map(promotionMediaRows.map(item => [String(item.branch_key), item]));
   const { rows: serviceRows } = await poolDB1.query(
     `SELECT id, name, price, duration_hours, description, active, sucursal_id
        FROM services
@@ -5623,6 +5693,27 @@ app.get('/api/companies/:id/branches/ai-config', authRequired, companiesSuperAdm
     promotionImageUrl: promotionMediaByBranch.has(String(row.branch_key))
       ? `/api/public/promotions/${encodeURIComponent(tenantId)}/${encodeURIComponent(row.branch_key)}/image?v=${encodeURIComponent(String(promotionMediaByBranch.get(String(row.branch_key))?.updated_at || ''))}`
       : '',
+    promotionItems: (() => {
+      const structured = promotionsByBranch.get(String(row.branch_key)) || [];
+      if (structured.length) return structured.map(promo => ({
+        id: promo.id,
+        title: promo.title || '',
+        description: promo.description || '',
+        startDate: promo.start_date ? String(promo.start_date).slice(0,10) : '',
+        endDate: promo.end_date ? String(promo.end_date).slice(0,10) : '',
+        serviceId: promo.service_id == null ? '' : Number(promo.service_id),
+        active: promo.active !== false,
+        imageUrl: promo.has_image
+          ? `/api/public/promotions/${encodeURIComponent(tenantId)}/items/${encodeURIComponent(String(promo.id))}/image?v=${encodeURIComponent(String(promo.updated_at || ''))}`
+          : ''
+      }));
+      const legacyImage = promotionMediaByBranch.has(String(row.branch_key))
+        ? `/api/public/promotions/${encodeURIComponent(tenantId)}/${encodeURIComponent(row.branch_key)}/image?v=${encodeURIComponent(String(promotionMediaByBranch.get(String(row.branch_key))?.updated_at || ''))}`
+        : '';
+      return String(row.promotions || '').split(/\r?\n/).map(title => title.trim()).filter(Boolean).map((title, index) => ({
+        title, description: '', startDate: '', endDate: '', serviceId: '', active: true, imageUrl: index === 0 ? legacyImage : ''
+      }));
+    })(),
     treatments: serviceRows
       .filter(service => String(service.sucursal_id || '') === String(row.branch_key))
       .map(service => ({
@@ -5634,6 +5725,58 @@ app.get('/api/companies/:id/branches/ai-config', authRequired, companiesSuperAdm
         active: service.active !== false
       }))
   })));
+}));
+
+// Imagen propia de cada promoción estructurada.
+app.put('/api/companies/:id/promotions/:promotionId/image', authRequired, companiesSuperAdminOnly, ah(async (req, res) => {
+  const tenantId = String(req.params.id || '').trim();
+  const promotionId = Number(req.params.promotionId);
+  const dataUrl = String(req.body?.dataUrl || '').trim();
+  const match = dataUrl.match(/^data:(image\/(?:png|jpeg|jpg|webp));base64,([A-Za-z0-9+/=]+)$/i);
+  if (!Number.isSafeInteger(promotionId) || promotionId <= 0 || !match) {
+    return res.status(400).json({ error: 'Promoción o imagen inválida.' });
+  }
+  const mime = match[1].toLowerCase() === 'image/jpg' ? 'image/jpeg' : match[1].toLowerCase();
+  const image = Buffer.from(match[2], 'base64');
+  if (!image.length || image.length > 5 * 1024 * 1024) {
+    return res.status(400).json({ error: 'La imagen debe pesar máximo 5 MB.' });
+  }
+  const updated = await poolDB1.query(
+    `UPDATE branch_promotions SET image_data=$1, image_mime=$2, updated_at=NOW()
+      WHERE id=$3 AND tenant_id=$4::uuid RETURNING id, updated_at`,
+    [image, mime, promotionId, tenantId]
+  );
+  if (!updated.rows[0]) return res.status(404).json({ error: 'Promoción no encontrada' });
+  res.json({
+    ok: true,
+    imageUrl: `/api/public/promotions/${encodeURIComponent(tenantId)}/items/${promotionId}/image?v=${Date.now()}`
+  });
+}));
+
+app.delete('/api/companies/:id/promotions/:promotionId/image', authRequired, companiesSuperAdminOnly, ah(async (req, res) => {
+  const tenantId = String(req.params.id || '').trim();
+  const promotionId = Number(req.params.promotionId);
+  const updated = await poolDB1.query(
+    `UPDATE branch_promotions SET image_data=NULL, image_mime=NULL, updated_at=NOW()
+      WHERE id=$1 AND tenant_id=$2::uuid RETURNING id`,
+    [promotionId, tenantId]
+  );
+  if (!updated.rows[0]) return res.status(404).json({ error: 'Promoción no encontrada' });
+  res.json({ ok: true });
+}));
+
+app.get('/api/public/promotions/:tenantId/items/:promotionId/image', ah(async (req, res) => {
+  const tenantId = String(req.params.tenantId || '').trim();
+  const promotionId = Number(req.params.promotionId);
+  const { rows } = await poolDB1.query(
+    `SELECT image_data, image_mime FROM branch_promotions
+      WHERE tenant_id=$1::uuid AND id=$2 LIMIT 1`,
+    [tenantId, promotionId]
+  );
+  if (!rows[0]?.image_data) return res.sendStatus(404);
+  res.set('Content-Type', rows[0].image_mime || 'image/jpeg');
+  res.set('Cache-Control', 'public, max-age=3600');
+  res.send(rows[0].image_data);
 }));
 
 // Imagen de promoción: una imagen vigente por sucursal.
@@ -5748,6 +5891,75 @@ app.put('/api/companies/:id/branches/ai-config', authRequired, companiesSuperAdm
         item?.aiEnabled !== false, item?.bookingEnabled !== false, item?.active !== false
       ]);
 
+      // Guardar promociones estructuradas de ESTA empresa y ESTA sucursal.
+      const promotionItems = Array.isArray(item?.promotionItems) ? item.promotionItems : [];
+      const keepPromotionIds = [];
+      for (const promo of promotionItems) {
+        const title = String(promo?.title || '').trim();
+        if (!title) continue;
+        const description = String(promo?.description || '').trim();
+        const startDate = String(promo?.startDate || '').trim() || null;
+        const endDate = String(promo?.endDate || '').trim() || null;
+        const serviceId = promo?.serviceId === '' || promo?.serviceId == null ? null : Number(promo.serviceId);
+        const active = promo?.active !== false;
+        const promoId = Number(promo?.id);
+        if (startDate && endDate && endDate < startDate) {
+          throw new Error(`La promoción "${title}" tiene fecha final anterior a la inicial.`);
+        }
+
+        if (Number.isFinite(promoId) && promoId > 0) {
+          const updated = await client.query(
+            `UPDATE branch_promotions SET branch_key=$1, title=$2, description=$3, start_date=$4, end_date=$5,
+                    service_id=$6, active=$7, updated_at=NOW()
+              WHERE id=$8 AND tenant_id=$9::uuid RETURNING id`,
+            [branchKey, title, description, startDate, endDate, Number.isFinite(serviceId) ? serviceId : null, active, promoId, tenantId]
+          );
+          if (updated.rows[0]?.id) keepPromotionIds.push(Number(updated.rows[0].id));
+        } else {
+          const inserted = await client.query(
+            `INSERT INTO branch_promotions(tenant_id, branch_key, title, description, start_date, end_date, service_id, active, updated_at)
+             VALUES ($1::uuid,$2,$3,$4,$5,$6,$7,$8,NOW()) RETURNING id`,
+            [tenantId, branchKey, title, description, startDate, endDate, Number.isFinite(serviceId) ? serviceId : null, active]
+          );
+          keepPromotionIds.push(Number(inserted.rows[0].id));
+        }
+      }
+
+      if (Array.isArray(item?.promotionItems)) {
+        if (keepPromotionIds.length) {
+          await client.query(
+            `DELETE FROM branch_promotions WHERE tenant_id=$1::uuid AND branch_key=$2 AND NOT (id = ANY($3::bigint[]))`,
+            [tenantId, branchKey, keepPromotionIds]
+          );
+        } else {
+          await client.query(`DELETE FROM branch_promotions WHERE tenant_id=$1::uuid AND branch_key=$2`, [tenantId, branchKey]);
+        }
+
+        // Mantener el campo legacy sincronizado para compatibilidad con clientes antiguos.
+        const legacyTitles = promotionItems.filter(p => p?.active !== false).map(p => String(p?.title || '').trim()).filter(Boolean).join('\n');
+        await client.query(
+          `UPDATE branches SET promotions=$1, updated_at=NOW() WHERE tenant_id=$2::uuid AND branch_key=$3`,
+          [legacyTitles, tenantId, branchKey]
+        );
+
+        // Migración transparente del flyer general FIX35: si ninguna promoción tiene imagen,
+        // copiarlo a la primera promoción estructurada para no perder la imagen ya cargada.
+        if (keepPromotionIds.length) {
+          const hasPromoImage = await client.query(
+            `SELECT 1 FROM branch_promotions WHERE tenant_id=$1::uuid AND branch_key=$2 AND image_data IS NOT NULL LIMIT 1`,
+            [tenantId, branchKey]
+          );
+          if (!hasPromoImage.rows[0]) {
+            await client.query(
+              `UPDATE branch_promotions p SET image_data=m.image_data, image_mime=m.image_mime, updated_at=NOW()
+                FROM branch_promotion_media m
+               WHERE p.id=$1 AND p.tenant_id=$2::uuid AND m.tenant_id=p.tenant_id AND m.branch_key=$3`,
+              [keepPromotionIds[0], tenantId, branchKey]
+            );
+          }
+        }
+      }
+
       // Guardar tratamientos reales de ESTA empresa y ESTA sucursal.
       const treatments = Array.isArray(item?.treatments) ? item.treatments : [];
       const keepIds = [];
@@ -5800,8 +6012,23 @@ app.put('/api/companies/:id/branches/ai-config', authRequired, companiesSuperAdm
       `SELECT id, name, price, duration_hours, description, active, sucursal_id
          FROM services WHERE tenant_id=$1::uuid ORDER BY sucursal_id, name`, [tenantId]
     );
+    const { rows: promotionRows } = await poolDB1.query(
+      `SELECT id, branch_key, title, description, start_date, end_date, service_id, active,
+              (image_data IS NOT NULL) AS has_image, updated_at
+         FROM branch_promotions WHERE tenant_id=$1::uuid ORDER BY branch_key, id`, [tenantId]
+    );
     res.json(rows.map(row => ({
       ...mapBranchAI(row),
+      promotionItems: promotionRows.filter(promo => String(promo.branch_key) === String(row.branch_key)).map(promo => ({
+        id: promo.id, title: promo.title || '', description: promo.description || '',
+        startDate: promo.start_date ? String(promo.start_date).slice(0,10) : '',
+        endDate: promo.end_date ? String(promo.end_date).slice(0,10) : '',
+        serviceId: promo.service_id == null ? '' : Number(promo.service_id),
+        active: promo.active !== false,
+        imageUrl: promo.has_image
+          ? `/api/public/promotions/${encodeURIComponent(tenantId)}/items/${encodeURIComponent(String(promo.id))}/image?v=${encodeURIComponent(String(promo.updated_at || ''))}`
+          : ''
+      })),
       treatments: serviceRows
         .filter(service => String(service.sucursal_id || '') === String(row.branch_key))
         .map(service => ({

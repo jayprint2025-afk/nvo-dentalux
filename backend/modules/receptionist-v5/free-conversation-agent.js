@@ -454,7 +454,7 @@ function deterministicInformation(knowledge, state, intents) {
       const uniqueTitles = [...new Set(promotions.map(item => String(item.title || '').trim()).filter(Boolean))];
       parts.push(
         uniqueTitles.length
-          ? `Promociones vigentes: ${uniqueTitles.join(', ')}.`
+          ? `Promociones vigentes: ${promotions.map(item => `${String(item.title || '').trim()}${String(item.description || '').trim() ? ` — ${String(item.description).trim()}` : ''}`).filter(Boolean).filter((v,i,a)=>a.indexOf(v)===i).join('; ')}.`
           : `No tengo promociones vigentes confirmadas${branch ? ` para ${branch.name}` : ''}.`
       );
     }
@@ -1054,8 +1054,10 @@ function naturalInformationReply(knowledge, state, intents = [], options = {}) {
     // Las promociones son información general de la clínica. No exigir sucursal
     // y no filtrarlas por un servicio que quedó en memoria de una cita en curso.
     const selectedBranchKey = options.branch_key || state.collected.branch_key || null;
+    const explicitlyRequestedServiceId = options.service_id || null;
     const promotions = knowledge.promotions.filter(item =>
-      !selectedBranchKey || item.branch_key === selectedBranchKey
+      (!selectedBranchKey || item.branch_key === selectedBranchKey) &&
+      (!explicitlyRequestedServiceId || !item.service_id || String(item.service_id) === String(explicitlyRequestedServiceId))
     );
 
     const byTitle = new Map();
@@ -1063,7 +1065,7 @@ function naturalInformationReply(knowledge, state, intents = [], options = {}) {
       const title = String(promo?.title || '').trim();
       if (!title) continue;
       const key = Grounding.normalize(title);
-      if (!byTitle.has(key)) byTitle.set(key, { title, branches: new Set() });
+      if (!byTitle.has(key)) byTitle.set(key, { title, description: String(promo?.description || '').trim(), branches: new Set() });
       const branchName = knowledge.branches.find(item => item.branch_key === promo.branch_key)?.name;
       if (branchName) byTitle.get(key).branches.add(branchName);
     }
@@ -1071,8 +1073,9 @@ function naturalInformationReply(knowledge, state, intents = [], options = {}) {
     const allBranchNames = new Set((knowledge.branches || []).map(item => item.name).filter(Boolean));
     const labels = [...byTitle.values()].map(item => {
       const branches = [...item.branches];
-      if (selectedBranchKey || !branches.length || branches.length >= allBranchNames.size) return item.title;
-      return `${item.title} (${branches.join(' y ')})`;
+      const detail = item.description ? `${item.title} — ${item.description}` : item.title;
+      if (selectedBranchKey || !branches.length || branches.length >= allBranchNames.size) return detail;
+      return `${detail} (${branches.join(' y ')})`;
     });
 
     parts.push(
@@ -2223,7 +2226,10 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
       knowledge,
       state,
       authoritativeInfoIntents,
-      { branch_key: grounding.detected?.information_branch?.branch_key || null }
+      {
+        branch_key: grounding.detected?.information_branch?.branch_key || null,
+        service_id: grounding.detected?.service?.id || null,
+      }
     );
     if (infoReply) {
       plan.reply = infoReply;
