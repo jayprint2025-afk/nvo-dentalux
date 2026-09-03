@@ -973,21 +973,51 @@ function naturalInformationReply(knowledge, state, intents = [], options = {}) {
     item => item.branch_key === infoBranchKey
   );
   const service = knowledge.services.find(
-    item => String(item.id) === String(state.collected.service_id)
+    item => String(item.id) === String(options.service_id || state.collected.service_id)
   );
 
   const parts = [];
 
   if (intents.includes('duration')) {
-    const hours = Number(service?.duration_hours);
-    if (Number.isFinite(hours) && hours > 0) {
-      const minutes = Math.round(hours * 60);
+    const rememberedServiceName = String(
+      options.service_name ||
+      service?.name ||
+      state.collected.service_name ||
+      ''
+    ).trim();
+
+    let durationService = service || null;
+    let durationHours = Number(durationService?.duration_hours);
+
+    // Antes de elegir sucursal puede no existir service_id. Si el mismo
+    // tratamiento tiene la misma duración en todas las sucursales aplicables,
+    // sí podemos responderla. Si las duraciones difieren, no inventamos.
+    if ((!Number.isFinite(durationHours) || durationHours <= 0) && rememberedServiceName) {
+      const normalizedName = Grounding.normalize(rememberedServiceName);
+      const candidates = (knowledge.services || []).filter(item => {
+        if (infoBranchKey && item.branch_key !== infoBranchKey) return false;
+        return Grounding.normalize(item.name) === normalizedName;
+      });
+      const durations = [...new Set(
+        candidates
+          .map(item => Number(item.duration_hours))
+          .filter(value => Number.isFinite(value) && value > 0)
+      )];
+
+      if (durations.length === 1) {
+        durationHours = durations[0];
+        durationService = candidates[0] || durationService;
+      }
+    }
+
+    if (Number.isFinite(durationHours) && durationHours > 0) {
+      const minutes = Math.round(durationHours * 60);
       const label = minutes % 60 === 0
         ? `${minutes / 60} ${minutes === 60 ? 'hora' : 'horas'}`
         : `${minutes} minutos`;
-      parts.push(`${service?.name || 'El servicio'} dura aproximadamente ${label}.`);
+      parts.push(`${durationService?.name || rememberedServiceName || 'El servicio'} dura aproximadamente ${label}.`);
     } else {
-      parts.push(`No tengo confirmada la duración de ${service?.name || 'ese servicio'} en este momento.`);
+      parts.push(`No tengo confirmada la duración de ${rememberedServiceName || 'ese servicio'} en este momento.`);
     }
   }
 
@@ -1227,12 +1257,28 @@ function requestedTimeFromCurrentMessage(userText, state = {}) {
   return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
 }
 
-function businessHoursOnlyQuestion(userText) {
+function businessHoursOnlyQuestion(userText, state = {}) {
   const normalized = Grounding.normalize(userText);
   const hasHoursLanguage =
     /\b(horario|horarios|a que hora|abren|abre|cierran|cierra|hora de apertura|hora de cierre)\b/.test(normalized);
   const hasAvailabilityLanguage =
     /\b(disponible|disponibilidad|espacio|espacios|lugar|lugares|se podra|se puede|tienen lugar|hay lugar|cita|agendar|agenda)\b/.test(normalized);
+
+  // En un flujo de cita, "ese/este horario" se refiere al espacio ya ofrecido
+  // o seleccionado, no al horario comercial de apertura/cierre.
+  const hasAppointmentSlotContext = Boolean(
+    state?.pending_booking ||
+    state?.collected?.selected_slot ||
+    state?.collected?.current_slot ||
+    state?.collected?.start_time ||
+    state?.last_tool_result?.selected_time
+  );
+  const refersToAppointmentSlot =
+    hasAppointmentSlotContext &&
+    /\b(ese|este|el)\s+horario\b/.test(normalized) &&
+    /\b(si|quiero|acepto|me sirve|me funciona|esta bien|confirmo|adelante|perfecto)\b/.test(normalized);
+
+  if (refersToAppointmentSlot) return false;
   return hasHoursLanguage && !hasAvailabilityLanguage;
 }
 
@@ -1244,7 +1290,7 @@ function symptomWithoutService(userText, state = {}) {
 
 function availabilityQuestionWithoutService(userText, state = {}) {
   const normalized = Grounding.normalize(userText);
-  if (businessHoursOnlyQuestion(userText)) return false;
+  if (businessHoursOnlyQuestion(userText, state)) return false;
   const asksAvailability =
     /\b(disponible|disponibilidad|espacio|espacios|lugar|lugares|se podra|se puede|tienen lugar|hay lugar|cita|agendar|agenda)\b/.test(normalized) ||
     Boolean(Grounding.parseTimePreference(userText, state.collected || {}));
@@ -1361,7 +1407,7 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
   if (
     state.collected.booking_mode !== 'cancel' &&
     state.collected.booking_mode !== 'reschedule' &&
-    businessHoursOnlyQuestion(userText)
+    businessHoursOnlyQuestion(userText, state)
   ) {
     const reply = naturalInformationReply(knowledge, state, ['business_hours'], {
       branch_key: grounding.detected?.information_branch?.branch_key || grounding.detected?.branch?.branch_key || null,
@@ -1619,7 +1665,7 @@ async function runAgent(q, ctx, incoming, userText, knowledge) {
     );
 
   const availabilityQuestion =
-    !businessHoursOnlyQuestion(userText) &&
+    !businessHoursOnlyQuestion(userText, state) &&
     (
       availabilityContinuation ||
       (

@@ -178,7 +178,11 @@ function extractPatient(text) {
       .trim();
 
     const words = withoutPhone.split(/\s+/).filter(Boolean);
-    const oneWordStop = new Set(['si', 'no', 'ok', 'okay', 'gracias', 'extraccion', 'limpieza', 'profilaxis', 'cita']);
+    const oneWordStop = new Set([
+      'si', 'no', 'ok', 'okay', 'gracias', 'mi', 'mio', 'mia',
+      'extraccion', 'limpieza', 'profilaxis', 'cita',
+      'telefono', 'celular', 'whatsapp', 'contacto'
+    ]);
     if (
       words.length >= 1 &&
       words.length <= 6 &&
