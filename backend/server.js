@@ -4940,7 +4940,10 @@ async function promotionImagesForConversation(pool, tenantId, conversationId, re
         const haystack = normalizePromoText(`${row.title || ''} ${row.description || ''}`);
         return tokens.some(token => haystack.includes(token) || (token.endsWith('s') && haystack.includes(token.slice(0,-1))));
       });
-      if (specific.length) selectedRows = specific;
+      // FIX40: si la pregunta pide una promoción específica y no existe una
+      // promoción ACTIVA que coincida, no reutilizar flyers de otras promociones.
+      // Ej.: "¿Tienen promoción de limpieza?" con limpieza desactivada => 0 imágenes.
+      selectedRows = specific;
     }
 
     if (selectedRows.length) {
