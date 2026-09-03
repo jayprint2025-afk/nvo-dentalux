@@ -1053,11 +1053,28 @@ function naturalInformationReply(knowledge, state, intents = [], options = {}) {
   if (intents.includes('promotion')) {
     // Las promociones son información general de la clínica. No exigir sucursal
     // y no filtrarlas por un servicio que quedó en memoria de una cita en curso.
-    const selectedBranchKey = options.branch_key || state.collected.branch_key || null;
+    // La sucursal guardada en una cita NO debe limitar una pregunta nueva de promociones.
+    // Sólo filtramos por sucursal cuando el paciente la menciona explícitamente en ESTE mensaje.
+    const selectedBranchKey = options.branch_key || null;
     const explicitlyRequestedServiceId = options.service_id || null;
+
+    // Los IDs de servicios son distintos por sucursal. Si el paciente pregunta, por ejemplo,
+    // por "limpieza", resolvemos el nombre del servicio y aceptamos los IDs equivalentes
+    // de todas las sucursales para no ocultar una promoción válida por un ID de otra sede.
+    const requestedService = explicitlyRequestedServiceId
+      ? knowledge.services.find(item => String(item.id) === String(explicitlyRequestedServiceId))
+      : null;
+    const requestedServiceName = Grounding.normalize(requestedService?.name || '');
+    const equivalentServiceIds = new Set(
+      (knowledge.services || [])
+        .filter(item => requestedServiceName && Grounding.normalize(item.name || '') === requestedServiceName)
+        .map(item => String(item.id))
+    );
+    if (explicitlyRequestedServiceId) equivalentServiceIds.add(String(explicitlyRequestedServiceId));
+
     const promotions = knowledge.promotions.filter(item =>
       (!selectedBranchKey || item.branch_key === selectedBranchKey) &&
-      (!explicitlyRequestedServiceId || !item.service_id || String(item.service_id) === String(explicitlyRequestedServiceId))
+      (!explicitlyRequestedServiceId || !item.service_id || equivalentServiceIds.has(String(item.service_id)))
     );
 
     const byTitle = new Map();
