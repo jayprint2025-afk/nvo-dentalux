@@ -8,9 +8,37 @@ const { loadHistory } = require('./conversation-memory');
 const LeadTools = require('./lead-tools');
 const Telemetry = require('./telemetry');
 
+function cleanShortAnswer(text, max = 100) {
+  const value = String(text || '').trim().replace(/\s+/g, ' ');
+  if (!value || value.length > max) return null;
+  if (/https?:\/\//i.test(value)) return null;
+  return value.replace(/^[\s,:;.-]+|[\s,:;.-]+$/g, '').trim() || null;
+}
+
+function absorbPendingAnswer(lead, profile, turn) {
+  const pending = String(lead?.next_step || lead?.profile?.next_step || '').toLowerCase();
+  const raw = cleanShortAnswer(turn?.text);
+  if (!raw) return profile;
+
+  // El intérprete reconoce "mi clínica se llama X", pero muchos prospectos
+  // contestan simplemente "Dentalux". Usamos el objetivo anterior para saber
+  // qué dato estaba esperando el agente.
+  if (!profile.clinic_name && /nombre de la cl[ií]nica|cl[ií]nica o consultorio/.test(pending)) {
+    return State.mergeProfile(profile, { clinic_name: raw });
+  }
+
+  if (!profile.name && /nombre del responsable/.test(pending)) {
+    return State.mergeProfile(profile, { name: raw });
+  }
+
+  // El correo se conserva únicamente si el intérprete ya validó su formato.
+  return profile;
+}
+
 async function processTurn(pool, lead, text) {
   const turn = interpret(text);
   let profile = State.mergeProfile(lead.profile || {}, turn.profile_patch || {});
+  profile = absorbPendingAnswer(lead, profile, turn);
 
   const offer = await LeadTools.getOffer(pool);
   const recommendation = Planner.recommendPlan(profile);
