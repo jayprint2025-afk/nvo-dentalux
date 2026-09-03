@@ -4944,6 +4944,19 @@ async function promotionImagesForConversation(pool, tenantId, conversationId, re
     }
 
     if (selectedRows.length) {
+      // FIX37: una misma promoción puede estar configurada en varias sucursales.
+      // Si el paciente todavía no eligió sucursal, enviar un solo flyer por promoción
+      // lógica (mismo título + descripción), no uno por cada branch_promotions.id.
+      if (!branchKey) {
+        const seenPromotions = new Set();
+        selectedRows = selectedRows.filter(row => {
+          const key = `${normalizePromoText(row.title)}|${normalizePromoText(row.description)}`;
+          if (seenPromotions.has(key)) return false;
+          seenPromotions.add(key);
+          return true;
+        });
+      }
+
       return selectedRows.map(row =>
         `${getPublicBaseUrl(req)}/api/public/promotions/${encodeURIComponent(tenantId)}/items/${encodeURIComponent(String(row.id))}/image?v=${encodeURIComponent(String(row.updated_at || ''))}`
       );
