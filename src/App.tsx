@@ -4269,7 +4269,7 @@ const [to, setTo] = useState<string>(defaultTo);
 
   const totalIngresos = payments?.reduce((s,p)=> s+p.amount, 0) || 0;
 
-  useEffect(()=>{ document.title = 'Clinica Dentalux - Sistema Completo'; },[]);
+  useEffect(()=>{ document.title = 'CliniqOne - Gestión de tu clínica'; },[]);
 
   if (isLoading) {
     return (
@@ -4321,11 +4321,11 @@ const [to, setTo] = useState<string>(defaultTo);
           <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
             <div className="flex items-center gap-3">
               <div className="w-12 h-12 bg-blue-600 rounded-xl flex items-center justify-center text-white font-bold text-lg">
-                <img src={logo} alt="Dentalux Logo" className="h-12 w-auto rounded-xl" />
+                <img src={logo} alt="CliniqOne Logo" className="h-12 w-auto rounded-xl" />
               </div>
               <div> 
-                <span className='font-semibold text-lg'>Clinica Dentalux</span>
-                <div className="text-xs text-blue-700 font-medium">Administra tu clínica, haz crecer tu sonrisa · $20 USD/mes</div>
+                <span className='font-semibold text-lg'>CliniqOne</span>
+                <div className="text-xs text-blue-700 font-medium">Tu clínica, todo en un solo lugar</div>
                 <div className="flex items-center gap-2 text-sm">
                   {isOnline ? (
                     <>
