@@ -1342,6 +1342,77 @@ function EmpresasModule({ isSuperAdmin }: { isSuperAdmin: boolean }) {
   const [aiBranches, setAiBranches] = React.useState<EmpresaBranchAI[]>([]);
   const [aiLoading, setAiLoading] = React.useState(false);
   const [aiMessage, setAiMessage] = React.useState('');
+  const [salesOpen, setSalesOpen] = React.useState(false);
+  const [salesLeads, setSalesLeads] = React.useState<any[]>([]);
+  const [salesSelected, setSalesSelected] = React.useState<any | null>(null);
+  const [salesMessages, setSalesMessages] = React.useState<any[]>([]);
+  const [salesLoading, setSalesLoading] = React.useState(false);
+  const [salesReply, setSalesReply] = React.useState('');
+  const [salesSearch, setSalesSearch] = React.useState('');
+
+  const loadSalesLeads = React.useCallback(async (search = '') => {
+    if (!isSuperAdmin) return;
+    setSalesLoading(true);
+    try {
+      const data = await api(`/sales/admin/leads${search ? `?q=${encodeURIComponent(search)}` : ''}`);
+      setSalesLeads(Array.isArray(data) ? data : []);
+    } finally {
+      setSalesLoading(false);
+    }
+  }, [isSuperAdmin]);
+
+  const openSalesAI = async () => {
+    setSalesOpen(true);
+    setSalesSelected(null);
+    setSalesMessages([]);
+    await loadSalesLeads('');
+  };
+
+  const openSalesLead = async (lead: any) => {
+    setSalesLoading(true);
+    try {
+      const data = await api(`/sales/admin/leads/${lead.id}`);
+      setSalesSelected(data?.lead || lead);
+      setSalesMessages(Array.isArray(data?.messages) ? data.messages : []);
+      setSalesLeads(items => items.map(item => item.id === lead.id ? { ...item, unread_count: 0 } : item));
+    } finally {
+      setSalesLoading(false);
+    }
+  };
+
+  const salesTakeover = async () => {
+    if (!salesSelected) return;
+    const updated = await api(`/sales/admin/leads/${salesSelected.id}/takeover`, { method: 'POST' });
+    setSalesSelected(updated);
+    await loadSalesLeads(salesSearch);
+  };
+
+  const salesRelease = async () => {
+    if (!salesSelected) return;
+    const updated = await api(`/sales/admin/leads/${salesSelected.id}/release`, { method: 'POST' });
+    setSalesSelected(updated);
+    await loadSalesLeads(salesSearch);
+  };
+
+  const sendSalesReply = async () => {
+    const text = salesReply.trim();
+    if (!salesSelected || !text) return;
+    setSalesLoading(true);
+    try {
+      const result = await api(`/sales/admin/leads/${salesSelected.id}/reply`, {
+        method: 'POST',
+        body: JSON.stringify({ message: text })
+      });
+      setSalesReply('');
+      await openSalesLead({ ...salesSelected });
+      if (result?.deliveryError) {
+        setMessage(`Error de entrega: ${result.deliveryError}`);
+      }
+    } finally {
+      setSalesLoading(false);
+    }
+  };
+
 
   const load = React.useCallback(async () => {
     setLoading(true);
@@ -1818,9 +1889,14 @@ function EmpresasModule({ isSuperAdmin }: { isSuperAdmin: boolean }) {
           <p className="text-sm text-gray-500">Administra cuentas y conecta Messenger o WhatsApp con la empresa correcta.</p>
         </div>
         {isSuperAdmin && (
-          <button onClick={openNew} className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg flex items-center gap-2">
-            <Plus className="w-4 h-4" /> Nueva Empresa
-          </button>
+          <div className="flex flex-wrap gap-2">
+            <button onClick={openSalesAI} className="px-4 py-2 bg-violet-600 hover:bg-violet-700 text-white rounded-lg flex items-center gap-2">
+              <Bot className="w-4 h-4" /> Ventas IA
+            </button>
+            <button onClick={openNew} className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg flex items-center gap-2">
+              <Plus className="w-4 h-4" /> Nueva Empresa
+            </button>
+          </div>
         )}
       </div>
 
@@ -1872,6 +1948,118 @@ function EmpresasModule({ isSuperAdmin }: { isSuperAdmin: boolean }) {
           </tbody>
         </table>
       </div>
+
+      {isSuperAdmin && salesOpen && (
+        <div className="fixed inset-0 z-[10020] bg-black/50 p-3 md:p-6">
+          <div className="mx-auto flex h-[94vh] max-w-[1500px] flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
+            <div className="flex items-center justify-between border-b px-5 py-4">
+              <div>
+                <h3 className="text-xl font-bold text-gray-900 flex items-center gap-2"><Bot className="w-5 h-5 text-violet-600" /> CliniqOne · Ventas IA V5</h3>
+                <p className="text-sm text-gray-500">Prospectos, conversación, perfil comercial y control manual de la IA.</p>
+              </div>
+              <button onClick={() => setSalesOpen(false)} className="rounded-lg p-2 hover:bg-gray-100"><X className="w-5 h-5" /></button>
+            </div>
+
+            <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[310px_minmax(0,1fr)_330px]">
+              <aside className="min-h-0 overflow-y-auto border-r bg-gray-50">
+                <div className="sticky top-0 z-10 border-b bg-gray-50 p-3">
+                  <div className="flex gap-2">
+                    <input value={salesSearch} onChange={e => setSalesSearch(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') loadSalesLeads(salesSearch); }} placeholder="Buscar prospecto..." className="min-w-0 flex-1 rounded-lg border bg-white px-3 py-2 text-sm" />
+                    <button onClick={() => loadSalesLeads(salesSearch)} className="rounded-lg border bg-white px-3"><Search className="w-4 h-4" /></button>
+                  </div>
+                </div>
+                <div className="divide-y">
+                  {salesLeads.map(lead => {
+                    const profile = lead.profile || {};
+                    const title = profile.clinic_name || lead.name || lead.contact_value || `Lead ${lead.id}`;
+                    return (
+                      <button key={lead.id} onClick={() => openSalesLead(lead)} className={`w-full p-4 text-left hover:bg-white ${salesSelected?.id === lead.id ? 'bg-white ring-1 ring-inset ring-violet-200' : ''}`}>
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="truncate font-semibold text-gray-900">{title}</span>
+                          {!!lead.unread_count && <span className="rounded-full bg-violet-600 px-2 py-0.5 text-xs text-white">{lead.unread_count}</span>}
+                        </div>
+                        <div className="mt-1 text-xs text-gray-500">{lead.contact_pref || lead.source} · {lead.stage || 'new'}</div>
+                        <div className="mt-2 flex items-center gap-2">
+                          <div className="h-1.5 flex-1 rounded-full bg-gray-200"><div className="h-1.5 rounded-full bg-violet-500" style={{width:`${Math.max(0,Math.min(100,Number(lead.score||0)))}%`}} /></div>
+                          <span className="text-[11px] text-gray-500">{lead.score || 0}%</span>
+                        </div>
+                      </button>
+                    );
+                  })}
+                  {!salesLoading && salesLeads.length === 0 && <div className="p-6 text-center text-sm text-gray-500">Todavía no hay prospectos.</div>}
+                </div>
+              </aside>
+
+              <section className="flex min-h-0 flex-col bg-white">
+                {!salesSelected ? (
+                  <div className="flex flex-1 items-center justify-center p-8 text-center text-gray-500">Selecciona un prospecto para ver la conversación.</div>
+                ) : (
+                  <>
+                    <div className="flex items-center justify-between border-b px-4 py-3">
+                      <div>
+                        <div className="font-semibold text-gray-900">{salesSelected.profile?.clinic_name || salesSelected.name || salesSelected.contact_value}</div>
+                        <div className="text-xs text-gray-500">{salesSelected.ai_paused ? 'IA pausada · conversación manual' : 'IA activa'} · {salesSelected.stage}</div>
+                      </div>
+                      <div className="flex gap-2">
+                        {salesSelected.ai_paused
+                          ? <button onClick={salesRelease} className="rounded-lg border border-green-300 bg-green-50 px-3 py-2 text-sm text-green-700">Devolver a IA</button>
+                          : <button onClick={salesTakeover} className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-700">Tomar conversación</button>}
+                      </div>
+                    </div>
+                    <div className="min-h-0 flex-1 space-y-3 overflow-y-auto bg-slate-50 p-4">
+                      {salesMessages.map(msg => (
+                        <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-start' : 'justify-end'}`}>
+                          <div className={`max-w-[82%] rounded-2xl px-4 py-2.5 text-sm shadow-sm ${msg.role === 'user' ? 'bg-white text-gray-900' : msg.actor === 'admin' ? 'bg-amber-100 text-amber-950' : 'bg-violet-600 text-white'}`}>
+                            <div className="mb-1 text-[10px] opacity-70">{msg.role === 'user' ? 'Prospecto' : msg.actor === 'admin' ? 'Tú' : 'Ventas IA'}</div>
+                            <div className="whitespace-pre-wrap">{msg.content}</div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="border-t bg-white p-3">
+                      <div className="flex gap-2">
+                        <textarea value={salesReply} onChange={e => setSalesReply(e.target.value)} placeholder={salesSelected.ai_paused ? 'Escribe al prospecto...' : 'Toma la conversación para responder manualmente'} disabled={!salesSelected.ai_paused} rows={2} className="min-h-[52px] flex-1 resize-none rounded-xl border px-3 py-2 text-sm disabled:bg-gray-100" />
+                        <button onClick={sendSalesReply} disabled={!salesSelected.ai_paused || !salesReply.trim() || salesLoading} className="rounded-xl bg-blue-600 px-4 text-white disabled:opacity-40"><Send className="w-4 h-4" /></button>
+                      </div>
+                    </div>
+                  </>
+                )}
+              </section>
+
+              <aside className="min-h-0 overflow-y-auto border-l bg-white p-4">
+                {!salesSelected ? null : (() => {
+                  const p = salesSelected.profile || {};
+                  const Row = ({label,value}:{label:string,value:any}) => <div className="border-b py-2"><div className="text-[11px] uppercase tracking-wide text-gray-400">{label}</div><div className="mt-0.5 text-sm text-gray-800">{value || '—'}</div></div>;
+                  return (
+                    <>
+                      <h4 className="font-semibold text-gray-900">Perfil comercial</h4>
+                      <div className="mt-2">
+                        <Row label="Nombre" value={p.name} />
+                        <Row label="Clínica" value={p.clinic_name} />
+                        <Row label="Teléfono" value={p.phone || salesSelected.contact_value} />
+                        <Row label="Correo" value={p.email} />
+                        <Row label="Ciudad" value={p.city} />
+                        <Row label="Sucursales" value={p.branches} />
+                        <Row label="Sistema actual" value={p.current_software} />
+                        <Row label="Necesidades" value={(p.pain_points || []).join(', ')} />
+                        <Row label="Intereses" value={(p.interested_features || []).join(', ')} />
+                        <Row label="Objeciones" value={(p.objections || []).join(', ')} />
+                        <Row label="Plan recomendado" value={p.recommended_plan} />
+                        <Row label="Intención" value={p.buying_intent} />
+                        <Row label="Siguiente paso" value={salesSelected.next_step || p.next_step} />
+                      </div>
+                      <div className="mt-4 rounded-xl bg-violet-50 p-3">
+                        <div className="text-xs font-medium text-violet-700">Puntuación comercial</div>
+                        <div className="mt-1 text-2xl font-bold text-violet-800">{salesSelected.score || 0}%</div>
+                      </div>
+                    </>
+                  );
+                })()}
+              </aside>
+            </div>
+          </div>
+        </div>
+      )}
 
       {aiCompany && (
         <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/50 p-4">

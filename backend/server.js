@@ -5311,6 +5311,13 @@ app.post('/api/messenger/webhook', async (req, res) => {
 
 
 
+function salesSuperAdminOnly(req, res, next) {
+  if (req.auth?.role !== 'superadmin') {
+    return res.status(403).json({ error: 'Acceso exclusivo para el superadministrador' });
+  }
+  next();
+}
+
 // ===================== CliniqOne Sales AI (Facebook / Web) =====================
 // Monta un módulo de "ventas" independiente (no sucursal), que usa el mismo /api/ai/chat del server central.
 // Requiere: ./cliniqone_sales_router.js (incluido en tu repo) y (opcional) SALES_DATABASE_URL para elegir DB.
@@ -5334,9 +5341,10 @@ try {
   const salesRouter = createCliniqOneSalesRouter({
     centralAiBaseUrl: publicBaseUrl,
     centralAiSecret: process.env.CENTRAL_AI_SECRET || process.env.AI_SECRET || '',
-    databaseUrl: process.env.SALES_DATABASE_URL || '',
-    // Si quieres forzar que siempre use DB2 desde el router sin tocar env:
-    // forceDbKey: 'db2'
+    databaseUrl: process.env.SALES_DATABASE_URL || process.env.DATABASE_URL || '',
+    authRequired,
+    superAdminOnly: salesSuperAdminOnly,
+    sendMessenger: async (senderId, text, pageId) => fbSendText(String(senderId), String(text), String(pageId || ''))
   });
 
   app.use('/api/sales', salesRouter);
