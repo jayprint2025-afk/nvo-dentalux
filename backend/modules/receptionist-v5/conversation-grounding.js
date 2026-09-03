@@ -644,19 +644,38 @@ function bookingIntent(text, collected = {}) {
   const hasDate =
     /\b(hoy|manana|pasado manana|lunes|martes|miercoles|jueves|viernes|sabado|domingo)\b/.test(n);
 
+  const hasServiceConcept = Boolean(collected.service_id || collected.service_name);
+  const mentionsService =
+    /\b(consulta|limpieza|profilaxis|valoracion|revision|tratamiento|resina|resinas|extraccion|ortodoncia|blanqueamiento|corona|coronas)\b/.test(n);
+
   const asksAvailability =
     /\b(disponible|disponibilidad|espacio|espacios|lugar|lugares|se podra|se puede|tienen lugar|hay lugar)\b/.test(n) ||
     (/\b(horario|horarios|hora|horas)\b/.test(n) &&
-      /\b(hoy|manana|pasado manana|lunes|martes|miercoles|jueves|viernes|sabado|domingo|cita|agendar|disponible|lugar|espacio)\b/.test(n));
+      (
+        hasDate ||
+        hasServiceConcept ||
+        mentionsService ||
+        /\b(cita|agendar|agenda|disponible|lugar|espacio)\b/.test(n)
+      ));
 
   const explicitBooking =
     /\b(agendar|agenda|agendame|ajendame|cita|consulta|limpieza|valoracion|revision|tratamiento|quiero|necesito|me gustaria)\b/.test(n);
 
+  // Peticiones naturales completas que ya expresan intención de cita aunque
+  // todavía no indiquen fecha, sucursal ni hora.
+  // Ej.: "Quiero una cita para limpieza", "Quiero agendar una limpieza",
+  // "Quiero una valoración", "Necesito una cita".
+  const directBookingRequest =
+    /\b(?:quiero|necesito|me gustaria)\s+(?:agendar|reservar|sacar)\b/.test(n) ||
+    /\b(?:quiero|necesito|me gustaria)\s+(?:(?:una|un)\s+)?(?:cita|consulta|limpieza|profilaxis|valoracion|revision|tratamiento|resina|resinas|extraccion|ortodoncia|blanqueamiento|corona|coronas)\b/.test(n);
+
+  if (directBookingRequest) return true;
+
   // Si ya conocemos el servicio, una consulta de disponibilidad o una hora concreta
   // conserva el contexto de la cita aunque el paciente no repita "agendar" o "cita".
   const timePreference = parseTimePreference(text, collected);
-  if (collected.service_id && asksAvailability && (hasDate || collected.date)) return true;
-  if (collected.service_id && collected.date && timePreference) return true;
+  if (hasServiceConcept && asksAvailability) return true;
+  if (hasServiceConcept && collected.date && timePreference) return true;
 
   return explicitBooking && (
     hasDate ||

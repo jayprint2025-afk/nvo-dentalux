@@ -1264,6 +1264,25 @@ function businessHoursOnlyQuestion(userText, state = {}) {
   const hasAvailabilityLanguage =
     /\b(disponible|disponibilidad|espacio|espacios|lugar|lugares|se podra|se puede|tienen lugar|hay lugar|cita|agendar|agenda)\b/.test(normalized);
 
+  const explicitlyOpeningOrClosing =
+    /\b(a que hora\s+(?:abren|abre|cierran|cierra)|abren|abre|cierran|cierra|hora de apertura|hora de cierre)\b/.test(normalized);
+
+  const hasServiceContext = Boolean(
+    state?.collected?.service_id ||
+    state?.collected?.service_name
+  );
+
+  const mentionsTreatment =
+    /\b(limpieza|profilaxis|valoracion|consulta|revision|tratamiento|resina|resinas|extraccion|ortodoncia|blanqueamiento|corona|coronas)\b/.test(normalized);
+
+  // "horarios para/de [tratamiento]" significa espacios de agenda, no
+  // horario comercial. Grounding ya corrió antes de esta función, por lo que
+  // también respetamos el servicio detectado dinámicamente en collected.
+  const asksTreatmentSlots =
+    /\b(horario|horarios|hora|horas)\b/.test(normalized) &&
+    (hasServiceContext || mentionsTreatment) &&
+    !explicitlyOpeningOrClosing;
+
   // En un flujo de cita, "ese/este horario" se refiere al espacio ya ofrecido
   // o seleccionado, no al horario comercial de apertura/cierre.
   const hasAppointmentSlotContext = Boolean(
@@ -1278,7 +1297,7 @@ function businessHoursOnlyQuestion(userText, state = {}) {
     /\b(ese|este|el)\s+horario\b/.test(normalized) &&
     /\b(si|quiero|acepto|me sirve|me funciona|esta bien|confirmo|adelante|perfecto)\b/.test(normalized);
 
-  if (refersToAppointmentSlot) return false;
+  if (refersToAppointmentSlot || asksTreatmentSlots) return false;
   return hasHoursLanguage && !hasAvailabilityLanguage;
 }
 
