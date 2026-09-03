@@ -445,13 +445,16 @@ function deterministicInformation(knowledge, state, intents) {
       );
     }
     if (intent === 'promotion') {
+      // Una pregunta general por promociones NO depende del servicio que el paciente
+      // estuviera consultando antes. Si aún no eligió sucursal, mostramos las
+      // promociones vigentes de toda la empresa.
       const promotions = knowledge.promotions.filter(item =>
-        (!state.collected.branch_key || item.branch_key === state.collected.branch_key) &&
-        (!state.collected.service_id || !item.service_id || String(item.service_id) === String(state.collected.service_id))
+        !state.collected.branch_key || item.branch_key === state.collected.branch_key
       );
+      const uniqueTitles = [...new Set(promotions.map(item => String(item.title || '').trim()).filter(Boolean))];
       parts.push(
-        promotions.length
-          ? `Promociones vigentes: ${promotions.map(item => item.title).join(', ')}.`
+        uniqueTitles.length
+          ? `Promociones vigentes: ${uniqueTitles.join(', ')}.`
           : `No tengo promociones vigentes confirmadas${branch ? ` para ${branch.name}` : ''}.`
       );
     }
@@ -1048,14 +1051,34 @@ function naturalInformationReply(knowledge, state, intents = [], options = {}) {
   }
 
   if (intents.includes('promotion')) {
+    // Las promociones son información general de la clínica. No exigir sucursal
+    // y no filtrarlas por un servicio que quedó en memoria de una cita en curso.
+    const selectedBranchKey = options.branch_key || state.collected.branch_key || null;
     const promotions = knowledge.promotions.filter(item =>
-      (!state.collected.branch_key || item.branch_key === state.collected.branch_key) &&
-      (!state.collected.service_id || !item.service_id || String(item.service_id) === String(state.collected.service_id))
+      !selectedBranchKey || item.branch_key === selectedBranchKey
     );
+
+    const byTitle = new Map();
+    for (const promo of promotions) {
+      const title = String(promo?.title || '').trim();
+      if (!title) continue;
+      const key = Grounding.normalize(title);
+      if (!byTitle.has(key)) byTitle.set(key, { title, branches: new Set() });
+      const branchName = knowledge.branches.find(item => item.branch_key === promo.branch_key)?.name;
+      if (branchName) byTitle.get(key).branches.add(branchName);
+    }
+
+    const allBranchNames = new Set((knowledge.branches || []).map(item => item.name).filter(Boolean));
+    const labels = [...byTitle.values()].map(item => {
+      const branches = [...item.branches];
+      if (selectedBranchKey || !branches.length || branches.length >= allBranchNames.size) return item.title;
+      return `${item.title} (${branches.join(' y ')})`;
+    });
+
     parts.push(
-      promotions.length
-        ? `Promociones vigentes: ${promotions.map(item => item.title).join(', ')}.`
-        : `Por el momento no tengo una promoción vigente confirmada${service ? ` para ${service.name}` : ''}.`
+      labels.length
+        ? `Promociones vigentes: ${labels.join(', ')}.`
+        : `Por el momento no tengo una promoción vigente confirmada${branch ? ` para ${branch.name}` : ''}.`
     );
   }
 

@@ -4873,7 +4873,7 @@ async function getOrCreateAiConversationIdForMessenger(pageId, psid, dbKey, tena
   }
 }
 
-async function promotionImageForConversation(pool, tenantId, conversationId, req) {
+async function promotionImagesForConversation(pool, tenantId, conversationId, req) {
   try {
     const { rows: convRows } = await pool.query(
       `SELECT COALESCE(state->'collected'->>'branch_key', state->>'branch_key', sucursal_id) AS branch_key
@@ -4882,32 +4882,34 @@ async function promotionImageForConversation(pool, tenantId, conversationId, req
         LIMIT 1`,
       [conversationId, tenantId]
     );
-    let branchKey = String(convRows?.[0]?.branch_key || '').trim();
+    const branchKey = String(convRows?.[0]?.branch_key || '').trim();
 
-    if (!branchKey) {
-      const { rows } = await pool.query(
-        `SELECT branch_key
-           FROM branch_promotion_media
-          WHERE tenant_id=$1::uuid
-          ORDER BY updated_at DESC
-          LIMIT 2`,
-        [tenantId]
-      );
-      if (rows.length === 1) branchKey = String(rows[0].branch_key || '').trim();
-    }
-    if (!branchKey) return null;
+    // Si ya existe sucursal en la conversación, manda únicamente su flyer.
+    // Si todavía no existe, las promociones siguen siendo consultables: manda
+    // los flyers configurados para la empresa sin forzar selección de sucursal.
+    const { rows } = branchKey
+      ? await pool.query(
+          `SELECT branch_key, updated_at
+             FROM branch_promotion_media
+            WHERE tenant_id=$1::uuid AND branch_key=$2
+            ORDER BY updated_at DESC`,
+          [tenantId, branchKey]
+        )
+      : await pool.query(
+          `SELECT branch_key, updated_at
+             FROM branch_promotion_media
+            WHERE tenant_id=$1::uuid
+            ORDER BY updated_at DESC
+            LIMIT 8`,
+          [tenantId]
+        );
 
-    const { rows } = await pool.query(
-      `SELECT 1 FROM branch_promotion_media
-        WHERE tenant_id=$1::uuid AND branch_key=$2 LIMIT 1`,
-      [tenantId, branchKey]
+    return (rows || []).map(row =>
+      `${getPublicBaseUrl(req)}/api/public/promotions/${encodeURIComponent(tenantId)}/${encodeURIComponent(String(row.branch_key || ''))}/image?v=${encodeURIComponent(String(row.updated_at || ''))}`
     );
-    if (!rows[0]) return null;
-
-    return `${getPublicBaseUrl(req)}/api/public/promotions/${encodeURIComponent(tenantId)}/${encodeURIComponent(branchKey)}/image`;
   } catch (error) {
-    console.warn('⚠️ No se pudo resolver imagen de promoción Messenger:', error.message);
-    return null;
+    console.warn('⚠️ No se pudieron resolver imágenes de promoción Messenger:', error.message);
+    return [];
   }
 }
 
@@ -5008,8 +5010,16 @@ async function callClinicAiForMessenger(senderId, pageId, msgText, req) {
 
   const promotionIntent = /\b(promocion(?:es)?|promoción(?:es)?|oferta(?:s)?|descuento(?:s)?)\b/i.test(safeText);
   if (promotionIntent) {
-    const promotionImageUrl = await promotionImageForConversation(pool, tenantId, conversationId, req);
-    if (promotionImageUrl) data.promotionImageUrl = promotionImageUrl;
+    const promotionImageUrls = await promotionImagesForConversation(pool, tenantId, conversationId, req);
+    if (promotionImageUrls.length) {
+      data.promotionImageUrls = promotionImageUrls;
+      data.promotionImageUrl = promotionImageUrls[0]; // compatibilidad
+      console.log('🖼️ Flyers de promoción Messenger resueltos', {
+        tenantId,
+        conversationId,
+        count: promotionImageUrls.length
+      });
+    }
   }
 
   return data;
@@ -5194,8 +5204,12 @@ app.post('/api/messenger/webhook', async (req, res) => {
           (ai?.error ? 'Estoy teniendo un problema técnico. Intenta de nuevo.' : 'Gracias. ¿Te ayudo a agendar o necesitas información?');
 
         await fbSendText(senderId, reply, entry?.id);
-        if (ai?.promotionImageUrl) {
-          await fbSendImage(senderId, ai.promotionImageUrl, entry?.id);
+        const promotionImages = [
+          ...(Array.isArray(ai?.promotionImageUrls) ? ai.promotionImageUrls : []),
+          ...(ai?.promotionImageUrl ? [ai.promotionImageUrl] : []),
+        ].filter((url, index, list) => url && list.indexOf(url) === index);
+        for (const imageUrl of promotionImages) {
+          await fbSendImage(senderId, imageUrl, entry?.id);
         }
       }
     }

@@ -46,7 +46,8 @@ async function loadAllServices(q, tenantId, branches) {
   return services;
 }
 
-async function loadPromotions(q, tenantId) {
+async function loadPromotions(q, tenantId, branches = []) {
+  let structured = [];
   try {
     const { rows } = await q(
       `SELECT branch_key,title,description,start_date,end_date,service_id
@@ -57,18 +58,50 @@ async function loadPromotions(q, tenantId) {
         ORDER BY branch_key,title`,
       [tenantId]
     );
-    return rows || [];
+    structured = rows || [];
   } catch (error) {
     if (!['42P01','42703'].includes(error.code)) console.warn('V5 knowledge promotions:', error.message);
-    return [];
   }
+
+  // Configuración actual del panel: branches.promotions (una promoción por línea).
+  // Se incorpora como fuente autoritativa para que V5 no dependa de que exista
+  // un registro duplicado en branch_promotions.
+  const merged = [...structured];
+  const normalize = value => String(value || '')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+  const seen = new Set(merged.map(item => `${String(item.branch_key || '')}|${normalize(item.title)}`));
+
+  for (const branch of branches || []) {
+    const branchKey = String(branch?.branch_key || '').trim();
+    const lines = String(branch?.promotions || '')
+      .split(/\r?\n/)
+      .map(line => line.trim())
+      .filter(Boolean);
+
+    for (const title of lines) {
+      const key = `${branchKey}|${normalize(title)}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      merged.push({
+        branch_key: branchKey,
+        title,
+        description: '',
+        start_date: null,
+        end_date: null,
+        service_id: null,
+        source: 'branches.promotions',
+      });
+    }
+  }
+
+  return merged;
 }
 
 async function loadClinicKnowledge(q, ctx) {
   const tenantId = String(ctx.tenant_id || ctx.clinic_id);
   const branches = await loadBranches(q, tenantId);
   const services = await loadAllServices(q, tenantId, branches);
-  const promotions = await loadPromotions(q, tenantId);
+  const promotions = await loadPromotions(q, tenantId, branches);
   const urgentPhone = branches.find(branch => branch.phone)?.phone || null;
   return {
     tenant_id: tenantId,
