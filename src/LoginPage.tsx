@@ -57,12 +57,12 @@ export default function LoginPage({
           <div className="mx-auto mb-5 flex h-24 w-24 items-center justify-center rounded-3xl bg-white p-3 shadow-xl">
             <img
               src={logo}
-              alt="Dentalux"
+              alt="CliniqOne"
               className="max-h-full max-w-full object-contain"
             />
           </div>
           <h1 className="text-3xl font-bold tracking-tight text-white">
-            Dentalux
+            CliniqOne
           </h1>
           <p className="mt-2 text-sm text-sky-100">
             Acceso a tu plataforma
@@ -118,7 +118,7 @@ export default function LoginPage({
           </button>
 
           <p className="mt-6 text-center text-xs text-slate-400">
-            Plataforma privada Dentalux
+            Plataforma CliniqOne
           </p>
         </form>
       </section>
