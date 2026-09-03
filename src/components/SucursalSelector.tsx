@@ -6,7 +6,8 @@ import {
   getSucursalActual,
   setSucursal,
   debugSucursalConfig,
-  testSucursalAPI
+  testSucursalAPI,
+  fetchBranches
 } from '../lib/api';
 
 
@@ -17,35 +18,63 @@ const SucursalSelector = ({ onSucursalChange, showDebug = false }) => {
   const [loading, setLoading] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState('checking');
   
-  const sucursales = [
-    { 
-      id: 'sucursal_1', 
-      nombre: 'Sucursal Victoria', 
-      color: 'bg-blue-500',
-      descripcion: 'Oficina principal'
-    },
-    { 
-      id: 'sucursal_2', 
-      nombre: 'Sucursal Condesa', 
-      color: 'bg-green-500',
-      descripcion: 'Sucursal secundaria'
-    }
+
+  const [sucursales, setSucursales] = useState([]);
+
+  const branchColors = [
+    'bg-blue-500', 'bg-green-500', 'bg-violet-500', 'bg-amber-500',
+    'bg-pink-500', 'bg-cyan-500', 'bg-orange-500', 'bg-emerald-500'
   ];
 
+  const cargarSucursales = async () => {
+    try {
+      const branches = await fetchBranches();
+      const mapped = branches.map((branch, index) => ({
+        id: branch.branchKey,
+        nombre: branch.name || branch.branchKey,
+        color: branchColors[index % branchColors.length],
+        descripcion: index === 0 ? 'Oficina principal' : 'Sucursal'
+      }));
+
+      setSucursales(mapped);
+
+      const current = getSucursalActual();
+      const currentExists = mapped.some(branch => branch.id === current);
+      if (!currentExists && mapped.length > 0) {
+        setSucursal(mapped[0].id);
+        setSucursalActual(mapped[0].id);
+        if (onSucursalChange) onSucursalChange(mapped[0].id);
+      }
+
+      return mapped;
+    } catch (error) {
+      console.error('Error cargando sucursales reales:', error);
+      return [];
+    }
+  };
+
   useEffect(() => {
-    // Escuchar cambios de sucursal
     const handleSucursalChange = (event) => {
       setSucursalActual(event.detail.sucursal);
       setIsOpen(false);
     };
-    
+
+    const handleBranchesChanged = async () => {
+      await cargarSucursales();
+      await verificarEstadisticas();
+    };
+
     window.addEventListener('sucursalChanged', handleSucursalChange);
-    
-    // Verificar estadísticas al montar
-    verificarEstadisticas();
-    
+    window.addEventListener('dentalux:branches-changed', handleBranchesChanged);
+
+    (async () => {
+      await cargarSucursales();
+      await verificarEstadisticas();
+    })();
+
     return () => {
       window.removeEventListener('sucursalChanged', handleSucursalChange);
+      window.removeEventListener('dentalux:branches-changed', handleBranchesChanged);
     };
   }, []);
 
@@ -150,7 +179,7 @@ const SucursalSelector = ({ onSucursalChange, showDebug = false }) => {
         <Building2 className="w-5 h-5 text-gray-600" />
         <div className="flex-1 text-left">
           <div className="font-medium text-gray-900">
-            {sucursalActualData?.nombre || 'Sucursal Desconocida'}
+            {sucursalActualData?.nombre || sucursalActual || 'Sucursal'}
           </div>
           <div className="text-xs text-gray-500">
             {getSucursalStats(sucursalActual)} registros
@@ -172,7 +201,7 @@ const SucursalSelector = ({ onSucursalChange, showDebug = false }) => {
               <h3 className="font-semibold text-gray-800">Seleccionar Sucursal</h3>
               <div className="flex items-center gap-2">
                 <button
-                  onClick={verificarEstadisticas}
+                  onClick={async () => { await cargarSucursales(); await verificarEstadisticas(); }}
                   className="p-1 hover:bg-gray-100 rounded-lg"
                   title="Actualizar estadísticas"
                   disabled={loading}

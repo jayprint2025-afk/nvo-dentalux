@@ -133,6 +133,23 @@ export const testSucursalAPI = async () => {
 };
 
 
+// ===================== Sucursales =====================
+export type AppBranch = {
+  branchKey: string;
+  name: string;
+  phone?: string;
+  address?: string;
+  active?: boolean;
+  aiEnabled?: boolean;
+  bookingEnabled?: boolean;
+  order?: number;
+};
+
+export const fetchBranches = async (): Promise<AppBranch[]> => {
+  const data = await api('/branches');
+  return Array.isArray(data) ? data : [];
+};
+
 // ===================== Empresas =====================
 export const fetchCompanies = () => api('/companies');
 export const createCompany = (data: unknown) => api('/companies', { method: 'POST', body: JSON.stringify(data) });

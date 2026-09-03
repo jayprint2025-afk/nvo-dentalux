@@ -1434,6 +1434,33 @@ app.get('/api/debug/sucursales', ah(async (_req, res) => {
 }));
 
 // ==============================
+// BRANCHES — catálogo autoritativo para selector + IA + agenda
+// ==============================
+app.get('/api/branches', authRequired, ah(async (req, res) => {
+  const tenantId = getTenantId(req);
+  const { rows } = await q(
+    `SELECT branch_key, name, phone, address, active,
+            ai_enabled, booking_enabled
+       FROM branches
+      WHERE tenant_id = $1::uuid
+        AND COALESCE(active, TRUE) = TRUE
+      ORDER BY created_at ASC, name ASC, branch_key ASC`,
+    [tenantId]
+  );
+
+  res.json(rows.map((row, index) => ({
+    branchKey: String(row.branch_key || ''),
+    name: String(row.name || row.branch_key || ''),
+    phone: String(row.phone || ''),
+    address: String(row.address || ''),
+    active: row.active !== false,
+    aiEnabled: row.ai_enabled !== false,
+    bookingEnabled: row.booking_enabled !== false,
+    order: index
+  })));
+}));
+
+// ==============================
 // DOCTORS — aislado por empresa + sucursal
 // ==============================
 app.get('/api/doctors', authRequired, ah(async (req, res) => {

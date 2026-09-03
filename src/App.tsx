@@ -1622,6 +1622,7 @@ function EmpresasModule({ isSuperAdmin }: { isSuperAdmin: boolean }) {
       }
     }
     setAiBranches(items => items.filter(item => item.branchKey !== branchKey));
+    window.dispatchEvent(new CustomEvent('dentalux:branches-changed'));
     setAiMessage('Sucursal retirada de la empresa.');
     setAiLoading(false);
   };
@@ -1800,6 +1801,7 @@ function EmpresasModule({ isSuperAdmin }: { isSuperAdmin: boolean }) {
       });
       setAiBranches(Array.isArray(saved) ? saved.map((item: EmpresaBranchAI) => ({ ...item, promotionItems: Array.isArray(item.promotionItems) ? item.promotionItems : [], treatments: Array.isArray(item.treatments) ? item.treatments : [] })) : aiBranches);
       setAiMessage('Configuración de sucursales e IA guardada correctamente.');
+      window.dispatchEvent(new CustomEvent('dentalux:branches-changed'));
       await load();
     } catch (e: any) {
       setAiMessage(`Error: ${e?.message || 'No se pudo guardar la configuración'}`);
