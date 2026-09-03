@@ -23,9 +23,12 @@ async function processTurn(pool, lead, text) {
     const onboarding = await LeadTools.createOnboarding(pool, lead, profile);
     if (onboarding?.url) {
       profile = State.mergeProfile(profile, { onboarding_url: onboarding.url, onboarding_token_created: true, next_step: 'Completar registro seguro' });
-      stage = 'onboarding';
-      objective = 'Compartir el enlace seguro de onboarding y explicar que el cliente crea personalmente su contraseña.';
     }
+  }
+
+  if (profile.onboarding_url) {
+    stage = 'onboarding';
+    objective = 'Compartir el enlace seguro de onboarding directamente en esta conversación. No prometer envío por correo.';
   }
   const score = LeadTools.calculateScore(profile, stage);
   profile = State.mergeProfile(profile, { next_step: objective });

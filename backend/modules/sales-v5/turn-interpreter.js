@@ -22,7 +22,7 @@ function extractBranches(text) {
 
 function inferIntent(text) {
   const n = norm(text);
-  if (/(quiero probar|quiero registr|me registro|crear cuenta|empezar|contratar|lo quiero|me interesa mucho)/.test(n)) return 'close';
+  if (/(quiero probar|quiero registr|me registro|crear cuenta|empezar|contratar|lo quiero|me interesa mucho|envia(?:melo|lo)?|mand(?:a|ame)lo|m[aá]ndamelo|ok dale|dale|listo|hazlo|continua|contin[uú]a|procede|adelante)/.test(n)) return 'close';
   if (/(precio|costo|cuanto cuesta|planes|mensualidad)/.test(n)) return 'pricing';
   if (/(compar|vs\b|versus|agenda.?pro|dentidesk|doctoralia|software que uso|otro programa)/.test(n)) return 'competition';
   if (/(demo|demostracion|ver el sistema|prueba)/.test(n)) return 'demo';

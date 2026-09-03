@@ -13,7 +13,15 @@ function timeoutFetch(url, options, ms) {
   return fetch(url, { ...options, signal: controller.signal }).finally(() => clearTimeout(timer));
 }
 
+function onboardingReply(profile = {}) {
+  const url = String(profile.onboarding_url || '').trim();
+  if (!url) return null;
+  return `Excelente ✅ Tu registro seguro de CliniqOne ya está listo.\n\nAquí puedes crear personalmente tu contraseña y activar tu cuenta:\n${url}\n\nEste enlace es personal; no compartas tu contraseña por este chat.`;
+}
+
 function fallback(profile, turn, objective, offer = {}) {
+  const onboarding = onboardingReply(profile);
+  if (onboarding) return onboarding;
   const price = Number(offer.price_mxn || 1490).toLocaleString('es-MX');
   if (turn.intent === 'pricing') {
     return `CliniqOne tiene un solo precio: $${price} MXN al mes. Incluye la plataforma, doctores y sucursales ilimitados, además de los asistentes virtuales IA para WhatsApp y Facebook Messenger.`;
@@ -29,6 +37,8 @@ function fallback(profile, turn, objective, offer = {}) {
 }
 
 async function writeReply({ profile, turn, objective, history = [], offer = {} }) {
+  const onboarding = onboardingReply(profile);
+  if (onboarding) return onboarding;
   if (!API_KEY) return fallback(profile, turn, objective, offer);
 
   const system = [
@@ -62,4 +72,4 @@ async function writeReply({ profile, turn, objective, history = [], offer = {} }
   return String(json?.choices?.[0]?.message?.content || '').trim() || fallback(profile, turn, objective, offer);
 }
 
-module.exports = { writeReply, fallback, DEFAULT_MODEL };
+module.exports = { writeReply, fallback, onboardingReply, DEFAULT_MODEL };
