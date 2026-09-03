@@ -4965,22 +4965,11 @@ async function promotionImagesForConversation(pool, tenantId, conversationId, re
       );
     }
 
-    // Compatibilidad con el flyer general del FIX35 mientras se migran promociones.
-    const legacy = branchKey
-      ? await pool.query(
-          `SELECT branch_key, updated_at FROM branch_promotion_media
-            WHERE tenant_id=$1::uuid AND branch_key=$2 ORDER BY updated_at DESC`,
-          [tenantId, branchKey]
-        )
-      : await pool.query(
-          `SELECT branch_key, updated_at FROM branch_promotion_media
-            WHERE tenant_id=$1::uuid ORDER BY updated_at DESC LIMIT 8`,
-          [tenantId]
-        );
-
-    return (legacy.rows || []).map(row =>
-      `${getPublicBaseUrl(req)}/api/public/promotions/${encodeURIComponent(tenantId)}/${encodeURIComponent(String(row.branch_key || ''))}/image?v=${encodeURIComponent(String(row.updated_at || ''))}`
-    );
+    // FIX41: branch_promotions es la fuente autoritativa de flyers.
+    // Si no existe una promoción ACTIVA que coincida con la consulta,
+    // no reutilizar el flyer general legacy de branch_promotion_media.
+    // Esto evita enviar imágenes de promociones desactivadas o no relacionadas.
+    return [];
   } catch (error) {
     console.warn('⚠️ No se pudieron resolver imágenes de promoción Messenger:', error.message);
     return [];
