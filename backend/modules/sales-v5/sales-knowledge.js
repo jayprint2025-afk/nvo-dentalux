@@ -96,8 +96,7 @@ const PRODUCT_MODULES = Object.freeze({
   soporte: {
     name: 'Capacitación y soporte',
     facts: [
-      'El acompañamiento debe explicarse como capacitación y soporte para aprender a utilizar la plataforma.',
-      'No inventes horarios, número de sesiones, modalidad, tiempos de respuesta ni SLA si esos datos no están configurados comercialmente.'
+      'CliniqOne contempla capacitación y soporte para acompañar a la clínica en el aprendizaje y uso de la plataforma.'
     ]
   }
 });

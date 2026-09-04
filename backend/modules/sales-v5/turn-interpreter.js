@@ -44,8 +44,8 @@ function inferSignals(text) {
   if (/(inventario|stock|insumos)/.test(n)) pain.push('inventario');
   if (/(factur|cfdi)/.test(n)) interests.push('facturación CFDI');
   if (/(whatsapp|recordatorio|confirmacion)/.test(n)) interests.push('WhatsApp automático');
-  if (/(ia|inteligencia artificial|messenger|facebook)/.test(n)) interests.push('IA');
-  if (/(agenda|citas)/.test(n)) interests.push('agenda');
+  if (/(\bia\b|inteligencia artificial|messenger|facebook)/.test(n)) interests.push('IA');
+  if (/(\bagenda\b|\bcitas?\b)/.test(n)) interests.push('agenda');
   if (/(expediente|odontograma)/.test(n)) interests.push('expediente/odontograma');
   if (/(caro|precio alto|mucho dinero)/.test(n)) objections.push('precio');
   if (/(no quiero cambiar|migrar|cambiar de sistema)/.test(n)) objections.push('cambio de sistema');
@@ -71,8 +71,11 @@ function inferSignals(text) {
   const software = String(text || '').match(/(?:uso|utilizo|trabajo con)\s+([A-Za-z0-9 ._-]{2,40})/i)?.[1]?.trim();
   if (software && software.length <= 40) patch.current_software = software;
 
-  if (/(me interesa|quiero probar|quiero registr|contratar|crear cuenta)/.test(n)) patch.buying_intent = 'high';
-  else if (/(precio|demo|compar|planes)/.test(n)) patch.buying_intent = 'medium';
+  // Intención alta solo cuando el prospecto expresa una acción real de cierre.
+  // "Me interesa el inventario" o "me interesa saber más" es interés comercial,
+  // pero no debe disparar el registro antes de responder sus dudas.
+  if (/(quiero probar|quiero registr|me registro|contratar|crear cuenta|lo quiero|me interesa mucho|adelante|procede|hazlo|mandamelo|mándamelo|enviamelo|envíamelo)/.test(n)) patch.buying_intent = 'high';
+  else if (/(me interesa|precio|demo|compar|planes)/.test(n)) patch.buying_intent = 'medium';
 
   return patch;
 }
