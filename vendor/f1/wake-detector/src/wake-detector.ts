@@ -1,7 +1,7 @@
 import { TypedEventBus, type EventListener, type Unsubscribe } from "./events/typed-event-bus.js";
 import { SpectralFeatureExtractor, type WakeFeatureExtractor } from "./features/spectral-feature-extractor.js";
 import type { WakeModelPort } from "./model/wake-model-port.js";
-import { ConsecutiveHitPolicy, type WakeDetectionPolicy } from "./policy/wake-detection-policy.js";
+import { HybridConfidencePolicy, type WakeDetectionPolicy } from "./policy/wake-detection-policy.js";
 import { FrameCooldownController, type CooldownPort } from "./state/cooldown-controller.js";
 import type { WakeEventMap, WakeDetectorError } from "./types/events.js";
 import type {
@@ -19,6 +19,8 @@ interface ResolvedWakeConfig {
   readonly windowFrames: number;
   readonly detectionThreshold: number;
   readonly consecutiveHits: number;
+  readonly strongDetectionThreshold: number;
+  readonly minimumVadConfidence: number;
   readonly cooldownFrames: number;
   readonly maxSilentFramesBeforeReset: number;
   readonly expectedSampleRate: number;
@@ -29,8 +31,10 @@ interface ResolvedWakeConfig {
 const DEFAULTS: ResolvedWakeConfig = {
   featureBands: 16,
   windowFrames: 12,
-  detectionThreshold: 0.8,
+  detectionThreshold: 0.70,
   consecutiveHits: 2,
+  strongDetectionThreshold: 0.88,
+  minimumVadConfidence: 0.55,
   cooldownFrames: 15,
   maxSilentFramesBeforeReset: 5,
   expectedSampleRate: 16_000,
@@ -57,6 +61,7 @@ export class WakeDetector implements WakeDetectorProcessor {
   #silentFrames = 0;
   #processing: Promise<unknown> = Promise.resolve();
   #audioFrames: Float32Array[] = [];
+  #suppressedUntilMs = 0;
 
   public constructor(model: WakeModelPort, config: WakeDetectorConfig = {}, dependencies: WakeDetectorDependencies = {}) {
     this.#config = { ...DEFAULTS, ...config };
@@ -67,8 +72,9 @@ export class WakeDetector implements WakeDetectorProcessor {
       preEmphasis: this.#config.preEmphasis,
     });
     this.#window = dependencies.featureWindow ?? new SlidingFeatureWindow(this.#config.windowFrames, this.#features.featureSize);
-    this.#policy = dependencies.detectionPolicy ?? new ConsecutiveHitPolicy(
+    this.#policy = dependencies.detectionPolicy ?? new HybridConfidencePolicy(
       this.#config.detectionThreshold,
+      this.#config.strongDetectionThreshold,
       this.#config.consecutiveHits,
     );
     this.#cooldown = dependencies.cooldown ?? new FrameCooldownController(this.#config.cooldownFrames);
@@ -118,6 +124,16 @@ export class WakeDetector implements WakeDetectorProcessor {
     if (this.#state !== "disposed" && this.#state !== "failed") this.#setState("ready");
   }
 
+  /** Hard lockout used after "F1 descansa" so echo/noise cannot immediately re-wake the assistant. */
+  public suppressFor(durationMs: number): void {
+    if (!Number.isFinite(durationMs) || durationMs < 0) throw new RangeError("durationMs must be a non-negative number.");
+    this.#suppressedUntilMs = Date.now() + durationMs;
+    this.#features.reset();
+    this.#window.reset();
+    this.#policy.reset();
+    this.#audioFrames = [];
+  }
+
   public async dispose(): Promise<void> {
     if (this.#state === "disposed") return;
     await this.#processing;
@@ -142,6 +158,12 @@ export class WakeDetector implements WakeDetectorProcessor {
       throw cause;
     }
 
+    // A deactivation lockout is intentionally checked before buffering audio: audio
+    // heard during this interval must never become part of a later wake decision.
+    if (Date.now() < this.#suppressedUntilMs) {
+      return { status: "gated", sequence: frame.sequence, timestampMs: frame.timestampMs, detected: false };
+    }
+
     this.#audioFrames.push(frame.samples.slice());
     while (this.#audioFrames.length > this.#config.captureWindowFrames) {
       this.#audioFrames.shift();
@@ -153,7 +175,10 @@ export class WakeDetector implements WakeDetectorProcessor {
       return { status: "cooldown", sequence: frame.sequence, timestampMs: frame.timestampMs, detected: false };
     }
 
-    if (signal.isSpeech === false) {
+    const vadConfidence = signal.vadConfidence;
+    const vadRejected = signal.isSpeech === false ||
+      (vadConfidence !== undefined && vadConfidence < this.#config.minimumVadConfidence);
+    if (vadRejected) {
       this.#silentFrames += 1;
       if (this.#silentFrames >= this.#config.maxSilentFramesBeforeReset) {
         this.#features.reset();
@@ -225,6 +250,8 @@ function validateConfig(config: ResolvedWakeConfig): void {
   if (integers.some((value) => !Number.isInteger(value) || value < 1)) throw new RangeError("frame and feature counts must be positive integers.");
   if (!Number.isInteger(config.cooldownFrames) || config.cooldownFrames < 0) throw new RangeError("cooldownFrames must be a non-negative integer.");
   if (config.detectionThreshold < 0 || config.detectionThreshold > 1) throw new RangeError("detectionThreshold must be within [0, 1].");
+  if (config.strongDetectionThreshold < 0 || config.strongDetectionThreshold > 1 || config.strongDetectionThreshold <= config.detectionThreshold) throw new RangeError("strongDetectionThreshold must be within [0, 1] and greater than detectionThreshold.");
+  if (config.minimumVadConfidence < 0 || config.minimumVadConfidence > 1) throw new RangeError("minimumVadConfidence must be within [0, 1].");
   if (!Number.isFinite(config.expectedSampleRate) || config.expectedSampleRate <= 0) throw new RangeError("expectedSampleRate must be positive.");
   if (config.preEmphasis < 0 || config.preEmphasis >= 1) throw new RangeError("preEmphasis must be within [0, 1).");
 }

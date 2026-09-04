@@ -46,6 +46,8 @@ export class F1VoiceEngine {
   }
   pause():void{if(this.#state!=="running")return;this.#transition("paused");}
   resume():void{if(this.#state!=="paused")return;this.#transition("running");}
+  /** Prevent wake events for a short period after an explicit voice deactivation. */
+  suppressWakeFor(durationMs=1500):void{this.#wake.suppressFor(durationMs);}
   async stop():Promise<void>{
     if(this.#state==="idle")return;
     if(this.#state==="disposed")return;

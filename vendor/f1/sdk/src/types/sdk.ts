@@ -41,6 +41,7 @@ export interface WakeDetectorPort {
   start(): Promise<void>;
   process(frame: AudioFrame, signal?: { readonly isSpeech?: boolean; readonly vadConfidence?: number }): Promise<WakeProcessResult>;
   reset(): void;
+  suppressFor(durationMs: number): void;
   dispose(): Promise<void>;
 }
 

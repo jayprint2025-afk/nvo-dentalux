@@ -58,6 +58,10 @@ export interface WakeDetectorConfig {
   readonly featureBands?: number;
   readonly windowFrames?: number;
   readonly detectionThreshold?: number;
+  /** A single score at/above this value wakes immediately. */
+  readonly strongDetectionThreshold?: number;
+  /** Minimum VAD confidence required before the wake model is allowed to score. */
+  readonly minimumVadConfidence?: number;
   readonly consecutiveHits?: number;
   readonly cooldownFrames?: number;
   readonly maxSilentFramesBeforeReset?: number;
@@ -71,5 +75,7 @@ export interface WakeDetectorProcessor {
   start(): Promise<void>;
   process(frame: WakeFrame, signal?: WakeSignal): Promise<WakeProcessResult>;
   reset(): void;
+  /** Temporarily reject all wake candidates, useful immediately after deactivation. */
+  suppressFor(durationMs: number): void;
   dispose(): Promise<void>;
 }
