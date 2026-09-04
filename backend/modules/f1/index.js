@@ -6,6 +6,7 @@ const { contextText, executeMemoryTool, observeToolResult, setSessionValue } = r
 const { buildOperationsReport } = require('./operations-director');
 const { buildDailyBriefingText, synthesizeDailyBriefing } = require('./daily-briefing');
 const { f1EventBus } = require('./event-bus');
+const { realtimeVoiceProfile } = require('./voice-profile');
 
 // Idempotencia de acciones Realtime por empresa + call_id.
 // Evita ejecutar dos veces la misma herramienta cuando OpenAI emite
@@ -30,6 +31,7 @@ async function executeActionOnce(key, task) {
     throw error;
   }
 }
+
 
 function parseArgs(value) {
   if (!value) return {};
@@ -71,6 +73,10 @@ Facturación: antes de crear una factura reúne cliente, tipo y al menos un conc
 Para acciones destructivas o correcciones financieras exige confirmación explícita cuando la herramienta lo indique. Si una operación está bloqueada por relaciones de datos, explica el motivo y ofrece la alternativa segura.
 No puedes crear empresas ni modificar empresas. Esa acción continúa reservada al superadministrador.
 Cuando el usuario diga “mañana”, interpreta la fecha local de la clínica. Responde con texto y voz de forma natural y concisa.
+Comportamiento de voz profesional: prioriza respuestas habladas de 1 a 4 frases cuando la tarea ya quedó resuelta; si hay muchos datos, resume primero y ofrece el dato esencial sin recitar tablas completas. Nunca termines una frase a la mitad ni cierres una respuesta con una idea incompleta. Si necesitas más espacio para explicar, termina primero la oración actual y continúa de forma breve.
+Tolerancia a pausas: una pausa natural, respiración, duda, muletilla o silencio breve dentro de una instrucción no significa necesariamente que el usuario terminó. Interpreta el mensaje completo antes de actuar y no te precipites por fragmentos parciales.
+Ruido ambiental: ignora golpes, respiración, instrumental, conversaciones lejanas, sílabas aisladas, transcripciones sin sentido y fragmentos que no expresen una intención clara. No ejecutes herramientas ni confirmes acciones basándote únicamente en ruido o texto incompleto.
+Palabra clave: reconoce con especial facilidad “F1”, “efe uno” y “CliniqOne F1” cuando aparezcan claramente en una instrucción, pero no confundas sonidos parecidos o ruido con una activación válida.
 Usa la memoria solo como contexto; nunca inventes datos faltantes. Si el usuario dice explícitamente “recuerda”, “guarda esta preferencia” u “olvida”, usa las herramientas de memoria. No guardes información clínica sensible como memoria permanente salvo petición explícita.
 
 ${memoryContext}`;
@@ -400,6 +406,20 @@ function setupF1Routes(app, q, deps) {
     }
   });
 
+  app.get('/api/f1/realtime/profile', (req, res) => {
+    const profile = realtimeVoiceProfile();
+    res.json({
+      ok: true,
+      profile: 'professional-v6',
+      wake_words: ['F1', 'efe uno', 'CliniqOne F1'],
+      vad: { type: 'semantic_vad', eagerness: profile.vadEagerness, interrupt_response: false },
+      noise_reduction: profile.noiseReduction,
+      max_output_tokens: profile.maxOutputTokens,
+      voice_speed: profile.voiceSpeed,
+      note: 'La detección estricta de activación/desactivación pertenece al cliente que controla el micrófono; este perfil optimiza VAD, transcripción y salida Realtime.',
+    });
+  });
+
   app.post('/api/f1/realtime/call', require('express').text({ type: 'application/sdp', limit: '1mb' }), async (req, res) => {
     try {
       const ctx = buildContext(req, getTenantId, getSucursal);
@@ -408,6 +428,7 @@ function setupF1Routes(app, q, deps) {
       if (!req.body || typeof req.body !== 'string') return res.status(400).json({ error: 'Oferta SDP vacía' });
       const memoryContext = await contextText(q, ctx);
 
+      const voiceProfile = realtimeVoiceProfile();
       const session = {
         type: 'realtime',
         model: process.env.F1_REALTIME_MODEL || 'gpt-realtime',
@@ -418,24 +439,33 @@ function setupF1Routes(app, q, deps) {
             transcription: {
               model: process.env.F1_TRANSCRIBE_MODEL || 'gpt-4o-mini-transcribe',
               language: 'es',
+              // Ayuda a reconocer correctamente la palabra clave y términos propios
+              // sin forzarla cuando solo existe ruido ambiental.
+              prompt: process.env.F1_TRANSCRIBE_PROMPT || 'CliniqOne. F1. Efe uno. Agenda, pacientes, doctores, tratamientos, inventario, laboratorio y WhatsApp.',
             },
             noise_reduction: {
-              type: 'far_field',
+              type: voiceProfile.noiseReduction,
             },
             turn_detection: {
               type: 'semantic_vad',
-              eagerness: 'low',
+              // LOW es deliberado: tolera pausas naturales y reduce cortes
+              // prematuros en instrucciones largas o dictadas con calma.
+              eagerness: voiceProfile.vadEagerness,
               create_response: true,
-              // Evita que una silla, instrumental o conversación ambiental
-              // corte la respuesta que F1 está pronunciando.
+              // El ruido ambiental no debe interrumpir una respuesta en curso.
               interrupt_response: false,
             },
           },
-          output: { voice: process.env.F1_VOICE || 'marin', speed: 1 },
+          output: {
+            voice: process.env.F1_VOICE || 'marin',
+            speed: voiceProfile.voiceSpeed,
+          },
         },
         tools,
         tool_choice: 'auto',
-        max_output_tokens: 700,
+        // 700 podía truncar audio antes de terminar una frase. Dejamos margen
+        // amplio y controlamos la concisión desde las instrucciones, no por corte duro.
+        max_output_tokens: voiceProfile.maxOutputTokens,
       };
 
       // Construir multipart/form-data manualmente para garantizar que OpenAI
