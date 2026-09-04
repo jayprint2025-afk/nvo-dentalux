@@ -82,19 +82,20 @@ type F1WakeSettings = {
   stabilizationMs: number;
 };
 
-const LEGACY_F1_WAKE_SETTINGS_KEYS = ["f1_wake_settings_v2", "f1_wake_settings_v3"] as const;
-const F1_WAKE_SETTINGS_KEY = "f1_wake_settings_v4";
-const F1_MIN_WAKE_CONFIDENCE = 0.68;
-// V12: equilibrio práctico. 0.42/1 era demasiado permisivo; 0.86/2 resultó demasiado estricto.
-// El detector mantiene 2 confirmaciones para candidatos moderados y conserva su umbral fuerte interno para un wake muy claro.
-const F1_MAX_WAKE_THRESHOLD = 0.82;
+const LEGACY_F1_WAKE_SETTINGS_KEYS = ["f1_wake_settings_v2", "f1_wake_settings_v3", "f1_wake_settings_v4"] as const;
+const F1_WAKE_SETTINGS_KEY = "f1_wake_settings_v5";
+// V13: el detector local es solo PREFILTRO. La activación final exige
+// transcripción del candidato y coincidencia lexical con "Hola F1"/"F1".
+// Por eso el prefiltro puede ser sensible sin convertir ruido en una activación.
+const F1_MIN_WAKE_CONFIDENCE = 0.35;
+const F1_MAX_WAKE_THRESHOLD = 0.65;
 const DEFAULT_F1_WAKE_SETTINGS: F1WakeSettings = {
-  // Compatible con la política profesional del wake detector V10:
-  // 2 hits moderados o 1 hit interno muy fuerte.
-  threshold: 0.72,
-  consecutiveHits: 2,
-  cooldownMs: 3500,
-  stabilizationMs: 2200,
+  // Prefiltro deliberadamente sensible: NO activa por sí mismo.
+  // La autorización final ocurre en /f1/wake/verify.
+  threshold: 0.35,
+  consecutiveHits: 1,
+  cooldownMs: 1400,
+  stabilizationMs: 900,
 };
 
 function loadF1WakeSettings(): F1WakeSettings {
@@ -118,8 +119,8 @@ function loadF1WakeSettings(): F1WakeSettings {
             parsed.consecutiveHits ??
               DEFAULT_F1_WAKE_SETTINGS.consecutiveHits,
           ),
-          2,
-          4,
+          1,
+          3,
         ),
       ),
       cooldownMs: Math.round(
@@ -149,6 +150,23 @@ function clamp(n: number, min: number, max: number) {
   return Math.min(Math.max(n, min), max);
 }
 
+
+
+function float32ToPcm16Base64(samples: Float32Array): string {
+  const bytes = new Uint8Array(samples.length * 2);
+  const view = new DataView(bytes.buffer);
+  for (let i = 0; i < samples.length; i += 1) {
+    const sample = Math.max(-1, Math.min(1, Number(samples[i] || 0)));
+    const pcm = sample < 0 ? Math.round(sample * 0x8000) : Math.round(sample * 0x7fff);
+    view.setInt16(i * 2, pcm, true);
+  }
+  let binary = "";
+  const chunk = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(offset, Math.min(bytes.length, offset + chunk)));
+  }
+  return btoa(binary);
+}
 
 function decodeJwtIdentity(token: string) {
   try {
@@ -627,6 +645,8 @@ export default function AIFloatingWidget(props: { apiBase?: string; sucursalId?:
     React.useState<VoiceProfileVerification | null>(null);
   const [lastWakeIdentity, setLastWakeIdentity] = React.useState<string>("");
   const f1VoiceEngineRef = React.useRef<F1VoiceEngine | null>(null);
+  const wakeVerificationInFlightRef = React.useRef(false);
+  const wakeVerificationCooldownUntilRef = React.useRef(0);
   const [briefingPlaying, setBriefingPlaying] = React.useState(false);
   const [briefingLoading, setBriefingLoading] = React.useState(false);
   const [briefingText, setBriefingText] = React.useState("");
@@ -1424,18 +1444,18 @@ const buildLeadReport = React.useCallback(() => {
       const next: F1WakeSettings =
         preset === "sensitive"
           ? {
-              // Rápido, pero nunca vuelve al modo inseguro 0.42/1.
-              threshold: 0.68,
-              consecutiveHits: 2,
-              cooldownMs: 3000,
-              stabilizationMs: 1800,
+              // Prefiltro sensible; la verificación lexical del servidor es la barrera final.
+              threshold: 0.35,
+              consecutiveHits: 1,
+              cooldownMs: 1400,
+              stabilizationMs: 900,
             }
           : preset === "strict"
             ? {
-                threshold: 0.78,
-                consecutiveHits: 3,
-                cooldownMs: 4500,
-                stabilizationMs: 2800,
+                threshold: 0.52,
+                consecutiveHits: 2,
+                cooldownMs: 2200,
+                stabilizationMs: 1500,
               }
             : DEFAULT_F1_WAKE_SETTINGS;
       setWakeSettingsDraft(next);
@@ -1451,7 +1471,7 @@ const buildLeadReport = React.useCallback(() => {
         F1_MAX_WAKE_THRESHOLD,
       ),
       consecutiveHits: Math.round(
-        clamp(Number(wakeSettingsDraft.consecutiveHits), 2, 4),
+        clamp(Number(wakeSettingsDraft.consecutiveHits), 1, 3),
       ),
       cooldownMs: Math.round(
         clamp(Number(wakeSettingsDraft.cooldownMs), 1000, 8000),
@@ -1597,21 +1617,60 @@ const buildLeadReport = React.useCallback(() => {
         setF1VoiceEngineDetail(String(detail || ""));
       },
       onWake: (event) => {
-        // Segunda barrera en UI: un evento wake nunca debe abrir Realtime si
-        // su score quedó por debajo del piso profesional, aunque una versión
-        // antigua del detector o una configuración local haya emitido el evento.
-        const confidence = Number((event as any)?.score ?? 0);
-        const requiredConfidence = Math.max(
-          F1_MIN_WAKE_CONFIDENCE,
-          wakeSettings.threshold,
-        );
-        if (!Number.isFinite(confidence) || confidence < requiredConfidence) {
-          setF1VoiceEngineDetail(
-            `Wake rechazado (${Number.isFinite(confidence) ? confidence.toFixed(2) : "sin score"})`,
-          );
-          return;
-        }
-        void controller.wakeDetected(event);
+        // V13: ONNX/VAD = prefiltro; transcripción exacta = autorización final.
+        // Nunca abrir Realtime directamente desde un score acústico.
+        void (async () => {
+          const now = Date.now();
+          if (wakeVerificationInFlightRef.current || now < wakeVerificationCooldownUntilRef.current) return;
+          const audioWindow = (event as any)?.audioWindow;
+          const sampleRate = Number((event as any)?.sampleRate || 0);
+          if (!(audioWindow instanceof Float32Array) || !audioWindow.length || sampleRate !== 16000) {
+            setF1VoiceEngineDetail("Candidato rechazado: audio inválido");
+            return;
+          }
+
+          wakeVerificationInFlightRef.current = true;
+          setF1VoiceEngineDetail("Verificando ‘Hola F1’…");
+          try {
+            const verification: any = await api('/f1/wake/verify', {
+              method: 'POST',
+              body: JSON.stringify({
+                pcm16_base64: float32ToPcm16Base64(audioWindow),
+                sample_rate: sampleRate,
+                local_score: Number((event as any)?.score || 0),
+              }),
+            });
+
+            if (!verification?.accepted) {
+              const heard = String(verification?.transcript || '').trim();
+              setF1VoiceEngineDetail(heard ? `Ignorado: “${heard.slice(0, 48)}”` : "Ruido/voz sin palabra clave");
+              (f1VoiceEngineRef.current as any)?.suppressWakeFor?.(700);
+              wakeVerificationCooldownUntilRef.current = Date.now() + 650;
+              return;
+            }
+
+            const heard = String(verification?.transcript || 'Hola F1').trim();
+            setLastWakeIdentity(`Palabra clave verificada: ${heard.slice(0, 60)}`);
+            wakeVerificationCooldownUntilRef.current = Date.now() + 1800;
+            // El controlador recibe únicamente eventos ya verificados y con
+            // confianza final 1.0. Ningún ruido puede saltarse esta barrera.
+            await controller.wakeDetected({
+              ...(event as any),
+              score: 1,
+              threshold: 1,
+              detected: true,
+            });
+          } catch (error) {
+            // Falla cerrada: si el verificador no está disponible no activar.
+            setF1VoiceEngineDetail(
+              `Verificación no disponible: ${error instanceof Error ? error.message : String(error)}`,
+            );
+            (f1VoiceEngineRef.current as any)?.suppressWakeFor?.(900);
+            wakeVerificationCooldownUntilRef.current = Date.now() + 900;
+          } finally {
+            wakeVerificationInFlightRef.current = false;
+          }
+        })();
       },
     });
     f1VoiceEngineRef.current = engine;
@@ -1636,10 +1695,8 @@ const buildLeadReport = React.useCallback(() => {
       inactivityTimeoutMs: 15000,
       maxSessionMs: 120000,
       wakeStabilizationMs: wakeSettings.stabilizationMs,
-      minimumWakeConfidence: Math.max(
-        F1_MIN_WAKE_CONFIDENCE,
-        wakeSettings.threshold,
-      ),
+      // Solo llegan eventos que ya superaron la verificación lexical remota.
+      minimumWakeConfidence: 0.99,
       verifyWakeIdentity: async (event) => {
         if (!voiceProfile?.enabled) {
           return { accepted: true };
@@ -2341,9 +2398,11 @@ const buildLeadReport = React.useCallback(() => {
                           {f1VoiceEngineDetail ? ` · ${f1VoiceEngineDetail}` : ""}
                         </div>
                         <div className="mt-1 text-[10px] text-gray-500">
-                          Sensibilidad: {wakeSettings.threshold.toFixed(2)}
+                          Prefiltro: {wakeSettings.threshold.toFixed(2)}
                           {" · "}
                           Confirmaciones: {wakeSettings.consecutiveHits}
+                          {" · "}
+                          Palabra clave: obligatoria
                         </div>
                       </div>
                       <div className="flex items-center gap-2">
@@ -2401,7 +2460,7 @@ const buildLeadReport = React.useCallback(() => {
                         </div>
 
                         <label className="block text-[11px] text-gray-600">
-                          Umbral: {wakeSettingsDraft.threshold.toFixed(2)}
+                          Prefiltro acústico: {wakeSettingsDraft.threshold.toFixed(2)}
                           <input
                             type="range"
                             min={F1_MIN_WAKE_CONFIDENCE}
@@ -2417,8 +2476,7 @@ const buildLeadReport = React.useCallback(() => {
                             className="mt-1 w-full"
                           />
                           <span className="text-[10px] text-gray-500">
-                            Rango seguro: 0.68–0.82. Menor = más ágil; mayor =
-                            más estricto frente a conversaciones y ruido.
+                            Este es solo el prefiltro local (0.35–0.65). La activación final exige transcribir y confirmar “Hola F1” o “F1”.
                           </span>
                         </label>
 
@@ -2434,9 +2492,9 @@ const buildLeadReport = React.useCallback(() => {
                             }
                             className="mt-1 w-full rounded-lg border bg-white px-2 py-1"
                           >
+                            <option value={1}>1 — muy sensible (verificación lexical)</option>
                             <option value={2}>2 — recomendado</option>
                             <option value={3}>3 — más estricto</option>
-                            <option value={4}>4 — ambiente muy ruidoso</option>
                           </select>
                         </label>
 

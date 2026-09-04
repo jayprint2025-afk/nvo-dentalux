@@ -13,6 +13,119 @@ const { realtimeVoiceProfile } = require('./voice-profile');
 // response.output_item.done y después vuelve a incluirla en response.done.
 const actionExecutions = new Map();
 
+
+// ===== Wake phrase verifier (V13) =====
+// El ONNX/VAD solo propone candidatos. La activación final se confirma
+// transcribiendo una ventana corta y exigiendo que la frase EMPIECE con la
+// palabra clave. Así podemos mantener un prefiltro sensible sin despertar por
+// golpes, tos, conversaciones o palabras no relacionadas.
+const wakeVerifyRate = new Map();
+
+function normalizeWakeTranscript(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function matchWakePhrase(value) {
+  const text = normalizeWakeTranscript(value);
+  if (!text) return { accepted: false, normalized: text, phrase: '' };
+
+  // Debe aparecer al INICIO. Esto evita activar por una conversación que
+  // mencione "F1" más adelante. Se toleran formas habituales que puede
+  // producir la transcripción en español.
+  const patterns = [
+    { phrase: 'hola f1', re: /^hola\s+(?:f\s*1|f\s+uno|efe\s*1|efe\s+uno|ef\s+uno)\b/ },
+    { phrase: 'f1', re: /^(?:f\s*1|f\s+uno|efe\s*1|efe\s+uno|ef\s+uno)\b/ },
+    { phrase: 'cliniqone f1', re: /^(?:hola\s+)?cliniqone\s+(?:f\s*1|f\s+uno|efe\s*1|efe\s+uno|ef\s+uno)\b/ },
+  ];
+  for (const item of patterns) {
+    if (item.re.test(text)) return { accepted: true, normalized: text, phrase: item.phrase };
+  }
+  return { accepted: false, normalized: text, phrase: '' };
+}
+
+function pcm16Base64ToWav(base64, sampleRate) {
+  const pcm = Buffer.from(String(base64 || ''), 'base64');
+  if (!pcm.length || pcm.length % 2 !== 0) throw new Error('Audio PCM16 inválido');
+  const sr = Number(sampleRate || 16000);
+  if (sr !== 16000) throw new Error('Wake verifier requiere audio a 16 kHz');
+  const maxBytes = sr * 2 * 5; // máximo 5 segundos mono PCM16
+  if (pcm.length > maxBytes) throw new Error('Ventana de audio demasiado grande');
+  if (pcm.length < sr * 2 * 0.20) throw new Error('Ventana de audio demasiado corta');
+
+  const wav = Buffer.alloc(44 + pcm.length);
+  wav.write('RIFF', 0, 'ascii');
+  wav.writeUInt32LE(36 + pcm.length, 4);
+  wav.write('WAVE', 8, 'ascii');
+  wav.write('fmt ', 12, 'ascii');
+  wav.writeUInt32LE(16, 16);
+  wav.writeUInt16LE(1, 20); // PCM
+  wav.writeUInt16LE(1, 22); // mono
+  wav.writeUInt32LE(sr, 24);
+  wav.writeUInt32LE(sr * 2, 28);
+  wav.writeUInt16LE(2, 32);
+  wav.writeUInt16LE(16, 34);
+  wav.write('data', 36, 'ascii');
+  wav.writeUInt32LE(pcm.length, 40);
+  pcm.copy(wav, 44);
+  return wav;
+}
+
+function allowWakeVerifyAttempt(ctx) {
+  const key = `${ctx.tenant_id || 'tenant'}:${ctx.user_id || 'user'}:${ctx.branch_key || 'branch'}`;
+  const now = Date.now();
+  const state = wakeVerifyRate.get(key) || { windowStart: now, count: 0, lastAt: 0 };
+  if (now - state.windowStart >= 60_000) {
+    state.windowStart = now;
+    state.count = 0;
+  }
+  if (now - state.lastAt < 250) return false;
+  if (state.count >= 40) return false;
+  state.lastAt = now;
+  state.count += 1;
+  wakeVerifyRate.set(key, state);
+  return true;
+}
+
+async function transcribeWakeCandidate(wavBuffer) {
+  const key = process.env.OPENAI_API_KEY;
+  if (!key) throw new Error('Falta OPENAI_API_KEY');
+  const model = process.env.F1_WAKE_TRANSCRIBE_MODEL || process.env.F1_TRANSCRIBE_MODEL || 'gpt-4o-mini-transcribe';
+  const boundary = `----CliniqOneWake${Date.now().toString(16)}${Math.random().toString(16).slice(2)}`;
+  const field = (name, value) => Buffer.from(
+    `--${boundary}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n${value}\r\n`,
+    'utf8'
+  );
+  const body = Buffer.concat([
+    field('model', model),
+    field('language', 'es'),
+    field('prompt', 'Transcribe literalmente en español. No completes ni inventes palabras si el audio contiene ruido, respiración, golpes o silencio.'),
+    Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="wake.wav"\r\nContent-Type: audio/wav\r\n\r\n`, 'utf8'),
+    wavBuffer,
+    Buffer.from(`\r\n--${boundary}--\r\n`, 'utf8'),
+  ]);
+
+  const upstream = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${key}`,
+      'Content-Type': `multipart/form-data; boundary=${boundary}`,
+      'Content-Length': String(body.length),
+    },
+    body,
+  });
+  const text = await upstream.text();
+  if (!upstream.ok) throw new Error(`Wake transcription ${upstream.status}: ${text.slice(0, 500)}`);
+  let parsed = {};
+  try { parsed = JSON.parse(text); } catch {}
+  return String(parsed?.text || '').trim();
+}
+
 async function executeActionOnce(key, task) {
   if (!key) return task();
   const existing = actionExecutions.get(key);
@@ -403,6 +516,35 @@ function setupF1Routes(app, q, deps) {
       res.json({ reply, actions: executed });
     } catch (error) {
       res.status(error.statusCode || error.status || 500).json({ error: error.message });
+    }
+  });
+
+
+  app.post('/api/f1/wake/verify', async (req, res) => {
+    try {
+      const ctx = buildContext(req, getTenantId, getSucursal);
+      if (!allowWakeVerifyAttempt(ctx)) {
+        return res.status(429).json({ ok: false, accepted: false, reason: 'rate_limited' });
+      }
+      const wav = pcm16Base64ToWav(req.body?.pcm16_base64, req.body?.sample_rate || 16000);
+      const transcript = await transcribeWakeCandidate(wav);
+      const match = matchWakePhrase(transcript);
+      res.json({
+        ok: true,
+        accepted: match.accepted,
+        transcript,
+        normalized: match.normalized,
+        phrase: match.phrase || null,
+        reason: match.accepted ? 'wake_phrase_verified' : 'wake_phrase_missing',
+      });
+    } catch (error) {
+      // Falla cerrada: si no podemos verificar, NO activamos F1.
+      res.status(error.statusCode || error.status || 503).json({
+        ok: false,
+        accepted: false,
+        reason: 'verification_unavailable',
+        error: error.message,
+      });
     }
   });
 
