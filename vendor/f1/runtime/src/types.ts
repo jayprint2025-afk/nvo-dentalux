@@ -17,6 +17,10 @@ export interface F1ModelManifest {
   readonly inputShape: readonly [1, number, number];
   readonly outputName: string;
   readonly outputShape: readonly [1, number];
+  /** Index of the wake/F1 class when the model returns multiple classes. Defaults to the last class. */
+  readonly positiveClassIndex?: number;
+  /** Optional explicit output interpretation. Auto-detected when omitted. */
+  readonly outputActivation?: "probability" | "sigmoid" | "softmax";
   readonly threshold: number;
   readonly sha256?: string;
   readonly status?: string;
