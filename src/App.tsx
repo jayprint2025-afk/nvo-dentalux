@@ -7221,30 +7221,20 @@ const [to, setTo] = useState<string>(defaultTo);
 
 // Reemplazar por esta versión
 async function objetivosFetch(from, to){
-  try{
-    const q = `?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`;
-    const data = await api(`/objetivos${q}`);
-    const arr = Array.isArray(data) ? data : [];
-    const mapped = arr.map((r)=> ({
-      id: String(r.id ?? r._id ?? `${r.doctorId}-${r.from}-${r.to}`),
-      doctorId: String(r.doctorId ?? r.doctor_id ?? r.doctor),
-      from: String(r.from),
-      to: String(r.to),
-      meta: Number(r.meta ?? 0),
-      baseSalary: Number(r.baseSalary ?? r.sueldo_base ?? 0),
-      abonosNomina: Number(r.abonosNomina ?? r.abonos ?? 0),
-      createdAt: String(r.createdAt ?? new Date().toISOString()),
-      updatedAt: String(r.updatedAt ?? new Date().toISOString()),
-    }));
-
-    // 👇 NUEVO: si backend respondió vacío, usamos lo guardado localmente
-    if (mapped.length === 0) {
-      return lsLoad().filter(r => r.from === from && r.to === to);
-    }
-    return mapped;
-  }catch(e){
-    return lsLoad().filter(r => r.from === from && r.to === to);
-  }
+  const q = `?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`;
+  const data = await api(`/objetivos${q}`);
+  const arr = Array.isArray(data) ? data : [];
+  return arr.map((r)=> ({
+    id: String(r.id),
+    doctorId: String(r.doctorId ?? r.doctor_id ?? r.doctor),
+    from: String(r.from ?? r.periodo_inicio ?? from),
+    to: String(r.to ?? r.periodo_fin ?? to),
+    meta: Number(r.meta ?? 0),
+    baseSalary: Number(r.baseSalary ?? r.sueldo_base ?? 0),
+    abonosNomina: Number(r.abonosNomina ?? r.abonos ?? 0),
+    createdAt: String(r.createdAt ?? r.created_at ?? new Date().toISOString()),
+    updatedAt: String(r.updatedAt ?? r.updated_at ?? new Date().toISOString()),
+  }));
 }
 
   async function objetivosUpsert(row){
@@ -7266,21 +7256,11 @@ async function objetivosFetch(from, to){
 });
 
     }catch(e){
-      const all = lsLoad();
-      let out = row;
-      if (row.id && all.find(r=>r.id===row.id)){
-        const upd = all.map(r=> r.id===row.id ? { ...row, updatedAt: new Date().toISOString() } : r);
-        lsSave(upd);
-      }else{
-        out = { ...row, id:`ls-${Date.now()}-${Math.random().toString(36).slice(2)}`, createdAt:new Date().toISOString(), updatedAt:new Date().toISOString() };
-        lsSave([...all, out]);
-      }
-      return out;
+      throw e;
     }
   }
   async function objetivosDelete(id, from, to){
-    try{ await api(`/objetivos/${id}`, { method:'DELETE' }); }
-    catch{ lsSave(lsLoad().filter(r => !(r.id===id && r.from===from && r.to===to))); }
+    await api(`/objetivos/${id}`, { method:'DELETE' });
   }
 
   async function fetchDoctorsLight(){
@@ -7455,44 +7435,36 @@ const toggleLabPaid = React.useCallback((id: string) => {
 
     const [editValues, setEditValues] = React.useState({});
 // === Ajustes de doctores para Objetivos (estado + helpers + editor) ===
-const DOCTOR_SETTINGS_KEY = 'dentalux_objetivos_doctor_settings_v1';
 const DEFAULT_COMISION_PCT = 0.20; // 20%
 
 type DoctorSetting = { visible: boolean; comision: number };
 type DoctorSettingsMap = Record<string, DoctorSetting>;
 
-function dsLoad(): DoctorSettingsMap {
-  try {
-    const raw = localStorage.getItem(DOCTOR_SETTINGS_KEY);
-    const obj = raw ? JSON.parse(raw) : {};
-    for (const k of Object.keys(obj || {})) {
-      const v = obj[k] || {};
-      obj[k] = {
-        visible: typeof v.visible === 'boolean' ? v.visible : true,
-        comision: typeof v.comision === 'number' ? v.comision : DEFAULT_COMISION_PCT,
-      };
-    }
-    return obj || {};
-  } catch {
-    return {};
-  }
-}
-function dsSave(m: DoctorSettingsMap) {
-  try { localStorage.setItem(DOCTOR_SETTINGS_KEY, JSON.stringify(m)); } catch {}
-}
-
-const [doctorSettings, setDoctorSettings] = React.useState<DoctorSettingsMap>(dsLoad());
-
-const updateDoctorSetting = React.useCallback((doctorId: string, patch: Partial<DoctorSetting>)=>{
-  setDoctorSettings(prev=>{
-    const next = {
-      ...prev,
-      [doctorId]: { visible: true, comision: DEFAULT_COMISION_PCT, ...(prev[doctorId]||{}), ...(patch||{}) }
+async function loadDoctorSettings(): Promise<DoctorSettingsMap> {
+  const rows = await api('/objetivos/doctor-settings');
+  const out: DoctorSettingsMap = {};
+  (Array.isArray(rows) ? rows : []).forEach((r:any) => {
+    out[String(r.doctor_id)] = {
+      visible: r.visible !== false,
+      comision: Number(r.comision_pct ?? DEFAULT_COMISION_PCT),
     };
-    dsSave(next);
-    return next;
   });
-},[]);
+  return out;
+}
+
+const [doctorSettings, setDoctorSettings] = React.useState<DoctorSettingsMap>({});
+
+const updateDoctorSetting = React.useCallback(async (doctorId: string, patch: Partial<DoctorSetting>)=>{
+  const current = { visible:true, comision:DEFAULT_COMISION_PCT, ...(doctorSettings[doctorId]||{}), ...(patch||{}) };
+  const saved = await api(`/objetivos/doctor-settings/${doctorId}`, {
+    method:'PUT',
+    body: JSON.stringify({ visible: current.visible, comision_pct: current.comision })
+  });
+  setDoctorSettings(prev=>({
+    ...prev,
+    [doctorId]: { visible: saved?.visible !== false, comision: Number(saved?.comision_pct ?? current.comision) }
+  }));
+},[doctorSettings]);
 
 // === Mini-componente de edición rápida por doctor ===
 function DoctorQuickEdit({ doctor, settings, onChange }:{
@@ -7585,25 +7557,21 @@ function DoctorQuickEdit({ doctor, settings, onChange }:{
   setErr(null);
   try {
     // Cargamos doctores, pagos y abonos de laboratorio
-    const [docs, pays, lab] = await Promise.all([
+    const [docs, pays, lab, settings] = await Promise.all([
       fetchDoctorsLight(),
       fetchPaymentsLight(),
       fetchLabAbonos(from, to),
+      loadDoctorSettings(),
     ]);
     setDoctors(docs);
     setPayments(pays);
     setLabAbonos(lab);
+    setDoctorSettings(settings);
 
-    // Objetivos: backend si trae filas; si viene vacío, usamos local
+    // El backend multi-tenant es la única fuente autoritativa.
     const res = await objetivosFetch(from, to);
-    if (Array.isArray(res) && res.length > 0) {
-      setObjetivos(res);
-      setMode('backend');
-    } else {
-      const local = lsLoad().filter(r => r.from === from && r.to === to);
-      setObjetivos(local);
-      setMode('local');
-    }
+    setObjetivos(Array.isArray(res) ? res : []);
+    setMode('backend');
   
 
     // Reportes (resumen)
@@ -7617,11 +7585,9 @@ function DoctorQuickEdit({ doctor, settings, onChange }:{
     }
     setReportLoading(false);
 } catch (e: any) {
-    // Cualquier error (red, 500, etc.) → fallback a local
     setErr(e?.message || 'Error de conexión');
-    const local = lsLoad().filter(r => r.from === from && r.to === to);
-    setObjetivos(local);
-    setMode('local');
+    setObjetivos([]);
+    setMode('backend');
   } finally {
     setLoading(false);
   }

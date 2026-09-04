@@ -1097,6 +1097,12 @@ app.get('/api/melissa/debug/sucursales', ah(async (req, res) => {
 }));
 
 
+// Los endpoints legacy de facturación Melissa compartían la misma DB sin aislamiento.
+// Se bloquean para evitar acceso cruzado entre empresas; la UI actual usa /api/facturacion/*.
+app.use('/api/melissa/facturacion', authRequired, (_req, res) =>
+  res.status(410).json({ error: 'Ruta legacy deshabilitada. Usa /api/facturacion/*.' })
+);
+
 app.put('/api/melissa/facturacion/configuracion', ah(async (req, res) => {
   if (!qMelissa) return res.status(503).json({ error: 'MELISSA_DATABASE_URL no configurada' });
   const { rfc, razon_social, regimen_fiscal, codigo_postal, pac_proveedor, pac_usuario, pac_password } = req.body || {};
@@ -2360,18 +2366,19 @@ app.post('/api/pagos-laboratorio', authRequired, ah(async (req, res) => {
 }));
 
 // ==============================
-// OBJETIVOS
+// OBJETIVOS / PRODUCTIVIDAD — aislado por empresa + sucursal
 // ==============================
-app.get('/api/objetivos', ah(async (req, res) => {
+app.get('/api/objetivos', authRequired, ah(async (req, res) => {
   const s = getSucursal(req);
+  const tenantId = getTenantId(req);
   const { from, to, doctor_id } = req.query;
-  const params = [s];
-  const conds = [`${sucWhereN(1)}`];
+  const params = [tenantId, s];
+  const conds = [`tenant_id=$1`, `${sucWhereN(2)}`];
   if (from) { params.push(from); conds.push(`(periodo_fin IS NULL OR periodo_fin >= $${params.length})`); }
   if (to)   { params.push(to);   conds.push(`(periodo_inicio IS NULL OR periodo_inicio <= $${params.length})`); }
   if (doctor_id) { params.push(Number(doctor_id)); conds.push(`doctor_id = $${params.length}`); }
   const { rows } = await q(
-    `SELECT id, doctor_id, meta, sueldo_base, periodo_inicio, periodo_fin, sucursal_id, created_at
+    `SELECT id, doctor_id, meta, sueldo_base, abonos, periodo_inicio, periodo_fin, sucursal_id, created_at
      FROM objetivos
      WHERE ${conds.join(' AND ')}
      ORDER BY COALESCE(periodo_inicio, created_at) DESC, id DESC`,
@@ -2380,562 +2387,265 @@ app.get('/api/objetivos', ah(async (req, res) => {
   res.json(rows);
 }));
 
-// ==============================
-// OBJETIVOS - REPORTES (por fechas, por doctor)
-// ==============================
-app.get('/api/objetivos/reportes', ah(async (req, res) => {
+app.get('/api/objetivos/reportes', authRequired, ah(async (req, res) => {
   const s = getSucursal(req);
+  const tenantId = getTenantId(req);
   const { from, to, doctor_id, details } = req.query || {};
+  if (!from || !to) return res.status(400).json({ error: 'Parámetros requeridos: from, to (YYYY-MM-DD)' });
 
-  if (!from || !to) {
-    return res.status(400).json({ error: 'Parámetros requeridos: from, to (YYYY-MM-DD)' });
-  }
-
-  // 1) Doctores de la sucursal
   const docs = await q(
-    `SELECT id, name, color
-     FROM doctors
-     WHERE ${sucWhereN(1)}
-     ORDER BY id ASC`,
-    [s]
+    `SELECT id, name, color FROM doctors
+     WHERE tenant_id=$1 AND ${sucWhereN(2)}
+     ORDER BY id ASC`, [tenantId, s]
   );
   const doctors = docs.rows || [];
 
-  // 2) Ingresos (payments) agrupados por doctor
-  const payParams = [s, from, to];
-  const payConds = [`${sucWhereN(1)}`, `date >= $2`, `date <= $3`];
+  const payParams = [tenantId, s, from, to];
+  const payConds = [`tenant_id=$1`, `${sucWhereN(2)}`, `date >= $3`, `date <= $4`];
   if (doctor_id) { payParams.push(Number(doctor_id)); payConds.push(`doctor_id = $${payParams.length}`); }
-
   const paysAgg = await q(
     `SELECT doctor_id,
-      SUM(CASE WHEN LOWER(COALESCE(payment_method,'')) LIKE '%efect%' OR LOWER(COALESCE(payment_method,'')) LIKE '%cash%'
-          THEN amount ELSE 0 END) AS income_cash,
-      SUM(CASE WHEN LOWER(COALESCE(payment_method,'')) LIKE '%tarj%' OR LOWER(COALESCE(payment_method,'')) LIKE '%card%'
-            OR LOWER(COALESCE(payment_method,'')) LIKE '%credit%' OR LOWER(COALESCE(payment_method,'')) LIKE '%debit%'
-          THEN amount ELSE 0 END) AS income_card,
+      SUM(CASE WHEN LOWER(COALESCE(payment_method,'')) LIKE '%efect%' OR LOWER(COALESCE(payment_method,'')) LIKE '%cash%' THEN amount ELSE 0 END) AS income_cash,
+      SUM(CASE WHEN LOWER(COALESCE(payment_method,'')) LIKE '%tarj%' OR LOWER(COALESCE(payment_method,'')) LIKE '%card%' OR LOWER(COALESCE(payment_method,'')) LIKE '%credit%' OR LOWER(COALESCE(payment_method,'')) LIKE '%debit%' THEN amount ELSE 0 END) AS income_card,
       SUM(amount) AS income_total
-     FROM payments
-     WHERE ${payConds.join(' AND ')}
-     GROUP BY doctor_id`,
-    payParams
+     FROM payments WHERE ${payConds.join(' AND ')} GROUP BY doctor_id`, payParams
   );
 
-  // 3) Gastos (expenses) agrupados por doctor
-  const expParams = [s, from, to];
-  const expConds = [`${sucWhereN(1)}`, `date >= $2`, `date <= $3`];
+  const expParams = [tenantId, s, from, to];
+  const expConds = [`tenant_id=$1`, `${sucWhereN(2)}`, `date >= $3`, `date <= $4`];
   if (doctor_id) { expParams.push(Number(doctor_id)); expConds.push(`doctor_id = $${expParams.length}`); }
-
   const expsAgg = await q(
-    `SELECT doctor_id,
-      SUM(amount) AS expense_total
-     FROM expenses
-     WHERE ${expConds.join(' AND ')}
-     GROUP BY doctor_id`,
-    expParams
+    `SELECT doctor_id, SUM(amount) AS expense_total
+     FROM expenses WHERE ${expConds.join(' AND ')} GROUP BY doctor_id`, expParams
   );
 
   const payMap = Object.create(null);
-  (paysAgg.rows || []).forEach(r => {
-    payMap[String(r.doctor_id)] = {
-      income_cash: Number(r.income_cash || 0),
-      income_card: Number(r.income_card || 0),
-      income_total: Number(r.income_total || 0),
-    };
+  (paysAgg.rows || []).forEach(r => payMap[String(r.doctor_id)] = {
+    income_cash:Number(r.income_cash||0), income_card:Number(r.income_card||0), income_total:Number(r.income_total||0)
   });
-
   const expMap = Object.create(null);
-  (expsAgg.rows || []).forEach(r => {
-    expMap[String(r.doctor_id)] = {
-      expense_total: Number(r.expense_total || 0),
-    };
-  });
+  (expsAgg.rows || []).forEach(r => expMap[String(r.doctor_id)] = { expense_total:Number(r.expense_total||0) });
 
-  // 4) Merge para que TODOS los doctores aparezcan (aunque no tengan movimientos)
   const rows = doctors.map(d => {
-    const pid = String(d.id);
-    const p = payMap[pid] || { income_cash: 0, income_card: 0, income_total: 0 };
-    const e = expMap[pid] || { expense_total: 0 };
-    const net = Number(p.income_total || 0) - Number(e.expense_total || 0);
-    return {
-      doctor_id: d.id,
-      doctor_name: d.name,
-      doctor_color: d.color || null,
-      income_cash: p.income_cash,
-      income_card: p.income_card,
-      income_total: p.income_total,
-      expense_total: e.expense_total,
-      net
-    };
+    const p=payMap[String(d.id)] || {income_cash:0,income_card:0,income_total:0};
+    const e=expMap[String(d.id)] || {expense_total:0};
+    return { doctor_id:d.id, doctor_name:d.name, doctor_color:d.color||null, ...p, ...e, net:p.income_total-e.expense_total };
   });
+  const totals=rows.reduce((a,r)=>({
+    income_cash:a.income_cash+Number(r.income_cash||0), income_card:a.income_card+Number(r.income_card||0),
+    income_total:a.income_total+Number(r.income_total||0), expense_total:a.expense_total+Number(r.expense_total||0),
+    net:a.net+Number(r.net||0)
+  }),{income_cash:0,income_card:0,income_total:0,expense_total:0,net:0});
 
-  const totals = rows.reduce((acc, r) => {
-    acc.income_cash += Number(r.income_cash || 0);
-    acc.income_card += Number(r.income_card || 0);
-    acc.income_total += Number(r.income_total || 0);
-    acc.expense_total += Number(r.expense_total || 0);
-    acc.net += Number(r.net || 0);
-    return acc;
-  }, { income_cash: 0, income_card: 0, income_total: 0, expense_total: 0, net: 0 });
-
-  // 5) Detalles (opcional) por doctor
-  if (String(details || '') === '1' && doctor_id) {
-    const dId = Number(doctor_id);
-
-    const payDet = await q(
-      `SELECT id, appointment_id, patient, service_id, amount, payment_method, date, doctor_id, sucursal_id
-       FROM payments
-       WHERE ${sucWhereN(1)} AND doctor_id=$2 AND date >= $3 AND date <= $4
-       ORDER BY date ASC, id ASC`,
-      [s, dId, from, to]
-    );
-
-    const expDet = await q(
-      `SELECT id, concept, amount, date, doctor_id, payment_method, sucursal_id
-       FROM expenses
-       WHERE ${sucWhereN(1)} AND doctor_id=$2 AND date >= $3 AND date <= $4
-       ORDER BY date ASC, id ASC`,
-      [s, dId, from, to]
-    );
-
-    return res.json({ rows, totals, payments: payDet.rows || [], expenses: expDet.rows || [] });
+  if (String(details||'')==='1' && doctor_id) {
+    const dId=Number(doctor_id);
+    const payDet=await q(`SELECT id, appointment_id, patient, service_id, amount, payment_method, date, doctor_id, sucursal_id
+      FROM payments WHERE tenant_id=$1 AND ${sucWhereN(2)} AND doctor_id=$3 AND date >= $4 AND date <= $5 ORDER BY date,id`, [tenantId,s,dId,from,to]);
+    const expDet=await q(`SELECT id, concept, amount, date, doctor_id, payment_method, sucursal_id
+      FROM expenses WHERE tenant_id=$1 AND ${sucWhereN(2)} AND doctor_id=$3 AND date >= $4 AND date <= $5 ORDER BY date,id`, [tenantId,s,dId,from,to]);
+    return res.json({rows,totals,payments:payDet.rows||[],expenses:expDet.rows||[]});
   }
-
-  res.json({ rows, totals });
+  res.json({rows,totals});
 }));
 
-app.post('/api/objetivos', ah(async (req, res) => {
-  const s = getSucursal(req);
-  const { doctor_id, meta, sueldo_base, periodo_inicio, periodo_fin } = req.body || {};
-  const { rows } = await q(
-    `INSERT INTO objetivos (doctor_id, meta, sueldo_base, periodo_inicio, periodo_fin, sucursal_id)
-     VALUES ($1,$2,$3,$4,$5,$6)
-     RETURNING id, doctor_id, meta, sueldo_base, periodo_inicio, periodo_fin, sucursal_id, created_at`,
-    [
-      doctor_id ? Number(doctor_id) : null,
-      meta != null ? Number(meta) : 0,
-      sueldo_base != null ? Number(sueldo_base) : 0,
-      periodo_inicio || null,
-      periodo_fin || null,
-      s
-    ]
-  );
-  res.json(rows[0]);
-}));
-
-app.put('/api/objetivos/:id', ah(async (req, res) => {
-  const s = getSucursal(req);
-  const id = Number(req.params.id);
-  const { doctor_id, meta, sueldo_base, periodo_inicio, periodo_fin } = req.body || {};
-  const { rows } = await q(
-    `UPDATE objetivos
-     SET doctor_id = COALESCE($1, doctor_id),
-         meta = COALESCE($2, meta),
-         sueldo_base = COALESCE($3, sueldo_base),
-         periodo_inicio = COALESCE($4, periodo_inicio),
-         periodo_fin = COALESCE($5, periodo_fin)
-     WHERE id=$6 AND ${sucWhereN(7)}
-     RETURNING id, doctor_id, meta, sueldo_base, periodo_inicio, periodo_fin, sucursal_id, created_at`,
-    [
-      doctor_id != null ? Number(doctor_id) : null,
-      meta != null ? Number(meta) : null,
-      sueldo_base != null ? Number(sueldo_base) : null,
-      periodo_inicio || null,
-      periodo_fin || null,
-      id, s
-    ]
-  );
-  res.json(rows[0] || null);
-}));
-
-app.delete('/api/objetivos/:id', ah(async (req, res) => {
-  const s = getSucursal(req);
-  await q(`DELETE FROM objetivos WHERE id=$1 AND ${sucWhereN(2)}`, [Number(req.params.id), s]);
-  res.status(204).end();
-}));
-
-// ==============================
-// FACTURACIÓN
-// ==============================
-
-// Configuración SAT - responde con llaves que la UI espera
-app.get('/api/facturacion/configuracion', ah(async (req, res) => {
-  res.json({
-    rfc: process.env.RFC || 'XAXX010101000',
-    razon_social: process.env.RAZON_SOCIAL || 'Dentalux S.A. de C.V.',
-    regimen_fiscal: process.env.REGIMEN_FISCAL || '601',
-    codigo_postal: process.env.CODIGO_POSTAL || '64000',
-    pac_proveedor: process.env.PAC_PROVEEDOR || 'finkok',
-    ultimo_folio: Number(process.env.ULTIMO_FOLIO || 1),
-    ambiente: process.env.NODE_ENV === 'production' ? 'produccion' : 'pruebas',
-    activo: true   // ⬅️ esto es lo que activa el indicador en la UI
-  });
-}));
-
-app.put('/api/facturacion/configuracion', ah(async (req, res) => {
-  res.json({ ok: true, ...req.body });
-}));
-
-// === Subida de LOGO en memoria → responde Data URL (para previsualización en el front) ===
-// (Si ya tienes estas 2 líneas arriba, NO las repitas)
-const multer = require('multer');
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 10 * 1024 * 1024 } // 10MB
-});
-
-
-// Handler reutilizable (memoria -> Data URL)
-const handleLogoUpload = ah(async (req, res) => {
-  if (!req.file) {
-    return res.status(400).json({ ok: false, error: 'Falta archivo "logo"' });
-  }
-  const mime = req.file.mimetype || 'image/png';
-  if (!/^image\//.test(mime)) {
-    return res.status(400).json({ ok: false, error: 'Tipo de archivo no permitido' });
-  }
-
-  // Convierte el buffer en base64 y arma la Data URL
-  const base64 = req.file.buffer.toString('base64');
-  const dataUrl = `data:${mime};base64,${base64}`;
-
-  // Devuelve ok + url para que el front la pueda mostrar de inmediato
-  res.json({ ok: true, url: dataUrl });
-});
-
-// Endpoint legacy que tu UI puede estar llamando
-app.post('/api/facturacion/configuracion/logo', upload.single('logo'), handleLogoUpload);
-
-// Alias v2 por si tu front usa /facturacion-v2/ (según tu módulo de facturación)
-app.post('/api/facturacion-v2/configuracion/logo', upload.single('logo'), handleLogoUpload);
-
-
-// ---- CLIENTES (usados por la UI de facturación) ----
-app.get('/api/facturacion/clientes', ah(async (req, res) => {
-  const s = getSucursal(req);
-  const { rows } = await q(
-    `SELECT id, rfc, razon_social, email, telefono, direccion, uso_cfdi, codigo_postal, regimen_fiscal, sucursal_id, created_at
-     FROM facturacion_clientes
-     WHERE ${sucWhereN(1)}
-     ORDER BY created_at DESC`, [s]
-  );
+app.get('/api/objetivos/doctor-settings', authRequired, ah(async (req,res)=>{
+  const s=getSucursal(req); const tenantId=getTenantId(req);
+  const {rows}=await q(`SELECT doctor_id, visible, comision_pct FROM objetivos_doctor_settings WHERE tenant_id=$1 AND sucursal_id=$2 ORDER BY doctor_id`, [tenantId,s]);
   res.json(rows);
 }));
 
-app.post('/api/facturacion/clientes', ah(async (req, res) => {
-  const s = getSucursal(req);
-  const { rfc, razon_social, email, telefono, direccion, uso_cfdi, codigo_postal, regimen_fiscal } = req.body || {};
-  if (!rfc || !String(rfc).trim()) return res.status(400).json({ error: 'RFC es requerido' });
-  if (!razon_social || !String(razon_social).trim()) return res.status(400).json({ error: 'Razón social es requerida' });
-  const { rows } = await q(
-    `INSERT INTO facturacion_clientes (rfc, razon_social, email, telefono, direccion, uso_cfdi, codigo_postal, regimen_fiscal, sucursal_id)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
-    [
-      String(rfc).trim(),
-      String(razon_social).trim(),
-      email || null,
-      telefono || null,
-      direccion || null,
-      uso_cfdi || null,
-      codigo_postal || null,
-      regimen_fiscal || null,
-      s
-    ]
-  );
+app.put('/api/objetivos/doctor-settings/:doctorId', authRequired, ah(async (req,res)=>{
+  const s=getSucursal(req); const tenantId=getTenantId(req); const doctorId=Number(req.params.doctorId);
+  const exists=await q(`SELECT id FROM doctors WHERE id=$1 AND tenant_id=$2 AND ${sucWhereN(3)} LIMIT 1`, [doctorId,tenantId,s]);
+  if(!exists.rows[0]) return res.status(404).json({error:'Doctor no encontrado en esta empresa/sucursal'});
+  const visible=req.body?.visible !== false;
+  let pct=Number(req.body?.comision_pct ?? req.body?.comision ?? 0.20);
+  if (!Number.isFinite(pct) || pct<0 || pct>1) return res.status(400).json({error:'comision_pct debe estar entre 0 y 1'});
+  const {rows}=await q(`INSERT INTO objetivos_doctor_settings(tenant_id,sucursal_id,doctor_id,visible,comision_pct)
+    VALUES($1,$2,$3,$4,$5)
+    ON CONFLICT(tenant_id,sucursal_id,doctor_id) DO UPDATE SET visible=EXCLUDED.visible, comision_pct=EXCLUDED.comision_pct, updated_at=NOW()
+    RETURNING doctor_id,visible,comision_pct`, [tenantId,s,doctorId,visible,pct]);
   res.json(rows[0]);
 }));
 
-// 🔹 Nuevo: actualizar cliente (parcial)
-app.put('/api/facturacion/clientes/:id', ah(async (req, res) => {
-  const s  = getSucursal(req);
-  const id = String(req.params.id);
-  const { rfc, razon_social, email, telefono, direccion, uso_cfdi, codigo_postal, regimen_fiscal } = req.body || {};
-
-  const { rows } = await q(
-    `UPDATE facturacion_clientes
-       SET rfc            = COALESCE($1, rfc),
-           razon_social   = COALESCE($2, razon_social),
-           email          = COALESCE($3, email),
-           telefono       = COALESCE($4, telefono),
-           direccion      = COALESCE($5, direccion),
-           uso_cfdi       = COALESCE($6, uso_cfdi),
-           codigo_postal  = COALESCE($7, codigo_postal),
-           regimen_fiscal = COALESCE($8, regimen_fiscal)
-     WHERE id = $9 AND ${sucWhereN(10)}
-     RETURNING *`,
-    [
-      rfc || null, razon_social || null, email || null, telefono || null, direccion || null,
-      uso_cfdi || null, codigo_postal || null, regimen_fiscal || null, id, s
-    ]
-  );
-
-  if (!rows[0]) return res.status(404).json({ error: 'Cliente no encontrado' });
-  res.json(rows[0]);
-}));
-
-// ---- PRODUCTOS (catálogo) ----
-app.get('/api/facturacion/productos', ah(async (req, res) => {
-  const s = getSucursal(req);
-  const { q:term } = req.query; // opcional ?q=consulta
-  const params = [s];
-  let where = `${sucWhereN(1)}`;
-  if (term && String(term).trim()) {
-    params.push(`%${String(term).trim()}%`);
-    where += ` AND (descripcion ILIKE $${params.length} OR clave_prod_serv ILIKE $${params.length})`;
-  }
-  const { rows } = await q(
-    `SELECT id, descripcion, clave_prod_serv, unidad, objeto_imp, precio, sucursal_id, created_at
-     FROM facturacion_productos
-     WHERE ${where}
-     ORDER BY created_at DESC`,
-    params
-  );
-  res.json(rows);
-}));
-
-app.post('/api/facturacion/productos', ah(async (req, res) => {
-  const s = getSucursal(req);
-  const { descripcion, clave_prod_serv, unidad, objeto_imp, precio } = req.body || {};
-  if (!descripcion || !String(descripcion).trim()) {
-    return res.status(400).json({ error: 'La descripción es requerida' });
-  }
-  const { rows } = await q(
-    `INSERT INTO facturacion_productos (descripcion, clave_prod_serv, unidad, objeto_imp, precio, sucursal_id)
-     VALUES ($1,$2,$3,$4,$5,$6)
-     RETURNING id, descripcion, clave_prod_serv, unidad, objeto_imp, precio, sucursal_id, created_at`,
-    [
-      String(descripcion).trim(),
-      clave_prod_serv || null,
-      unidad || null,
-      objeto_imp || null,
-      precio != null ? Number(precio) : 0,
-      s
-    ]
-  );
+app.post('/api/objetivos', authRequired, ah(async (req,res)=>{
+  const s=getSucursal(req); const tenantId=getTenantId(req);
+  const {doctor_id,meta,sueldo_base,abonos,periodo_inicio,periodo_fin,from,to}=req.body||{};
+  const doctorId=Number(doctor_id);
+  if (!Number.isFinite(doctorId)) return res.status(400).json({error:'doctor_id es requerido'});
+  const doc=await q(`SELECT id FROM doctors WHERE id=$1 AND tenant_id=$2 AND ${sucWhereN(3)} LIMIT 1`, [doctorId,tenantId,s]);
+  if(!doc.rows[0]) return res.status(400).json({error:'El doctor no pertenece a esta empresa/sucursal'});
+  const pInicio=periodo_inicio||from||null, pFin=periodo_fin||to||null;
+  const existing=await q(`SELECT id FROM objetivos WHERE tenant_id=$1 AND sucursal_id=$2 AND doctor_id=$3 AND periodo_inicio IS NOT DISTINCT FROM $4::date AND periodo_fin IS NOT DISTINCT FROM $5::date LIMIT 1`, [tenantId,s,doctorId,pInicio,pFin]);
+  if(existing.rows[0]) return res.status(409).json({error:'Ya existe un objetivo para ese doctor y período', id:existing.rows[0].id});
+  const {rows}=await q(`INSERT INTO objetivos(doctor_id,meta,sueldo_base,abonos,periodo_inicio,periodo_fin,sucursal_id,tenant_id)
+    VALUES($1,$2,$3,$4,$5,$6,$7,$8)
+    RETURNING id,doctor_id,meta,sueldo_base,abonos,periodo_inicio,periodo_fin,sucursal_id,created_at`,
+    [doctorId,Number(meta||0),Number(sueldo_base||0),Number(abonos||0),pInicio,pFin,s,tenantId]);
   res.status(201).json(rows[0]);
 }));
 
-app.put('/api/facturacion/productos/:id', ah(async (req, res) => {
-  const s = getSucursal(req);
-  const id = String(req.params.id);
-  const { descripcion, clave_prod_serv, unidad, objeto_imp, precio } = req.body || {};
-  const { rows } = await q(
-    `UPDATE facturacion_productos
-     SET descripcion = COALESCE($1, descripcion),
-         clave_prod_serv = COALESCE($2, clave_prod_serv),
-         unidad = COALESCE($3, unidad),
-         objeto_imp = COALESCE($4, objeto_imp),
-         precio = COALESCE($5, precio)
-     WHERE id=$6 AND ${sucWhereN(7)}
-     RETURNING id, descripcion, clave_prod_serv, unidad, objeto_imp, precio, sucursal_id, created_at`,
-    [
-      descripcion != null ? String(descripcion).trim() : null,
-      clave_prod_serv || null,
-      unidad || null,
-      objeto_imp || null,
-      precio != null ? Number(precio) : null,
-      id, s
-    ]
-  );
-  const row = rows[0];
-  if (!row) return res.status(404).json({ error: 'Producto no encontrado' });
-  res.json(row);
+app.put('/api/objetivos/:id', authRequired, ah(async (req,res)=>{
+  const s=getSucursal(req); const tenantId=getTenantId(req); const id=Number(req.params.id);
+  const {doctor_id,meta,sueldo_base,abonos,periodo_inicio,periodo_fin,from,to}=req.body||{};
+  if(doctor_id!=null){
+    const doc=await q(`SELECT id FROM doctors WHERE id=$1 AND tenant_id=$2 AND ${sucWhereN(3)} LIMIT 1`, [Number(doctor_id),tenantId,s]);
+    if(!doc.rows[0]) return res.status(400).json({error:'El doctor no pertenece a esta empresa/sucursal'});
+  }
+  const {rows}=await q(`UPDATE objetivos SET doctor_id=COALESCE($1,doctor_id),meta=COALESCE($2,meta),sueldo_base=COALESCE($3,sueldo_base),abonos=COALESCE($4,abonos),periodo_inicio=COALESCE($5,periodo_inicio),periodo_fin=COALESCE($6,periodo_fin)
+    WHERE id=$7 AND tenant_id=$8 AND ${sucWhereN(9)}
+    RETURNING id,doctor_id,meta,sueldo_base,abonos,periodo_inicio,periodo_fin,sucursal_id,created_at`,
+    [doctor_id!=null?Number(doctor_id):null,meta!=null?Number(meta):null,sueldo_base!=null?Number(sueldo_base):null,abonos!=null?Number(abonos):null,periodo_inicio||from||null,periodo_fin||to||null,id,tenantId,s]);
+  if(!rows[0]) return res.status(404).json({error:'Objetivo no encontrado'});
+  res.json(rows[0]);
 }));
 
-app.delete('/api/facturacion/productos/:id', ah(async (req, res) => {
-  const s = getSucursal(req);
-  await q(
-    `DELETE FROM facturacion_productos
-     WHERE id=$1 AND ${sucWhereN(2)}`,
-    [String(req.params.id), s]
-  );
+app.delete('/api/objetivos/:id', authRequired, ah(async (req,res)=>{
+  const s=getSucursal(req); const tenantId=getTenantId(req);
+  const result=await q(`DELETE FROM objetivos WHERE id=$1 AND tenant_id=$2 AND ${sucWhereN(3)} RETURNING id`, [Number(req.params.id),tenantId,s]);
+  if(!result.rows[0]) return res.status(404).json({error:'Objetivo no encontrado'});
   res.status(204).end();
 }));
 
-// ---- FACTURAS ----
-app.get('/api/facturacion/facturas', ah(async (req, res) => {
-  const s = getSucursal(req);
+// ==============================
+// FACTURACIÓN — aislada por empresa + sucursal
+// ==============================
+app.get('/api/facturacion/configuracion', authRequired, ah(async (req,res)=>{
+  const s=getSucursal(req); const tenantId=getTenantId(req);
+  const {rows}=await q(`SELECT rfc,razon_social,regimen_fiscal,codigo_postal,pac_proveedor,serie_facturas,ultimo_folio,ambiente,activo,logo_url,
+    CASE WHEN cer_file IS NOT NULL THEN TRUE ELSE FALSE END AS tiene_cer,
+    CASE WHEN key_file IS NOT NULL THEN TRUE ELSE FALSE END AS tiene_key
+    FROM facturacion_configuracion WHERE tenant_id=$1 AND sucursal_id=$2 LIMIT 1`, [tenantId,s]);
+  if(rows[0]) return res.json(rows[0]);
+  res.json({rfc:'',razon_social:'',regimen_fiscal:'',codigo_postal:'',pac_proveedor:'facturama',serie_facturas:'',ultimo_folio:1,ambiente:'pruebas',activo:false});
+}));
 
-  const { desde, hasta } = req.query;
-  let { estado } = req.query;
+app.put('/api/facturacion/configuracion', authRequired, ah(async (req,res)=>{
+  const s=getSucursal(req); const tenantId=getTenantId(req); const b=req.body||{};
+  const {rfc,razon_social,regimen_fiscal,codigo_postal}=b;
+  if(!rfc||!razon_social||!regimen_fiscal||!codigo_postal) return res.status(400).json({error:'RFC, razón social, régimen fiscal y código postal son requeridos'});
+  const {rows}=await q(`INSERT INTO facturacion_configuracion(tenant_id,sucursal_id,rfc,razon_social,regimen_fiscal,codigo_postal,pac_proveedor,pac_usuario,pac_password,pac_url_timbrado,pac_url_cancelacion,serie_facturas,ultimo_folio,ambiente,activo,logo_url,updated_at)
+    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,NOW())
+    ON CONFLICT(tenant_id,sucursal_id) DO UPDATE SET rfc=EXCLUDED.rfc,razon_social=EXCLUDED.razon_social,regimen_fiscal=EXCLUDED.regimen_fiscal,codigo_postal=EXCLUDED.codigo_postal,pac_proveedor=EXCLUDED.pac_proveedor,pac_usuario=EXCLUDED.pac_usuario,pac_password=EXCLUDED.pac_password,pac_url_timbrado=EXCLUDED.pac_url_timbrado,pac_url_cancelacion=EXCLUDED.pac_url_cancelacion,serie_facturas=EXCLUDED.serie_facturas,ultimo_folio=EXCLUDED.ultimo_folio,ambiente=EXCLUDED.ambiente,activo=EXCLUDED.activo,logo_url=COALESCE(EXCLUDED.logo_url,facturacion_configuracion.logo_url),updated_at=NOW()
+    RETURNING rfc,razon_social,regimen_fiscal,codigo_postal,pac_proveedor,serie_facturas,ultimo_folio,ambiente,activo,logo_url`,
+    [tenantId,s,String(rfc).trim().toUpperCase(),String(razon_social).trim(),String(regimen_fiscal),String(codigo_postal),b.pac_proveedor||'facturama',b.pac_usuario||'',b.pac_password||'',b.pac_url_timbrado||null,b.pac_url_cancelacion||null,b.serie_facturas||'',Number(b.ultimo_folio||1),b.ambiente==='produccion'?'produccion':'pruebas',b.activo!==false,b.logo_url||null]);
+  res.json(rows[0]);
+}));
 
-  // Normaliza el estado que llega del UI
-  estado = (estado || '').toString().trim().toLowerCase();
-  if (estado === 'timbradas') estado = 'timbrada';
-  if (estado === 'borradores') estado = 'borrador';
-  if (estado === 'canceladas') estado = 'cancelada';
-  if (estado === 'todas') estado = '';
+const multer = require('multer');
+const upload = multer({storage:multer.memoryStorage(),limits:{fileSize:10*1024*1024}});
+const handleLogoUpload = ah(async (req,res)=>{
+  const tenantId=getTenantId(req); const s=getSucursal(req);
+  if(!req.file) return res.status(400).json({ok:false,error:'Falta archivo "logo"'});
+  const mime=req.file.mimetype||'image/png';
+  if(!/^image\//.test(mime)) return res.status(400).json({ok:false,error:'Tipo de archivo no permitido'});
+  const cfg=await q(`SELECT 1 FROM facturacion_configuracion WHERE tenant_id=$1 AND sucursal_id=$2`, [tenantId,s]);
+  if(!cfg.rows[0]) return res.status(409).json({ok:false,error:'Guarda primero la configuración fiscal de esta sucursal'});
+  await q(`UPDATE facturacion_configuracion SET logo_image=$1,logo_mime=$2,updated_at=NOW() WHERE tenant_id=$3 AND sucursal_id=$4`, [req.file.buffer,mime,tenantId,s]);
+  const dataUrl=`data:${mime};base64,${req.file.buffer.toString('base64')}`;
+  res.json({ok:true,url:dataUrl});
+});
+app.post('/api/facturacion/configuracion/logo', authRequired, upload.single('logo'), handleLogoUpload);
+app.post('/api/facturacion-v2/configuracion/logo', authRequired, upload.single('logo'), handleLogoUpload);
 
-  // WHERE dinámico + parámetros
-  const whereParts = [`${sucWhereN(1)}`]; // $1 = sucursal
-  const params = [s];
-  let i = 2;
+app.post('/api/facturacion/configuracion/certificados', authRequired, upload.fields([
+  { name:'cer', maxCount:1 }, { name:'key', maxCount:1 }
+]), ah(async (req,res)=>{
+  const s=getSucursal(req); const tenantId=getTenantId(req);
+  const cer=req.files?.cer?.[0]; const key=req.files?.key?.[0]; const keyPassword=String(req.body?.key_password||'');
+  if(!cer || !key) return res.status(400).json({ok:false,error:'Se requieren archivos .cer y .key'});
+  if(!keyPassword) return res.status(400).json({ok:false,error:'La contraseña de la llave privada es requerida'});
+  const cfg=await q(`SELECT 1 FROM facturacion_configuracion WHERE tenant_id=$1 AND sucursal_id=$2`, [tenantId,s]);
+  if(!cfg.rows[0]) return res.status(409).json({ok:false,error:'Guarda primero la configuración fiscal de esta sucursal'});
+  await q(`UPDATE facturacion_configuracion SET cer_file=$1,key_file=$2,key_password=$3,updated_at=NOW() WHERE tenant_id=$4 AND sucursal_id=$5`, [cer.buffer,key.buffer,keyPassword,tenantId,s]);
+  res.json({ok:true,message:'Certificados guardados correctamente'});
+}));
 
-  if (desde) { whereParts.push(`created_at::date >= $${i}`); params.push(String(desde)); i++; }
-  if (hasta) { whereParts.push(`created_at::date <= $${i}`); params.push(String(hasta)); i++; }
-  if (estado && ['timbrada','borrador','cancelada'].includes(estado)) {
-    whereParts.push(`estado = $${i}`); params.push(estado); i++;
-  }
+app.get('/api/facturacion/configuracion/certificados/status', authRequired, ah(async (req,res)=>{
+  const s=getSucursal(req); const tenantId=getTenantId(req);
+  const {rows}=await q(`SELECT cer_file IS NOT NULL AS tiene_cer,key_file IS NOT NULL AS tiene_key,COALESCE(key_password,'')<>'' AS tiene_password,COALESCE(octet_length(cer_file),0) AS cer_size,COALESCE(octet_length(key_file),0) AS key_size FROM facturacion_configuracion WHERE tenant_id=$1 AND sucursal_id=$2 LIMIT 1`, [tenantId,s]);
+  const r=rows[0]||{tiene_cer:false,tiene_key:false,tiene_password:false,cer_size:0,key_size:0};
+  res.json({...r,tiene_certificados:Boolean(r.tiene_cer&&r.tiene_key&&r.tiene_password),mensaje:r.tiene_cer&&r.tiene_key?'Certificados disponibles':'Certificados incompletos'});
+}));
 
-  const sql = `
-    SELECT
-      id, cliente, tipo, forma_pago, metodo_pago, cita_id, notas, total, sucursal_id,
-      created_at, estado, uuid, serie, folio, fecha_timbrado
-    FROM facturas
-    WHERE ${whereParts.join(' AND ')}
-    ORDER BY created_at DESC
-  `;
-
-  const { rows } = await q(sql, params);
+app.get('/api/facturacion/clientes', authRequired, ah(async (req,res)=>{
+  const s=getSucursal(req); const tenantId=getTenantId(req);
+  const {rows}=await q(`SELECT id,rfc,razon_social,email,telefono,direccion,uso_cfdi,codigo_postal,regimen_fiscal,sucursal_id,created_at FROM facturacion_clientes WHERE tenant_id=$1 AND ${sucWhereN(2)} ORDER BY created_at DESC`, [tenantId,s]);
   res.json(rows);
 }));
-
-app.get('/api/facturacion/facturas/:id', ah(async (req, res) => {
-  const s = getSucursal(req);
-  const id = String(req.params.id);
-  const { rows } = await q(
-    `SELECT id, cliente, tipo, forma_pago, metodo_pago, cita_id, notas, total, sucursal_id, created_at
-     FROM facturas
-     WHERE id=$1 AND ${sucWhereN(2)}`, [id, s]
-  );
-  if (rows.length === 0) return res.status(404).json({ error: 'Factura no encontrada' });
-  const factura = rows[0];
-  const conceptos = await q(
-    `SELECT id, descripcion, cantidad, valor_unitario, importe, clave_prod_serv, unidad, objeto_imp
-     FROM factura_conceptos WHERE factura_id=$1 ORDER BY id ASC`, [id]
-  );
-  res.json({ ...factura, conceptos: conceptos.rows });
+app.post('/api/facturacion/clientes', authRequired, ah(async (req,res)=>{
+  const s=getSucursal(req); const tenantId=getTenantId(req); const b=req.body||{};
+  if(!b.rfc||!String(b.rfc).trim()) return res.status(400).json({error:'RFC es requerido'});
+  if(!b.razon_social||!String(b.razon_social).trim()) return res.status(400).json({error:'Razón social es requerida'});
+  try{
+    const {rows}=await q(`INSERT INTO facturacion_clientes(rfc,razon_social,email,telefono,direccion,uso_cfdi,codigo_postal,regimen_fiscal,sucursal_id,tenant_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`, [String(b.rfc).trim().toUpperCase(),String(b.razon_social).trim(),b.email||null,b.telefono||null,b.direccion||null,b.uso_cfdi||null,b.codigo_postal||null,b.regimen_fiscal||null,s,tenantId]);
+    res.status(201).json(rows[0]);
+  }catch(e){ if(e?.code==='23505') return res.status(409).json({error:'Ese RFC ya está registrado en esta sucursal'}); throw e; }
+}));
+app.put('/api/facturacion/clientes/:id', authRequired, ah(async (req,res)=>{
+  const s=getSucursal(req); const tenantId=getTenantId(req); const b=req.body||{};
+  const {rows}=await q(`UPDATE facturacion_clientes SET rfc=COALESCE($1,rfc),razon_social=COALESCE($2,razon_social),email=COALESCE($3,email),telefono=COALESCE($4,telefono),direccion=COALESCE($5,direccion),uso_cfdi=COALESCE($6,uso_cfdi),codigo_postal=COALESCE($7,codigo_postal),regimen_fiscal=COALESCE($8,regimen_fiscal) WHERE id=$9 AND tenant_id=$10 AND ${sucWhereN(11)} RETURNING *`, [b.rfc?String(b.rfc).trim().toUpperCase():null,b.razon_social?String(b.razon_social).trim():null,b.email??null,b.telefono??null,b.direccion??null,b.uso_cfdi??null,b.codigo_postal??null,b.regimen_fiscal??null,String(req.params.id),tenantId,s]);
+  if(!rows[0]) return res.status(404).json({error:'Cliente fiscal no encontrado'}); res.json(rows[0]);
 }));
 
-app.post('/api/facturacion/facturas/:id/timbrar', ah(async (req, res) => {
-  const s = getSucursal(req);
-  const id = String(req.params.id);
-  const now = new Date().toISOString();
-  return res.json({ ok: true, id, uuid: 'UUID-DE-EJEMPLO', fecha_timbrado: now });
+app.get('/api/facturacion/productos', authRequired, ah(async (req,res)=>{
+  const s=getSucursal(req); const tenantId=getTenantId(req);
+  const {rows}=await q(`SELECT id,nombre,codigo_interno,descripcion,clave_prod_serv,unidad,objeto_imp,precio,sucursal_id,created_at FROM facturacion_productos WHERE tenant_id=$1 AND ${sucWhereN(2)} ORDER BY created_at DESC`, [tenantId,s]); res.json(rows);
+}));
+app.post('/api/facturacion/productos', authRequired, ah(async (req,res)=>{
+  const s=getSucursal(req); const tenantId=getTenantId(req); const b=req.body||{};
+  const descripcion=String(b.descripcion||b.nombre||'').trim(); if(!descripcion) return res.status(400).json({error:'Descripción es requerida'});
+  const {rows}=await q(`INSERT INTO facturacion_productos(nombre,codigo_interno,descripcion,clave_prod_serv,unidad,objeto_imp,precio,sucursal_id,tenant_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`, [b.nombre||descripcion,b.codigo_interno||null,descripcion,b.clave_prod_serv||b.clave_prodserv||null,b.unidad||b.clave_unidad||null,b.objeto_imp||null,Number(b.precio||0),s,tenantId]); res.status(201).json(rows[0]);
+}));
+app.put('/api/facturacion/productos/:id', authRequired, ah(async (req,res)=>{
+  const s=getSucursal(req); const tenantId=getTenantId(req); const b=req.body||{};
+  const {rows}=await q(`UPDATE facturacion_productos SET nombre=COALESCE($1,nombre),codigo_interno=COALESCE($2,codigo_interno),descripcion=COALESCE($3,descripcion),clave_prod_serv=COALESCE($4,clave_prod_serv),unidad=COALESCE($5,unidad),objeto_imp=COALESCE($6,objeto_imp),precio=COALESCE($7,precio) WHERE id=$8 AND tenant_id=$9 AND ${sucWhereN(10)} RETURNING *`, [b.nombre??null,b.codigo_interno??null,b.descripcion??null,b.clave_prod_serv||b.clave_prodserv||null,b.unidad||b.clave_unidad||null,b.objeto_imp??null,b.precio!=null?Number(b.precio):null,String(req.params.id),tenantId,s]);
+  if(!rows[0]) return res.status(404).json({error:'Producto no encontrado'}); res.json(rows[0]);
+}));
+app.delete('/api/facturacion/productos/:id', authRequired, ah(async (req,res)=>{
+  const s=getSucursal(req); const tenantId=getTenantId(req); const out=await q(`DELETE FROM facturacion_productos WHERE id=$1 AND tenant_id=$2 AND ${sucWhereN(3)} RETURNING id`, [String(req.params.id),tenantId,s]); if(!out.rows[0]) return res.status(404).json({error:'Producto no encontrado'}); res.status(204).end();
 }));
 
-app.post('/api/facturacion/facturas/:id/cancelar', ah(async (req, res) => {
-  const s = getSucursal(req);
-  const id = String(req.params.id);
-  const { motivo } = req.body || {};
-
-  // Marca como cancelada en tu DB
-  const { rows } = await q(
-    `UPDATE facturas
-        SET estado = 'cancelada',
-            status = COALESCE(status, 'Cancelada'),
-            cancelada_at = NOW(),
-            motivo_cancelacion = COALESCE($1, motivo_cancelacion)
-      WHERE id = $2 AND ${sucWhereN(3)}
-      RETURNING id, estado, cancelada_at, motivo_cancelacion`,
-    [motivo || null, id, s]
-  );
-
-  if (rows.length === 0) {
-    return res.status(404).json({ ok: false, error: 'Factura no encontrada' });
-  }
-
-  // (Opcional) aquí podrías llamar al PAC para cancelar el CFDI
-  return res.json({ ok: true, ...rows[0] });
+app.get('/api/facturacion/facturas', authRequired, ah(async (req,res)=>{
+  const s=getSucursal(req); const tenantId=getTenantId(req); const {desde,hasta}=req.query; let {estado}=req.query;
+  estado=String(estado||'').trim().toLowerCase(); if(estado==='timbradas')estado='timbrada'; if(estado==='borradores')estado='borrador'; if(estado==='canceladas')estado='cancelada'; if(estado==='todas')estado='';
+  const where=['tenant_id=$1',`${sucWhereN(2)}`]; const params=[tenantId,s]; let i=3;
+  if(desde){where.push(`created_at::date >= $${i++}`);params.push(String(desde));} if(hasta){where.push(`created_at::date <= $${i++}`);params.push(String(hasta));} if(['timbrada','borrador','cancelada'].includes(estado)){where.push(`estado=$${i++}`);params.push(estado);}
+  const {rows}=await q(`SELECT id,cliente,tipo,forma_pago,metodo_pago,cita_id,notas,total,sucursal_id,created_at,estado,uuid,serie,folio,fecha_timbrado FROM facturas WHERE ${where.join(' AND ')} ORDER BY created_at DESC`, params); res.json(rows);
 }));
-
-
-
-app.post('/api/facturacion/facturas', ah(async (req, res) => {
-  const s = getSucursal(req);
-  const body = req.body || {};
-  const { cliente, tipo, forma_pago, metodo_pago, cita_id, notas, total, conceptos } = body;
-
-  if (!cliente || !String(cliente).trim()) return res.status(400).json({ error: 'El cliente es requerido' });
-  if (!tipo || !String(tipo).trim())       return res.status(400).json({ error: 'El tipo de factura es requerido' });
-
-  const tot = Number(total ?? 0);
-  const { rows } = await q(
-    `INSERT INTO facturas (cliente, tipo, forma_pago, metodo_pago, cita_id, notas, total, sucursal_id)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
-    [String(cliente).trim(), String(tipo).trim(), forma_pago || null, metodo_pago || null, cita_id || null, notas || null, isFinite(tot) ? tot : 0, s]
-  );
-  const factura = rows[0];
-
-  if (Array.isArray(conceptos)) {
-    for (const c of conceptos) {
-      const cantidad = Number(c.cantidad || 1);
-      const valor    = Number(c.valor_unitario || c.valorUnitario || 0);
-      const importe  = Number(c.importe != null ? c.importe : cantidad * valor);
-      await q(
-        `INSERT INTO factura_conceptos
-           (factura_id, descripcion, cantidad, valor_unitario, importe, clave_prod_serv, unidad, objeto_imp, sucursal_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-        [
-          factura.id,
-          String(c.descripcion || c.descripcionCorta || 'Concepto').trim(),
-          isFinite(cantidad) ? cantidad : 1,
-          isFinite(valor) ? valor : 0,
-          isFinite(importe) ? importe : 0,
-          c.clave_prod_serv || c.claveProdServ || null,
-          c.unidad || null,
-          c.objeto_imp || c.objetoImp || null,
-          s
-        ]
-      );
-    }
-  }
-
-  res.json(factura);
+app.get('/api/facturacion/facturas/:id', authRequired, ah(async (req,res)=>{
+  const s=getSucursal(req); const tenantId=getTenantId(req); const id=String(req.params.id);
+  const {rows}=await q(`SELECT * FROM facturas WHERE id=$1 AND tenant_id=$2 AND ${sucWhereN(3)} LIMIT 1`, [id,tenantId,s]); if(!rows[0]) return res.status(404).json({error:'Factura no encontrada'});
+  const conceptos=await q(`SELECT id,descripcion,cantidad,valor_unitario,importe,clave_prod_serv,unidad,objeto_imp FROM factura_conceptos WHERE factura_id=$1 AND tenant_id=$2 AND ${sucWhereN(3)} ORDER BY id`, [id,tenantId,s]); res.json({...rows[0],conceptos:conceptos.rows});
 }));
-
-app.put('/api/facturacion/facturas/:id', ah(async (req, res) => {
-  const s = getSucursal(req);
-  const id = String(req.params.id);
-  const { cliente, tipo, forma_pago, metodo_pago, cita_id, notas, total, conceptos } = req.body || {};
-
-  const { rows } = await q(
-    `UPDATE facturas
-     SET cliente = COALESCE($1, cliente),
-         tipo = COALESCE($2, tipo),
-         forma_pago = COALESCE($3, forma_pago),
-         metodo_pago = COALESCE($4, metodo_pago),
-         cita_id = COALESCE($5, cita_id),
-         notas = COALESCE($6, notas),
-         total = COALESCE($7, total)
-     WHERE id=$8 AND ${sucWhereN(9)}
-     RETURNING *`,
-    [cliente || null, tipo || null, forma_pago || null, metodo_pago || null, cita_id || null, notas || null, total != null ? Number(total) : null, id, s]
-  );
-  const factura = rows[0];
-  if (!factura) return res.status(404).json({ error: 'Factura no encontrada' });
-
-  if (Array.isArray(conceptos)) {
-    await q(`DELETE FROM factura_conceptos WHERE factura_id=$1`, [id]);
-    for (const c of conceptos) {
-      const cantidad = Number(c.cantidad || 1);
-      const valor    = Number(c.valor_unitario || c.valorUnitario || 0);
-      const importe  = Number(c.importe != null ? c.importe : cantidad * valor);
-      await q(
-        `INSERT INTO factura_conceptos
-          (factura_id, descripcion, cantidad, valor_unitario, importe, clave_prod_serv, unidad, objeto_imp, sucursal_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-        [
-          id,
-          String(c.descripcion || 'Concepto').trim(),
-          isFinite(cantidad) ? cantidad : 1,
-          isFinite(valor) ? valor : 0,
-          isFinite(importe) ? importe : 0,
-          c.clave_prod_serv || null,
-          c.unidad || null,
-          c.objeto_imp || null,
-          s
-        ]
-      );
-    }
-  }
-
-  res.json(factura);
+app.post('/api/facturacion/facturas/:id/timbrar', authRequired, ah(async (req,res)=>{
+  const s=getSucursal(req); const tenantId=getTenantId(req); const id=String(req.params.id);
+  const f=await q(`SELECT id FROM facturas WHERE id=$1 AND tenant_id=$2 AND ${sucWhereN(3)} LIMIT 1`, [id,tenantId,s]); if(!f.rows[0]) return res.status(404).json({error:'Factura no encontrada'});
+  // Este endpoint sigue siendo stub; sólo verifica ownership. El timbrado real usa el conector PAC existente.
+  res.json({ok:true,id,uuid:'UUID-DE-EJEMPLO',fecha_timbrado:new Date().toISOString()});
 }));
-
-app.delete('/api/facturacion/facturas/:id', ah(async (req, res) => {
-  const s = getSucursal(req);
-  await q(`DELETE FROM facturas WHERE id=$1 AND ${sucWhereN(2)}`, [String(req.params.id), s]);
-  res.status(204).end();
+app.post('/api/facturacion/facturas/:id/cancelar', authRequired, ah(async (req,res)=>{
+  const s=getSucursal(req); const tenantId=getTenantId(req); const id=String(req.params.id); const motivo=req.body?.motivo||null;
+  const {rows}=await q(`UPDATE facturas SET estado='cancelada',status=COALESCE(status,'Cancelada'),cancelada_at=NOW(),motivo_cancelacion=COALESCE($1,motivo_cancelacion) WHERE id=$2 AND tenant_id=$3 AND ${sucWhereN(4)} RETURNING id,estado,cancelada_at,motivo_cancelacion`, [motivo,id,tenantId,s]);
+  if(!rows[0]) return res.status(404).json({ok:false,error:'Factura no encontrada'}); res.json({ok:true,...rows[0]});
+}));
+app.post('/api/facturacion/facturas', authRequired, ah(async (req,res)=>{
+  const s=getSucursal(req); const tenantId=getTenantId(req); const b=req.body||{};
+  if(!b.cliente||!String(b.cliente).trim()) return res.status(400).json({error:'El cliente es requerido'}); if(!b.tipo||!String(b.tipo).trim()) return res.status(400).json({error:'El tipo de factura es requerido'});
+  if(b.cita_id){ const ap=await q(`SELECT id FROM appointments WHERE id=$1 AND tenant_id=$2 AND ${sucWhereN(3)} LIMIT 1`, [Number(b.cita_id),tenantId,s]); if(!ap.rows[0]) return res.status(400).json({error:'La cita no pertenece a esta empresa/sucursal'}); }
+  const {rows}=await q(`INSERT INTO facturas(cliente,tipo,forma_pago,metodo_pago,cita_id,notas,total,sucursal_id,tenant_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`, [String(b.cliente).trim(),String(b.tipo).trim(),b.forma_pago||null,b.metodo_pago||null,b.cita_id||null,b.notas||null,Number(b.total||0),s,tenantId]); const factura=rows[0];
+  for(const c of Array.isArray(b.conceptos)?b.conceptos:[]){ const cantidad=Number(c.cantidad||1),valor=Number(c.valor_unitario||c.valorUnitario||0),importe=Number(c.importe!=null?c.importe:cantidad*valor); await q(`INSERT INTO factura_conceptos(factura_id,descripcion,cantidad,valor_unitario,importe,clave_prod_serv,unidad,objeto_imp,sucursal_id,tenant_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, [factura.id,String(c.descripcion||c.descripcionCorta||'Concepto').trim(),cantidad,valor,importe,c.clave_prod_serv||c.claveProdServ||null,c.unidad||null,c.objeto_imp||c.objetoImp||null,s,tenantId]); }
+  res.status(201).json(factura);
+}));
+app.put('/api/facturacion/facturas/:id', authRequired, ah(async (req,res)=>{
+  const s=getSucursal(req); const tenantId=getTenantId(req); const id=String(req.params.id); const b=req.body||{};
+  if(b.cita_id){const ap=await q(`SELECT id FROM appointments WHERE id=$1 AND tenant_id=$2 AND ${sucWhereN(3)} LIMIT 1`, [Number(b.cita_id),tenantId,s]); if(!ap.rows[0]) return res.status(400).json({error:'La cita no pertenece a esta empresa/sucursal'});}
+  const {rows}=await q(`UPDATE facturas SET cliente=COALESCE($1,cliente),tipo=COALESCE($2,tipo),forma_pago=COALESCE($3,forma_pago),metodo_pago=COALESCE($4,metodo_pago),cita_id=COALESCE($5,cita_id),notas=COALESCE($6,notas),total=COALESCE($7,total) WHERE id=$8 AND tenant_id=$9 AND ${sucWhereN(10)} RETURNING *`, [b.cliente||null,b.tipo||null,b.forma_pago||null,b.metodo_pago||null,b.cita_id||null,b.notas||null,b.total!=null?Number(b.total):null,id,tenantId,s]); if(!rows[0]) return res.status(404).json({error:'Factura no encontrada'});
+  if(Array.isArray(b.conceptos)){ await q(`DELETE FROM factura_conceptos WHERE factura_id=$1 AND tenant_id=$2 AND ${sucWhereN(3)}`, [id,tenantId,s]); for(const c of b.conceptos){const cantidad=Number(c.cantidad||1),valor=Number(c.valor_unitario||c.valorUnitario||0),importe=Number(c.importe!=null?c.importe:cantidad*valor);await q(`INSERT INTO factura_conceptos(factura_id,descripcion,cantidad,valor_unitario,importe,clave_prod_serv,unidad,objeto_imp,sucursal_id,tenant_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, [id,String(c.descripcion||'Concepto').trim(),cantidad,valor,importe,c.clave_prod_serv||null,c.unidad||null,c.objeto_imp||null,s,tenantId]);}}
+  res.json(rows[0]);
+}));
+app.delete('/api/facturacion/facturas/:id', authRequired, ah(async (req,res)=>{
+  const s=getSucursal(req); const tenantId=getTenantId(req); const out=await q(`DELETE FROM facturas WHERE id=$1 AND tenant_id=$2 AND ${sucWhereN(3)} RETURNING id`, [String(req.params.id),tenantId,s]); if(!out.rows[0]) return res.status(404).json({error:'Factura no encontrada'}); res.status(204).end();
 }));
 
 // ==============================
@@ -4186,6 +3896,139 @@ async function ensureCoreTenantSchema() {
   console.log('✅ tenant_id listo en doctors, services, appointments, payments, expenses, laboratorios, lab_trabajos, lab_abonos, pagos_laboratorio e inventory');
 }
 
+// =========================================================
+// 🧾 MULTIEMPRESA - PRODUCTIVIDAD + FACTURACIÓN
+// =========================================================
+async function ensureProductivityBillingTenantSchema() {
+  console.log('🧾 Verificando tenant_id en Productividad y Facturación...');
+
+  const pool = getCurrentPool();
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(`SELECT set_config('app.tenant_bypass','on',true)`);
+
+    const bootstrap = await client.query(`
+      SELECT id FROM tenants
+      WHERE slug=$1
+      ORDER BY created_at ASC
+      LIMIT 1
+    `, [String(process.env.BOOTSTRAP_TENANT_SLUG || 'dentalux').trim().toLowerCase()]);
+    const bootstrapTenantId = bootstrap.rows[0]?.id;
+    if (!bootstrapTenantId) throw new Error('No se encontró tenant principal para migrar Productividad/Facturación');
+
+    // Asegurar columnas multi-tenant en todas las tablas implicadas.
+    const tables = [
+      'objetivos', 'facturas', 'factura_conceptos',
+      'facturacion_clientes', 'facturacion_productos', 'facturacion_configuracion'
+    ];
+    for (const table of tables) {
+      const exists = await client.query(`SELECT to_regclass($1) AS name`, [`public.${table}`]);
+      if (!exists.rows[0]?.name) continue;
+      await client.query(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS tenant_id UUID`);
+      await client.query(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS sucursal_id TEXT`).catch(() => {});
+    }
+
+    // Campos que la UI de Productividad/Facturación ya necesita.
+    await client.query(`ALTER TABLE objetivos ADD COLUMN IF NOT EXISTS abonos NUMERIC DEFAULT 0`);
+    await client.query(`ALTER TABLE facturacion_productos ADD COLUMN IF NOT EXISTS nombre TEXT`);
+    await client.query(`ALTER TABLE facturacion_productos ADD COLUMN IF NOT EXISTS codigo_interno TEXT`);
+
+    // Ajustes por doctor: antes estaban sólo en localStorage.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS objetivos_doctor_settings (
+        id BIGSERIAL PRIMARY KEY,
+        tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        sucursal_id TEXT NOT NULL,
+        doctor_id INTEGER NOT NULL,
+        visible BOOLEAN NOT NULL DEFAULT TRUE,
+        comision_pct NUMERIC(7,6) NOT NULL DEFAULT 0.20,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (tenant_id, sucursal_id, doctor_id)
+      )
+    `);
+
+    // Backfill de datos históricos al tenant bootstrap.
+    for (const table of ['objetivos','facturas','facturacion_clientes','facturacion_productos','facturacion_configuracion']) {
+      await client.query(`UPDATE ${table} SET tenant_id=$1 WHERE tenant_id IS NULL`, [bootstrapTenantId]);
+      await client.query(`UPDATE ${table} SET sucursal_id='sucursal_1' WHERE sucursal_id IS NULL`).catch(() => {});
+    }
+    // Los conceptos heredan el tenant/sucursal de su factura cuando sea posible.
+    await client.query(`
+      UPDATE factura_conceptos fc
+      SET tenant_id=f.tenant_id,
+          sucursal_id=COALESCE(fc.sucursal_id, f.sucursal_id)
+      FROM facturas f
+      WHERE fc.factura_id=f.id
+        AND (fc.tenant_id IS NULL OR fc.sucursal_id IS NULL)
+    `);
+    await client.query(`UPDATE factura_conceptos SET tenant_id=$1 WHERE tenant_id IS NULL`, [bootstrapTenantId]);
+    await client.query(`UPDATE factura_conceptos SET sucursal_id='sucursal_1' WHERE sucursal_id IS NULL`);
+
+    // facturacion_configuracion antes tenía PK global por sucursal; ahora debe ser empresa+sucursal.
+    await client.query(`
+      DO $$
+      DECLARE pk_name TEXT;
+      BEGIN
+        SELECT tc.constraint_name INTO pk_name
+        FROM information_schema.table_constraints tc
+        WHERE tc.table_schema='public'
+          AND tc.table_name='facturacion_configuracion'
+          AND tc.constraint_type='PRIMARY KEY'
+        LIMIT 1;
+        IF pk_name IS NOT NULL THEN
+          EXECUTE format('ALTER TABLE facturacion_configuracion DROP CONSTRAINT %I', pk_name);
+        END IF;
+      END $$;
+    `);
+    await client.query(`CREATE UNIQUE INDEX IF NOT EXISTS uq_facturacion_config_tenant_sucursal ON facturacion_configuracion(tenant_id, sucursal_id)`);
+
+    // Índices compuestos para consultas por empresa + sucursal.
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_objetivos_tenant_sucursal ON objetivos(tenant_id, sucursal_id)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_facturas_tenant_sucursal ON facturas(tenant_id, sucursal_id)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_factura_conceptos_tenant_factura ON factura_conceptos(tenant_id, factura_id)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_fact_cli_tenant_sucursal ON facturacion_clientes(tenant_id, sucursal_id)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_fact_prod_tenant_sucursal ON facturacion_productos(tenant_id, sucursal_id)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_fact_cfg_tenant_sucursal ON facturacion_configuracion(tenant_id, sucursal_id)`);
+
+    // Evitar RFC duplicado dentro de la misma empresa/sucursal sin imponerlo globalmente.
+    await client.query(`CREATE UNIQUE INDEX IF NOT EXISTS uq_fact_cli_tenant_sucursal_rfc ON facturacion_clientes(tenant_id, sucursal_id, UPPER(rfc))`);
+
+    // A partir de aquí ningún registro nuevo puede quedar huérfano de tenant.
+    for (const table of ['objetivos','facturas','factura_conceptos','facturacion_clientes','facturacion_productos','facturacion_configuracion']) {
+      await client.query(`ALTER TABLE ${table} ALTER COLUMN tenant_id SET NOT NULL`);
+    }
+
+    // RLS: segunda barrera además de los filtros explícitos de cada endpoint.
+    const rlsTables = [...tables, 'objetivos_doctor_settings'];
+    for (const table of rlsTables) {
+      await client.query(`ALTER TABLE ${table} ENABLE ROW LEVEL SECURITY`);
+      await client.query(`ALTER TABLE ${table} FORCE ROW LEVEL SECURITY`);
+      await client.query(`DROP POLICY IF EXISTS ${table}_tenant_isolation ON ${table}`);
+      await client.query(`
+        CREATE POLICY ${table}_tenant_isolation ON ${table}
+        USING (
+          current_setting('app.tenant_bypass', true)='on'
+          OR tenant_id = NULLIF(current_setting('app.tenant_id', true),'')::uuid
+        )
+        WITH CHECK (
+          current_setting('app.tenant_bypass', true)='on'
+          OR tenant_id = NULLIF(current_setting('app.tenant_id', true),'')::uuid
+        )
+      `);
+    }
+
+    await client.query('COMMIT');
+    console.log('✅ Productividad y Facturación aisladas por tenant');
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 function getTenantId(req) {
   const tenantId = req?.auth?.tenantId;
   if (!tenantId) {
@@ -4213,6 +4056,7 @@ function getTenantId(req) {
         await ensureBootstrapDentaluxAdmin();
         await ensurePublicDemoAccount();
         await ensureCoreTenantSchema();
+        await ensureProductivityBillingTenantSchema();
         console.log(`✅ Migración multi-tenant lista (${dbKey})`);
       } catch (err) {
         console.error(`❌ Error en migración multi-tenant (${dbKey}):`, err);

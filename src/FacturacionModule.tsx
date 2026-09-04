@@ -112,21 +112,44 @@ type ProductoSAT = {
   objeto_imp: "01" | "02" | "03";
 };
 
-const LS_KEY_PRODUCTS = "productos_sat";
-
-const loadProductos = (): ProductoSAT[] => {
-  try {
-    const raw = localStorage.getItem(LS_KEY_PRODUCTS);
-    return raw ? JSON.parse(raw) : [];
-  } catch {
-    return [];
-  }
+const fetchProductos = async (): Promise<ProductoSAT[]> => {
+  const rows = await api("/facturacion/productos");
+  return (rows || []).map((p: any) => ({
+    id: String(p.id),
+    nombre: p.nombre || p.descripcion || "",
+    codigo_interno: p.codigo_interno || "",
+    descripcion: p.descripcion || p.nombre || "",
+    precio: Number(p.precio || 0),
+    clave_prodserv: p.clave_prod_serv || p.clave_prodserv || "",
+    clave_unidad: p.unidad || p.clave_unidad || "E48",
+    objeto_imp: p.objeto_imp || "02",
+  }));
 };
 
-const saveProducto = (p: ProductoSAT): ProductoSAT[] => {
-  const all = [p, ...loadProductos()];
-  localStorage.setItem(LS_KEY_PRODUCTS, JSON.stringify(all));
-  return all;
+const createProducto = async (p: ProductoSAT): Promise<ProductoSAT> => {
+  const row = await api("/facturacion/productos", {
+    method: "POST",
+    body: JSON.stringify({
+      nombre: p.nombre,
+      codigo_interno: p.codigo_interno,
+      descripcion: p.descripcion || p.nombre,
+      precio: p.precio,
+      clave_prod_serv: p.clave_prodserv,
+      unidad: p.clave_unidad,
+      objeto_imp: p.objeto_imp,
+    }),
+  });
+  return {
+    ...p,
+    id: String(row.id),
+    nombre: row.nombre || p.nombre,
+    codigo_interno: row.codigo_interno || p.codigo_interno,
+    descripcion: row.descripcion || p.descripcion,
+    precio: Number(row.precio ?? p.precio),
+    clave_prodserv: row.clave_prod_serv || p.clave_prodserv,
+    clave_unidad: row.unidad || p.clave_unidad,
+    objeto_imp: row.objeto_imp || p.objeto_imp,
+  };
 };
 
 /* ===================== API HELPERS ===================== */
@@ -317,7 +340,7 @@ const cancelarFactura = async (facturaId: string, motivo: string) =>
 
 const fetchConfiguracionSAT = async (): Promise<ConfiguracionSAT> => {
   try {
-    const d = await api("/facturama/configuracion");
+    const d = await api("/facturacion/configuracion");
     return {
       rfc: d?.rfc || "",
       razon_social: d?.razon_social || "",
@@ -355,7 +378,7 @@ const fetchConfiguracionSAT = async (): Promise<ConfiguracionSAT> => {
 };
 
 const updateConfiguracionSAT = async (config: Partial<ConfiguracionSAT>) =>
-  api("/facturama/configuracion", { method: "PUT", body: JSON.stringify(config) });
+  api("/facturacion/configuracion", { method: "PUT", body: JSON.stringify(config) });
 
 /* ===================== CATALOGOS ===================== */
 const REGIMENES_FISCALES = [
@@ -649,6 +672,23 @@ export function descargarZipFactura(factura: any) {
   alert('No hay id de Facturama ni UUID para esta factura.');
 }
 
+function rawBillingAuthHeaders(extra: Record<string,string> = {}): Record<string,string> {
+  const headers: Record<string,string> = { ...extra };
+  try {
+    for (let i=0; i<localStorage.length; i += 1) {
+      const key = localStorage.key(i);
+      const value = key ? localStorage.getItem(key) : null;
+      if (value && value.split('.').length === 3) {
+        headers.Authorization = `Bearer ${value}`;
+        break;
+      }
+    }
+  } catch {}
+  const sucursal = getSucursalActual?.() || 'sucursal_1';
+  if (sucursal) headers['x-sucursal'] = String(sucursal);
+  return headers;
+}
+
 async function uploadLogoFlexible(
   file: File
 ): Promise<{ ok: boolean; url?: string; error?: string }> {
@@ -656,10 +696,11 @@ async function uploadLogoFlexible(
     const fd = new FormData();
     fd.append("logo", file);
 
-    const res = await fetch("/api/facturama/configuracion/logo", {
+    const res = await fetch("/api/facturacion/configuracion/logo", {
       method: "POST",
       body: fd,
       credentials: "include",
+      headers: rawBillingAuthHeaders(),
     });
 
     if (!res.ok) {
@@ -719,10 +760,10 @@ async function uploadCertificadosCSD(
 
     // ✅ Enviar SIEMPRE x-sucursal; además, mandarla en query como respaldo
     const url = sucursal
-      ? `/api/facturama/configuracion/certificados?sucursal_id=${encodeURIComponent(sucursal)}`
-      : `/api/facturama/configuracion/certificados`;
+      ? `/api/facturacion/configuracion/certificados?sucursal_id=${encodeURIComponent(sucursal)}`
+      : `/api/facturacion/configuracion/certificados`;
 
-    const headers: Record<string, string> = {};
+    const headers: Record<string, string> = rawBillingAuthHeaders();
     if (sucursal) headers["x-sucursal"] = sucursal;
 
     const res = await fetch(url, {
@@ -782,8 +823,8 @@ async function checkCertificadosStatus(): Promise<{
       'sucursal_1';
 
     const url = sucursal
-      ? `/api/facturama/configuracion/certificados/status?sucursal_id=${encodeURIComponent(sucursal)}`
-      : `/api/facturama/configuracion/certificados/status`;
+      ? `/api/facturacion/configuracion/certificados/status?sucursal_id=${encodeURIComponent(sucursal)}`
+      : `/api/facturacion/configuracion/certificados/status`;
 
     const headers: Record<string, string> = {};
     if (sucursal) headers["x-sucursal"] = sucursal;
@@ -1479,7 +1520,11 @@ function FacturaForm({
   const [productoSel, setProductoSel] = React.useState<string>("");
 
   React.useEffect(() => {
-    setProductos(loadProductos());
+    let mounted = true;
+    fetchProductos()
+      .then((rows) => { if (mounted) setProductos(rows); })
+      .catch((e) => console.error("Error cargando catálogo fiscal:", e));
+    return () => { mounted = false; };
   }, []);
 
   const [formData, setFormData] = React.useState({
@@ -1598,12 +1643,16 @@ function FacturaForm({
     }
   };
 
-  const guardarProducto = () => {
+  const guardarProducto = async () => {
     if (!prodForm.nombre || !prodForm.clave_prodserv || !prodForm.clave_unidad) return;
-    const nuevo: ProductoSAT = { ...prodForm, id: crypto.randomUUID() };
-    const list = saveProducto(nuevo);
-    setProductos(list);
-    setShowProductoForm(false);
+    try {
+      const nuevo = await createProducto({ ...prodForm, id: "" });
+      setProductos((prev) => [nuevo, ...prev]);
+      setShowProductoForm(false);
+    } catch (e: any) {
+      alert(e?.message || "No se pudo guardar el producto fiscal");
+      return;
+    }
     setProdForm({
       id: "",
       nombre: "",
