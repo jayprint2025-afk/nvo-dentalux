@@ -6718,6 +6718,67 @@ app.delete(
   })
 );
 
+app.delete('/api/companies/:id', authRequired, companiesSuperAdminOnly, ah(async (req, res) => {
+  const tenantId = String(req.params.id || '').trim();
+  if (!tenantId) return res.status(400).json({ error: 'Empresa inválida' });
+  if (String(req.auth?.tenantId || '') === tenantId) {
+    return res.status(400).json({ error: 'No puedes eliminar la empresa de tu sesión actual' });
+  }
+
+  const client = await poolDB1.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(`SELECT set_config('app.tenant_bypass','on',true)`);
+
+    const tenant = (await client.query('SELECT id,name FROM tenants WHERE id=$1::uuid FOR UPDATE', [tenantId])).rows[0];
+    if (!tenant) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Empresa no encontrada' });
+    }
+
+    // Guardar los usuarios ligados a esta empresa antes de eliminar relaciones.
+    const userIds = (await client.query('SELECT user_id FROM tenant_users WHERE tenant_id=$1::uuid', [tenantId])).rows.map(r => r.user_id);
+
+    // Limpieza defensiva: elimina datos de cualquier tabla BASE que tenga tenant_id.
+    // Se excluyen tenants y tenant_users; estos se eliminan al final en orden controlado.
+    const tenantTables = (await client.query(`
+      SELECT DISTINCT c.table_schema, c.table_name
+        FROM information_schema.columns c
+        JOIN information_schema.tables t
+          ON t.table_schema=c.table_schema AND t.table_name=c.table_name
+       WHERE c.column_name='tenant_id'
+         AND t.table_type='BASE TABLE'
+         AND c.table_schema NOT IN ('pg_catalog','information_schema')
+         AND c.table_name NOT IN ('tenants','tenant_users')
+    `)).rows;
+
+    for (const row of tenantTables) {
+      const schema = String(row.table_schema || 'public').replace(/"/g, '""');
+      const table = String(row.table_name || '').replace(/"/g, '""');
+      if (!table) continue;
+      await client.query(`DELETE FROM "${schema}"."${table}" WHERE tenant_id::text=$1`, [tenantId]);
+    }
+
+    await client.query('DELETE FROM tenant_users WHERE tenant_id=$1::uuid', [tenantId]);
+    await client.query('DELETE FROM tenants WHERE id=$1::uuid', [tenantId]);
+
+    // El propietario/usuarios se borran solo si ya no pertenecen a otra empresa.
+    for (const userId of userIds) {
+      const stillUsed = (await client.query('SELECT 1 FROM tenant_users WHERE user_id=$1 LIMIT 1', [userId])).rows[0];
+      if (!stillUsed) await client.query('DELETE FROM users WHERE id=$1', [userId]);
+    }
+
+    await client.query('COMMIT');
+    res.json({ ok: true, deleted: { id: tenant.id, name: tenant.name } });
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('❌ Error eliminando empresa:', error);
+    throw error;
+  } finally {
+    client.release();
+  }
+}));
+
 app.patch('/api/companies/:id/activate', authRequired, companiesSuperAdminOnly, ah(async (req, res) => {
   const { rows } = await poolDB1.query("UPDATE tenants SET status='active',updated_at=NOW() WHERE id=$1 RETURNING id,status", [req.params.id]);
   if (!rows[0]) return res.status(404).json({ error: 'Empresa no encontrada' });

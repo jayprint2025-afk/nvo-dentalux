@@ -1497,6 +1497,27 @@ function EmpresasModule({ isSuperAdmin }: { isSuperAdmin: boolean }) {
     } finally { setLoading(false); }
   };
 
+  const deleteCompany = async (empresa: Empresa) => {
+    if (!isSuperAdmin) return;
+    const confirmed = window.confirm(
+      `¿Eliminar permanentemente "${empresa.name}"?\n\nSe eliminará la empresa, sus sucursales, configuración y datos asociados. Esta acción no se puede deshacer.`
+    );
+    if (!confirmed) return;
+
+    setLoading(true);
+    setMessage('');
+    try {
+      await api(`/companies/${empresa.id}`, { method: 'DELETE' });
+      setMessage(`Empresa "${empresa.name}" eliminada correctamente.`);
+      if (editing?.id === empresa.id) { setEditing(null); setShowForm(false); }
+      if (channelsCompany?.id === empresa.id) setChannelsCompany(null);
+      if (aiCompany?.id === empresa.id) setAiCompany(null);
+      await load();
+    } catch (e: any) {
+      setMessage(`Error: ${e?.message || 'No se pudo eliminar la empresa'}`);
+    } finally { setLoading(false); }
+  };
+
   const toggleWhatsappService = async (empresa: Empresa) => {
     const nextEnabled = !empresa.whatsappEnabled;
     setLoading(true);
@@ -1956,6 +1977,7 @@ function EmpresasModule({ isSuperAdmin }: { isSuperAdmin: boolean }) {
                     {isSuperAdmin && (empresa.status === 'active'
                       ? <button onClick={() => changeStatus(empresa,'suspend')} className="px-3 py-1.5 border border-red-300 text-red-600 rounded">Suspender</button>
                       : <button onClick={() => changeStatus(empresa,'activate')} className="px-3 py-1.5 border border-green-300 text-green-700 rounded">Activar</button>)}
+                    {isSuperAdmin && <button disabled={loading} onClick={() => deleteCompany(empresa)} className="px-3 py-1.5 border border-red-500 text-red-700 bg-red-50 hover:bg-red-100 rounded flex items-center gap-1 disabled:opacity-50"><Trash2 className="w-3 h-3" /> Eliminar</button>}
                   </div>
                 </td>
               </tr>
