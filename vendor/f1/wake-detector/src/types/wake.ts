@@ -62,6 +62,8 @@ export interface WakeDetectorConfig {
   readonly strongDetectionThreshold?: number;
   /** Minimum VAD confidence required before the wake model is allowed to score. */
   readonly minimumVadConfidence?: number;
+  /** Frames after speech ends during which wake scoring may continue. */
+  readonly vadGraceFrames?: number;
   readonly consecutiveHits?: number;
   readonly cooldownFrames?: number;
   readonly maxSilentFramesBeforeReset?: number;
