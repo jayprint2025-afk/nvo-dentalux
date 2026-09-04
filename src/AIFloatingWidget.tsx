@@ -1659,14 +1659,13 @@ const buildLeadReport = React.useCallback(() => {
             const heard = String(verification?.transcript || 'Hana').trim();
             setLastWakeIdentity(`Hana verificada: ${heard.slice(0, 60)}`);
             wakeVerificationCooldownUntilRef.current = Date.now() + 1800;
-            // El controlador recibe únicamente eventos ya verificados y con
-            // confianza final 1.0. Ningún ruido puede saltarse esta barrera.
-            await controller.wakeDetected({
-              ...(event as any),
-              score: 1,
-              threshold: 1,
-              detected: true,
-            });
+            // V15: la palabra clave ya fue autorizada por el backend. No volvemos
+            // a pasar por los guards del wake local (stabilization/confidence),
+            // porque pueden descartar una activación válida aun después de verificar Hana.
+            // startManualConversation() es aquí la transición segura: solo se invoca
+            // DESPUÉS de verification.accepted === true. Detiene el wake y abre Realtime.
+            setF1VoiceEngineDetail("Hana verificada · activando F1…");
+            await controller.startManualConversation();
           } catch (error) {
             // Falla cerrada: si el verificador no está disponible no activar.
             setF1VoiceEngineDetail(
