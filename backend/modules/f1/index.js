@@ -14,7 +14,7 @@ const { realtimeVoiceProfile } = require('./voice-profile');
 const actionExecutions = new Map();
 
 
-// ===== Wake phrase verifier (V13) =====
+// ===== Wake phrase verifier (V14: HANA) =====
 // El ONNX/VAD solo propone candidatos. La activación final se confirma
 // transcribiendo una ventana corta y exigiendo que la frase EMPIECE con la
 // palabra clave. Así podemos mantener un prefiltro sensible sin despertar por
@@ -35,18 +35,16 @@ function matchWakePhrase(value) {
   const text = normalizeWakeTranscript(value);
   if (!text) return { accepted: false, normalized: text, phrase: '' };
 
-  // Debe aparecer al INICIO. Esto evita activar por una conversación que
-  // mencione "F1" más adelante. Se toleran formas habituales que puede
-  // producir la transcripción en español.
-  const patterns = [
-    { phrase: 'hola f1', re: /^hola\s+(?:f\s*1|f\s+uno|efe\s*1|efe\s+uno|ef\s+uno)\b/ },
-    { phrase: 'f1', re: /^(?:f\s*1|f\s+uno|efe\s*1|efe\s+uno|ef\s+uno)\b/ },
-    { phrase: 'cliniqone f1', re: /^(?:hola\s+)?cliniqone\s+(?:f\s*1|f\s+uno|efe\s*1|efe\s+uno|ef\s+uno)\b/ },
-  ];
-  for (const item of patterns) {
-    if (item.re.test(text)) return { accepted: true, normalized: text, phrase: item.phrase };
-  }
-  return { accepted: false, normalized: text, phrase: '' };
+  // V14: la única palabra de activación es "Hana" y debe aparecer al INICIO.
+  // No aceptamos "Ana" como alias: en una clínica puede ser un nombre real y
+  // causaría falsos positivos. El prompt del transcriptor sesga la ortografía
+  // correcta hacia "Hana" cuando esa es realmente la palabra pronunciada.
+  const match = /^hana\b/.test(text);
+  return {
+    accepted: match,
+    normalized: text,
+    phrase: match ? 'hana' : '',
+  };
 }
 
 function pcm16Base64ToWav(base64, sampleRate) {
@@ -104,7 +102,7 @@ async function transcribeWakeCandidate(wavBuffer) {
   const body = Buffer.concat([
     field('model', model),
     field('language', 'es'),
-    field('prompt', 'Transcribe literalmente en español. No completes ni inventes palabras si el audio contiene ruido, respiración, golpes o silencio.'),
+    field('prompt', 'Transcribe literalmente en español. La palabra clave posible es “Hana”, escrita H-A-N-A. Si realmente escuchas esa palabra al inicio, escríbela exactamente como Hana. No conviertas otros sonidos en Hana y no completes ni inventes palabras si el audio contiene ruido, respiración, golpes o silencio.'),
     Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="wake.wav"\r\nContent-Type: audio/wav\r\n\r\n`, 'utf8'),
     wavBuffer,
     Buffer.from(`\r\n--${boundary}--\r\n`, 'utf8'),
@@ -189,7 +187,7 @@ Cuando el usuario diga “mañana”, interpreta la fecha local de la clínica. 
 Comportamiento de voz profesional: prioriza respuestas habladas de 1 a 4 frases cuando la tarea ya quedó resuelta; si hay muchos datos, resume primero y ofrece el dato esencial sin recitar tablas completas. Nunca termines una frase a la mitad ni cierres una respuesta con una idea incompleta. Si necesitas más espacio para explicar, termina primero la oración actual y continúa de forma breve.
 Tolerancia a pausas: una pausa natural, respiración, duda, muletilla o silencio breve dentro de una instrucción no significa necesariamente que el usuario terminó. Interpreta el mensaje completo antes de actuar y no te precipites por fragmentos parciales.
 Ruido ambiental: ignora golpes, respiración, instrumental, conversaciones lejanas, sílabas aisladas, transcripciones sin sentido y fragmentos que no expresen una intención clara. No ejecutes herramientas ni confirmes acciones basándote únicamente en ruido o texto incompleto.
-Palabra clave: reconoce con especial facilidad “F1”, “efe uno” y “CliniqOne F1” cuando aparezcan claramente en una instrucción, pero no confundas sonidos parecidos o ruido con una activación válida.
+Palabra clave de activación: “Hana”. Una vez que la sesión Realtime ya está activa, no exijas repetir la palabra clave para cada instrucción.
 Usa la memoria solo como contexto; nunca inventes datos faltantes. Si el usuario dice explícitamente “recuerda”, “guarda esta preferencia” u “olvida”, usa las herramientas de memoria. No guardes información clínica sensible como memoria permanente salvo petición explícita.
 
 ${memoryContext}`;
@@ -553,12 +551,12 @@ function setupF1Routes(app, q, deps) {
     res.json({
       ok: true,
       profile: 'professional-v6',
-      wake_words: ['F1', 'efe uno', 'CliniqOne F1'],
+      wake_words: ['Hana'],
       vad: { type: 'semantic_vad', eagerness: profile.vadEagerness, interrupt_response: false },
       noise_reduction: profile.noiseReduction,
       max_output_tokens: profile.maxOutputTokens,
       voice_speed: profile.voiceSpeed,
-      note: 'La detección estricta de activación/desactivación pertenece al cliente que controla el micrófono; este perfil optimiza VAD, transcripción y salida Realtime.',
+      note: 'V14 usa HANA como única palabra de activación. El cliente propone candidatos de voz y /api/f1/wake/verify autoriza únicamente transcripciones que empiecen con Hana.',
     });
   });
 

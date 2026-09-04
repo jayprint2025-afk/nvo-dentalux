@@ -83,18 +83,19 @@ type F1WakeSettings = {
 };
 
 const LEGACY_F1_WAKE_SETTINGS_KEYS = ["f1_wake_settings_v2", "f1_wake_settings_v3", "f1_wake_settings_v4"] as const;
-const F1_WAKE_SETTINGS_KEY = "f1_wake_settings_v5";
-// V13: el detector local es solo PREFILTRO. La activación final exige
-// transcripción del candidato y coincidencia lexical con "Hola F1"/"F1".
-// Por eso el prefiltro puede ser sensible sin convertir ruido en una activación.
-const F1_MIN_WAKE_CONFIDENCE = 0.35;
-const F1_MAX_WAKE_THRESHOLD = 0.65;
+const F1_WAKE_SETTINGS_KEY = "f1_wake_settings_v6_hana";
+// V14: el detector local es solo PREFILTRO DE VOZ. La activación final exige
+// que el backend transcriba exactamente la palabra "Hana" al inicio.
+// El modelo ONNX anterior ya no decide la palabra clave.
+const F1_MIN_WAKE_CONFIDENCE = 0.0;
+const F1_MAX_WAKE_THRESHOLD = 0.20;
 const DEFAULT_F1_WAKE_SETTINGS: F1WakeSettings = {
-  // Prefiltro deliberadamente sensible: NO activa por sí mismo.
-  // La autorización final ocurre en /f1/wake/verify.
-  threshold: 0.35,
+  // V14: el ONNX deja de autorizar la palabra clave. Solo genera candidatos
+  // cuando existe voz; la autorización final es la transcripción exacta "Hana".
+  // Por eso el prefiltro debe ser deliberadamente permisivo.
+  threshold: 0.0,
   consecutiveHits: 1,
-  cooldownMs: 1400,
+  cooldownMs: 1800,
   stabilizationMs: 900,
 };
 
@@ -120,7 +121,7 @@ function loadF1WakeSettings(): F1WakeSettings {
               DEFAULT_F1_WAKE_SETTINGS.consecutiveHits,
           ),
           1,
-          3,
+          2,
         ),
       ),
       cooldownMs: Math.round(
@@ -1444,20 +1445,24 @@ const buildLeadReport = React.useCallback(() => {
       const next: F1WakeSettings =
         preset === "sensitive"
           ? {
-              // Prefiltro sensible; la verificación lexical del servidor es la barrera final.
-              threshold: 0.35,
+              threshold: 0.0,
               consecutiveHits: 1,
-              cooldownMs: 1400,
-              stabilizationMs: 900,
+              cooldownMs: 1500,
+              stabilizationMs: 700,
             }
           : preset === "strict"
             ? {
-                threshold: 0.52,
-                consecutiveHits: 2,
+                threshold: 0.10,
+                consecutiveHits: 1,
                 cooldownMs: 2200,
-                stabilizationMs: 1500,
+                stabilizationMs: 1200,
               }
-            : DEFAULT_F1_WAKE_SETTINGS;
+            : {
+                threshold: 0.0,
+                consecutiveHits: 1,
+                cooldownMs: 1800,
+                stabilizationMs: 900,
+              };
       setWakeSettingsDraft(next);
     },
     [],
@@ -1471,7 +1476,7 @@ const buildLeadReport = React.useCallback(() => {
         F1_MAX_WAKE_THRESHOLD,
       ),
       consecutiveHits: Math.round(
-        clamp(Number(wakeSettingsDraft.consecutiveHits), 1, 3),
+        clamp(Number(wakeSettingsDraft.consecutiveHits), 1, 2),
       ),
       cooldownMs: Math.round(
         clamp(Number(wakeSettingsDraft.cooldownMs), 1000, 8000),
@@ -1510,7 +1515,7 @@ const buildLeadReport = React.useCallback(() => {
   const recordVoiceProfileSample = React.useCallback(async () => {
     try {
       setVoiceProfileBusy(true);
-      setVoiceProfileMessage('Di “Hola F1” con tu voz normal…');
+      setVoiceProfileMessage('Di “Hana” con tu voz normal…');
       setVoiceProfileVerification(null);
 
       const shouldRestart = f1VoiceEngineEnabled;
@@ -1541,7 +1546,7 @@ const buildLeadReport = React.useCallback(() => {
   const testVoiceProfile = React.useCallback(async () => {
     try {
       setVoiceProfileBusy(true);
-      setVoiceProfileMessage('Di “Hola F1” para comparar tu voz…');
+      setVoiceProfileMessage('Di “Hana” para comparar tu voz…');
 
       const shouldRestart = f1VoiceEngineEnabled;
       if (shouldRestart) await sessionControllerRef.current?.disable();
@@ -1604,13 +1609,15 @@ const buildLeadReport = React.useCallback(() => {
   }, [unlockF1Audio]);
 
   React.useEffect(() => {
-    const modelUrl = String((import.meta as any).env?.VITE_F1_WAKE_MODEL_URL || "/models/hola-f1/hola-f1.onnx").trim();
+    const modelUrl = String((import.meta as any).env?.VITE_F1_WAKE_MODEL_URL || "/models/hola-f1/hola-f1.onnx").trim(); // V14: se usa solo como generador de candidato; NO autoriza la palabra.
     let controller: F1AudioSessionController;
     const engine = new F1VoiceEngine({
-      phrase: "Hola F1",
+      phrase: "Hana",
       modelUrl,
-      threshold: wakeSettings.threshold,
-      consecutiveHits: wakeSettings.consecutiveHits,
+      // V14: cualquier segmento de voz suficientemente claro puede convertirse
+      // en CANDIDATO. Solo /f1/wake/verify puede autorizar "Hana".
+      threshold: 0.0,
+      consecutiveHits: 1,
       cooldownMs: wakeSettings.cooldownMs,
       onStatus: (status, detail) => {
         setF1VoiceEngineStatus(status);
@@ -1630,7 +1637,7 @@ const buildLeadReport = React.useCallback(() => {
           }
 
           wakeVerificationInFlightRef.current = true;
-          setF1VoiceEngineDetail("Verificando ‘Hola F1’…");
+          setF1VoiceEngineDetail("Verificando ‘Hana’…");
           try {
             const verification: any = await api('/f1/wake/verify', {
               method: 'POST',
@@ -1643,14 +1650,14 @@ const buildLeadReport = React.useCallback(() => {
 
             if (!verification?.accepted) {
               const heard = String(verification?.transcript || '').trim();
-              setF1VoiceEngineDetail(heard ? `Ignorado: “${heard.slice(0, 48)}”` : "Ruido/voz sin palabra clave");
+              setF1VoiceEngineDetail(heard ? `Ignorado: “${heard.slice(0, 48)}”` : "Ignorado: no se escuchó Hana");
               (f1VoiceEngineRef.current as any)?.suppressWakeFor?.(700);
               wakeVerificationCooldownUntilRef.current = Date.now() + 650;
               return;
             }
 
-            const heard = String(verification?.transcript || 'Hola F1').trim();
-            setLastWakeIdentity(`Palabra clave verificada: ${heard.slice(0, 60)}`);
+            const heard = String(verification?.transcript || 'Hana').trim();
+            setLastWakeIdentity(`Hana verificada: ${heard.slice(0, 60)}`);
             wakeVerificationCooldownUntilRef.current = Date.now() + 1800;
             // El controlador recibe únicamente eventos ya verificados y con
             // confianza final 1.0. Ningún ruido puede saltarse esta barrera.
@@ -1811,8 +1818,8 @@ const buildLeadReport = React.useCallback(() => {
   const realtimeStatus = React.useMemo(() => {
     switch (audioSessionState) {
       case "WAKE_STARTING": return { label: "Preparando detector", tone: "bg-amber-100 text-amber-800" };
-      case "WAKE_LISTENING": return { label: "Di: Hola F1", tone: "bg-emerald-100 text-emerald-800" };
-      case "WAKE_DETECTED": return { label: "Hola F1 detectado", tone: "bg-indigo-100 text-indigo-800" };
+      case "WAKE_LISTENING": return { label: "Di: Hana", tone: "bg-emerald-100 text-emerald-800" };
+      case "WAKE_DETECTED": return { label: "Hana detectada", tone: "bg-indigo-100 text-indigo-800" };
       case "REALTIME_CONNECTING": return { label: "Conectando F1…", tone: "bg-indigo-100 text-indigo-800" };
       case "REALTIME_GREETING": return { label: remoteAudioReady ? "F1 activado · diciendo Te escucho" : "Preparando audio de F1…", tone: "bg-indigo-100 text-indigo-800" };
       case "REALTIME_LISTENING": return { label: "F1 te escucha", tone: "bg-green-100 text-green-800" };
@@ -2391,7 +2398,7 @@ const buildLeadReport = React.useCallback(() => {
                       <div className="min-w-0">
                         <div className="text-sm font-semibold">F1 Voice Engine</div>
                         <div className="text-[11px] text-gray-500">
-                          Motor local preparado para detectar “Hola F1”.
+                          Prefiltro local de voz. La activación final exige la palabra “Hana”.
                         </div>
                         <div className="mt-1 text-[11px] text-gray-600">
                           Estado: {f1VoiceEngineStatus}
@@ -2476,7 +2483,7 @@ const buildLeadReport = React.useCallback(() => {
                             className="mt-1 w-full"
                           />
                           <span className="text-[10px] text-gray-500">
-                            Este es solo el prefiltro local (0.35–0.65). La activación final exige transcribir y confirmar “Hola F1” o “F1”.
+                            Este control solo decide cuándo enviar un segmento de voz a verificación. La activación final exige que la transcripción empiece exactamente con “Hana”.
                           </span>
                         </label>
 
@@ -2492,9 +2499,8 @@ const buildLeadReport = React.useCallback(() => {
                             }
                             className="mt-1 w-full rounded-lg border bg-white px-2 py-1"
                           >
-                            <option value={1}>1 — muy sensible (verificación lexical)</option>
-                            <option value={2}>2 — recomendado</option>
-                            <option value={3}>3 — más estricto</option>
+                            <option value={1}>1 — recomendado para Hana</option>
+                            <option value={2}>2 — más conservador</option>
                           </select>
                         </label>
 
@@ -2574,7 +2580,7 @@ const buildLeadReport = React.useCallback(() => {
                             >
                               {voiceProfileBusy
                                 ? "Grabando…"
-                                : 'Grabar “Hola F1”'}
+                                : 'Grabar “Hana”'}
                             </button>
                             <button
                               type="button"
