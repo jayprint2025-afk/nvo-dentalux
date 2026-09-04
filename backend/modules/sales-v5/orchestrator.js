@@ -15,10 +15,20 @@ function cleanShortAnswer(text, max = 100) {
   return value.replace(/^[\s,:;.-]+|[\s,:;.-]+$/g, '').trim() || null;
 }
 
+function looksLikeActionReply(text) {
+  const value = String(text || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+  if (!value) return true;
+
+  // Estas respuestas expresan intención de compra o avance, no son nombres.
+  // Evita guardar "Quiero contratar" como nombre de la empresa cuando un lead
+  // existente conserva next_step de una conversación anterior.
+  return /^(?:quiero\s+(?:contratar|probar|registrarme|registrar|empezar|continuar)|me\s+interesa(?:\s+mucho)?|crear\s+(?:mi\s+)?cuenta|contratar|registrarme|si|sí|ok|okay|dale|listo|continua|continúa|procede|adelante|hazlo|mandamelo|mándamelo|enviamelo|envíamelo)[.! ]*$/.test(value);
+}
+
 function absorbPendingAnswer(lead, profile, turn) {
   const pending = String(lead?.next_step || lead?.profile?.next_step || '').toLowerCase();
   const raw = cleanShortAnswer(turn?.text);
-  if (!raw) return profile;
+  if (!raw || looksLikeActionReply(raw)) return profile;
 
   // El intérprete reconoce "mi clínica se llama X", pero muchos prospectos
   // contestan simplemente "Dentalux". Usamos el objetivo anterior para saber
