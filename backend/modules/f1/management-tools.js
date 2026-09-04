@@ -1269,7 +1269,179 @@ async function stampInvoiceF1(q,ctx,args={}){const branch=branchOfF1(ctx,args),i
 async function getInvoiceDownloadLinksF1(q,ctx,args={}){const branch=branchOfF1(ctx,args),f=(await getInvoiceF1(q,ctx,args)).invoice,ref=f.cfdi_id||f.uuid||f.id;if(!ref)return{ok:false,assistant_message:'La factura no tiene identificador fiscal disponible para descarga.'};const enc=encodeURIComponent(String(ref)),qs=`?sucursal=${encodeURIComponent(branch)}`;return{ok:true,invoice_id:f.id,reference:ref,links:{pdf:`/api/facturama/${enc}/pdf${qs}`,xml:`/api/facturama/${enc}/xml${qs}`,zip:`/api/facturama/${enc}/zip${qs}`},assistant_message:'Preparé las rutas de descarga de PDF, XML y ZIP.'};}
 
 
+// ==============================
+// F1 V5 — Matriz de cobertura operativa restante
+// ==============================
+function branchOfV5(ctx,args={}) { return text(args.branch_key || ctx.branch_key) || 'sucursal_1'; }
+
+async function callInternalApiF1(ctx, path, { method='GET', body=null, branchKey=null } = {}) {
+  const base=text(process.env.F1_INTERNAL_API_BASE||process.env.RENDER_EXTERNAL_URL||process.env.PUBLIC_BASE_URL).replace(/\/$/,'');
+  if(!base) throw new Error('No está configurada la URL interna del backend');
+  if(!ctx.authorization) throw new Error('La operación requiere una sesión autenticada');
+  const headers={Authorization:ctx.authorization,'x-sucursal':branchKey||ctx.branch_key||'sucursal_1'};
+  if(body!==null) headers['Content-Type']='application/json';
+  const response=await fetch(base+path,{method,headers,body:body===null?undefined:JSON.stringify(body)});
+  const raw=await response.text();
+  let data={}; try{data=raw?JSON.parse(raw):{}}catch{data={raw}};
+  if(!response.ok) throw new Error(data?.error||data?.message||`HTTP ${response.status}`);
+  return data;
+}
+
+async function listBranchesF1(q,ctx,args={}){
+  const{rows}=await q(`SELECT branch_key,name,phone,address,active,ai_enabled,booking_enabled
+    FROM branches WHERE tenant_id=$1::uuid AND COALESCE(active,TRUE)=TRUE
+    ORDER BY created_at ASC,name ASC,branch_key ASC`,[ctx.tenant_id]);
+  return {branches:rows,current_branch:ctx.branch_key,assistant_message:`Tienes ${rows.length} sucursal(es) activa(s).`};
+}
+
+async function selectBranchF1(q,ctx,args={}){
+  const key=text(args.branch_key); if(!key) throw new Error('Falta la sucursal');
+  const branch=(await q(`SELECT branch_key,name,phone,address,active FROM branches WHERE tenant_id=$1::uuid AND branch_key=$2 AND COALESCE(active,TRUE)=TRUE LIMIT 1`,[ctx.tenant_id,key])).rows[0];
+  if(!branch) throw new Error('Sucursal no encontrada en esta empresa');
+  return {ok:true,branch,client_action:{type:'select_branch',target:key},assistant_message:`Cambiando a ${branch.name||key}.`};
+}
+
+async function dashboardSummaryF1(q,ctx,args={}){
+  const branch=branchOfV5(ctx,args),from=text(args.from),to=text(args.to);
+  const dateParts=[]; const dateParams=[ctx.tenant_id,branch];
+  if(from){dateParams.push(from);dateParts.push(`date >= $${dateParams.length}::date`)}
+  if(to){dateParams.push(to);dateParts.push(`date <= $${dateParams.length}::date`)}
+  const dateSql=dateParts.length?' AND '+dateParts.join(' AND '):'';
+  const ap=(await q(`SELECT COUNT(*)::int total,
+      COUNT(*) FILTER (WHERE LOWER(COALESCE(status,'')) LIKE 'confirm%')::int confirmed,
+      COUNT(*) FILTER (WHERE LOWER(COALESCE(status,'')) LIKE 'atendid%' OR LOWER(COALESCE(status,'')) LIKE 'complet%')::int attended,
+      COUNT(*) FILTER (WHERE LOWER(COALESCE(status,'')) LIKE 'cancel%')::int cancelled,
+      COUNT(DISTINCT LOWER(patient))::int unique_patients
+    FROM appointments WHERE tenant_id=$1::uuid AND (sucursal_id=$2 OR sucursal_id IS NULL)${dateSql}`,dateParams)).rows[0];
+  const pay=(await q(`SELECT COALESCE(SUM(amount),0)::numeric total,COUNT(*)::int count FROM payments WHERE tenant_id=$1::uuid AND (sucursal_id=$2 OR sucursal_id IS NULL)${dateSql}`,dateParams)).rows[0];
+  const exp=(await q(`SELECT COALESCE(SUM(amount),0)::numeric total,COUNT(*)::int count FROM expenses WHERE tenant_id=$1::uuid AND (sucursal_id=$2 OR sucursal_id IS NULL)${dateSql}`,dateParams)).rows[0];
+  const inv=(await q(`SELECT COUNT(*)::int total_items,
+      COUNT(*) FILTER (WHERE COALESCE(quantity,0)<=0)::int critical,
+      COUNT(*) FILTER (WHERE COALESCE(quantity,0)>0 AND COALESCE(quantity,0)<=COALESCE(min_stock,0))::int low
+    FROM inventory WHERE tenant_id=$1::uuid AND (sucursal_id=$2 OR sucursal_id IS NULL)`,[ctx.tenant_id,branch])).rows[0];
+  const lab=(await q(`SELECT COUNT(*)::int total,
+      COUNT(*) FILTER (WHERE LOWER(COALESCE(etapa,''))='entregado')::int delivered,
+      COALESCE(SUM(presupuesto),0)::numeric budget
+    FROM lab_trabajos WHERE tenant_id=$1::uuid AND (sucursal_id=$2 OR sucursal_id IS NULL)`,[ctx.tenant_id,branch])).rows[0];
+  const income=Number(pay.total||0), expenses=Number(exp.total||0);
+  return {branch_key:branch,period:{from:from||null,to:to||null},appointments:ap,finance:{income,expenses,net:income-expenses,payments:Number(pay.count||0),expense_movements:Number(exp.count||0)},inventory:inv,laboratory:lab,assistant_message:`Resumen ${branch}: ingresos $${income.toFixed(2)}, gastos $${expenses.toFixed(2)}, neto $${(income-expenses).toFixed(2)}, ${ap.total||0} citas.`};
+}
+
+async function compareBranchesF1(q,ctx,args={}){
+  const branches=(await listBranchesF1(q,ctx,{})).branches;
+  const selected=Array.isArray(args.branch_keys)&&args.branch_keys.length?branches.filter(b=>args.branch_keys.includes(b.branch_key)):branches;
+  const results=[];
+  for(const b of selected){results.push(await dashboardSummaryF1(q,ctx,{branch_key:b.branch_key,from:args.from,to:args.to}));}
+  results.sort((a,b)=>Number(b.finance.net)-Number(a.finance.net));
+  return {branches:results,best_by_net:results[0]?.branch_key||null,assistant_message:results.length?`Comparé ${results.length} sucursales. La de mayor neto es ${results[0].branch_key} con $${Number(results[0].finance.net).toFixed(2)}.`:'No hay sucursales para comparar.'};
+}
+
+async function applyInventoryFormulaF1(q,ctx,args={}){
+  const branch=branchOfV5(ctx,args),items=Array.isArray(args.items)?args.items:[];
+  if(!items.length)return{needs_input:true,missing:['items'],assistant_message:'Necesito los productos y cantidades que consume el tratamiento.'};
+  const clean=items.map(i=>({item:text(i.item||i.name),quantity:Number(i.quantity||0)})).filter(i=>i.item&&i.quantity>0);
+  if(!clean.length)throw new Error('La fórmula no contiene cantidades válidas');
+  const result=await callInternalApiF1(ctx,'/api/inventory/apply-formula',{method:'POST',body:{items:clean,sucursal_id:branch},branchKey:branch});
+  return {...result,assistant_message:`Apliqué la fórmula al inventario. Actualizados: ${(result.updated||[]).length}; no encontrados: ${(result.missing||[]).length}.`,client_event:{type:'inventory_changed'}};
+}
+
+async function getWhatsAppStatusF1(q,ctx,args={}){
+  const branch=branchOfV5(ctx,args);
+  const channel=(await q(`SELECT id,phone_number_id,channel,name,clinic_name,branch_key,sucursal_id,active,is_active
+    FROM clinic_channels WHERE tenant_id=$1::uuid AND COALESCE(channel,'whatsapp')='whatsapp'
+      AND (sucursal_id=$2 OR branch_key=$2 OR sucursal_id IS NULL) ORDER BY updated_at DESC NULLS LAST,id DESC LIMIT 1`,[ctx.tenant_id,branch])).rows[0]||null;
+  const tokenSet=Boolean(text(process.env.WHATSAPP_ACCESS_TOKEN||process.env.WHATSAPP_TOKEN||process.env.META_WHATSAPP_TOKEN));
+  const configured=Boolean(channel?.phone_number_id&&tokenSet&&channel.active!==false&&channel.is_active!==false);
+  return {configured,channel:channel?{...channel,token_configured:tokenSet}:null,assistant_message:configured?'WhatsApp está configurado y activo para esta sucursal.':'WhatsApp no está completamente configurado para esta sucursal.'};
+}
+
+async function listWhatsAppMessagesF1(q,ctx,args={}){
+  const branch=branchOfV5(ctx,args),limit=Math.min(Math.max(Number(args.limit||100),1),300),direction=normalizeStatus(args.direction),phone=text(args.phone).replace(/\D/g,''),from=text(args.from),to=text(args.to);
+  const params=[ctx.tenant_id,branch]; const where=[`tenant_id=$1::uuid`,`(sucursal_id=$2 OR sucursal_id IS NULL)`];
+  if(direction&&direction!=='all'){params.push(direction);where.push(`LOWER(COALESCE(direction,''))=$${params.length}`)}
+  if(phone){params.push(phone.slice(-10));where.push(`RIGHT(regexp_replace(COALESCE(phone,''),'\\D','','g'),10)=RIGHT($${params.length},10)`)}
+  if(from){params.push(from);where.push(`created_at::date >= $${params.length}::date`)}
+  if(to){params.push(to);where.push(`created_at::date <= $${params.length}::date`)}
+  params.push(limit);
+  const{rows}=await q(`SELECT * FROM whatsapp_messages WHERE ${where.join(' AND ')} ORDER BY created_at DESC LIMIT $${params.length}`,params);
+  return {messages:rows,assistant_message:`Encontré ${rows.length} mensaje(s) de WhatsApp.`};
+}
+
+async function getWhatsAppStatsF1(q,ctx,args={}){
+  const branch=branchOfV5(ctx,args),from=text(args.from),to=text(args.to),params=[ctx.tenant_id,branch],where=[`tenant_id=$1::uuid`,`(sucursal_id=$2 OR sucursal_id IS NULL)`];
+  if(from){params.push(from);where.push(`created_at::date >= $${params.length}::date`)} if(to){params.push(to);where.push(`created_at::date <= $${params.length}::date`)}
+  const row=(await q(`SELECT COUNT(*)::int total,
+      COUNT(*) FILTER (WHERE LOWER(COALESCE(direction,''))='outgoing')::int total_sent,
+      COUNT(*) FILTER (WHERE LOWER(COALESCE(direction,''))='incoming')::int total_received,
+      COUNT(*) FILTER (WHERE LOWER(COALESCE(message,'')) ~ '(confirm|confirmo|si,|sí,|confirmada)')::int confirmations,
+      COUNT(*) FILTER (WHERE LOWER(COALESCE(message,'')) ~ '(cancel|no puedo|no asistir)')::int cancellations
+    FROM whatsapp_messages WHERE ${where.join(' AND ')}`,params)).rows[0];
+  return {stats:row,period:{from:from||null,to:to||null},assistant_message:`WhatsApp: ${row.total_sent||0} enviados y ${row.total_received||0} recibidos en el periodo.`};
+}
+
+async function lookupAppointmentsByPhoneF1(q,ctx,args={}){
+  const branch=branchOfV5(ctx,args),phone=text(args.phone).replace(/\D/g,''); if(phone.length<7)throw new Error('Necesito un teléfono válido');
+  const{rows}=await q(`SELECT a.id,a.patient,a.phone,a.date,a.start_time::text,a.status,a.doctor_id,d.name doctor_name,a.service_id,s.name service_name
+    FROM appointments a LEFT JOIN doctors d ON d.id=a.doctor_id LEFT JOIN services s ON s.id=a.service_id
+    WHERE a.tenant_id=$1::uuid AND (a.sucursal_id=$2 OR a.sucursal_id IS NULL)
+      AND RIGHT(regexp_replace(COALESCE(a.phone,''),'\\D','','g'),10)=RIGHT($3,10)
+    ORDER BY a.date DESC,a.start_time DESC LIMIT 30`,[ctx.tenant_id,branch,phone]);
+  return {appointments:rows,assistant_message:rows.length?`Encontré ${rows.length} cita(s) asociadas a ese teléfono.`:'No encontré citas asociadas a ese teléfono.'};
+}
+
+async function sendWhatsAppTemplateF1(_q,ctx,args={}){
+  const branch=branchOfV5(ctx,args),phone=text(args.phone),template=text(args.template); if(!phone||!template)return{needs_input:true,missing:[!phone?'phone':null,!template?'template':null].filter(Boolean),assistant_message:'Necesito teléfono y nombre de plantilla.'};
+  const body={phone,template,lang:text(args.language)||'es_MX',bodyParams:Array.isArray(args.body_params)?args.body_params:[]};
+  const result=await callInternalApiF1(ctx,'/api/whatsapp/send-template',{method:'POST',body,branchKey:branch});
+  return {ok:true,result,assistant_message:'Plantilla de WhatsApp enviada correctamente.'};
+}
+
+async function sendTodayConfirmationsF1(q,ctx,args={}){
+  const branch=branchOfV5(ctx,args),date=text(args.date)||localDate(ctx.timezone);
+  const count=(await q(`SELECT COUNT(*)::int n FROM appointments WHERE tenant_id=$1::uuid AND (sucursal_id=$2 OR sucursal_id IS NULL) AND date=$3::date AND LOWER(COALESCE(status,'')) NOT LIKE 'cancel%'`,[ctx.tenant_id,branch,date])).rows[0]?.n||0;
+  if(args.confirmed!==true)return{requires_confirmation:true,targeted:Number(count),assistant_message:`Hay ${count} cita(s) no canceladas para ${date}. ¿Confirmas enviar las confirmaciones por WhatsApp?`};
+  const qs=new URLSearchParams({when:'today',sucursal_id:branch,limit:String(args.limit||500),buttons:'false',use_template:'true'});
+  const result=await callInternalApiF1(ctx,`/api/whatsapp/broadcast/confirmations?${qs.toString()}`,{method:'POST',body:{},branchKey:branch});
+  return {ok:true,result,assistant_message:`Proceso de confirmaciones terminado: ${Number(result.sent||0)} enviada(s) de ${Number(result.targeted||count)} objetivo(s).`};
+}
+
+async function listLaboratoryPayoutsF1(q,ctx,args={}){
+  const branch=branchOfV5(ctx,args),workId=text(args.work_id),params=[ctx.tenant_id,branch],where=[`p.tenant_id=$1::uuid`,`(p.sucursal_id=$2 OR p.sucursal_id IS NULL)`];
+  if(workId){params.push(workId);where.push(`p.trabajo_id=$${params.length}`)}
+  const{rows}=await q(`SELECT p.id,p.trabajo_id,p.monto,p.fecha,p.created_at,t.paciente,t.presupuesto,t.etapa,l.nombre laboratorio
+    FROM pagos_laboratorio p LEFT JOIN lab_trabajos t ON t.id=p.trabajo_id AND t.tenant_id=p.tenant_id
+    LEFT JOIN laboratorios l ON l.id=t.laboratorio_id AND l.tenant_id=p.tenant_id
+    WHERE ${where.join(' AND ')} ORDER BY p.fecha DESC,p.created_at DESC`,params);
+  let summary=null;
+  if(workId){const work=(await q(`SELECT id,paciente,presupuesto FROM lab_trabajos WHERE id=$1 AND tenant_id=$2::uuid AND (sucursal_id=$3 OR sucursal_id IS NULL)`,[workId,ctx.tenant_id,branch])).rows[0];if(work){const paid=rows.reduce((s,r)=>s+Number(r.monto||0),0),budget=Number(work.presupuesto||0);summary={work,paid,budget,tbe:Math.max(0,budget-paid)}}}
+  return {payouts:rows,summary,assistant_message:summary?`${summary.work.paciente}: pagado al laboratorio $${summary.paid.toFixed(2)}; TBE $${summary.tbe.toFixed(2)}.`:`Encontré ${rows.length} pago(s) a laboratorios.`};
+}
+
+async function registerLaboratoryPayoutF1(q,ctx,args={}){
+  const branch=branchOfV5(ctx,args),workId=text(args.work_id),amount=Number(args.amount||0);if(!workId||!(amount>0))return{needs_input:true,missing:[!workId?'work_id':null,!(amount>0)?'amount':null].filter(Boolean),assistant_message:'Necesito el trabajo y el monto a pagar al laboratorio.'};
+  const work=(await q(`SELECT t.id,t.paciente,t.presupuesto,t.etapa,l.nombre laboratorio FROM lab_trabajos t LEFT JOIN laboratorios l ON l.id=t.laboratorio_id AND l.tenant_id=t.tenant_id WHERE t.id=$1 AND t.tenant_id=$2::uuid AND (t.sucursal_id=$3 OR t.sucursal_id IS NULL)`,[workId,ctx.tenant_id,branch])).rows[0];if(!work)throw new Error('Trabajo de laboratorio no encontrado');
+  if(args.confirmed!==true)return{requires_confirmation:true,assistant_message:`¿Confirmas registrar un pago de $${amount.toFixed(2)} a ${work.laboratorio||'laboratorio'} por el trabajo de ${work.paciente}?`};
+  const{rows}=await q(`INSERT INTO pagos_laboratorio(trabajo_id,monto,fecha,sucursal_id,tenant_id) VALUES($1,$2,$3,$4,$5::uuid) RETURNING *`,[workId,amount,text(args.date)||localDate(ctx.timezone),branch,ctx.tenant_id]);
+  const summary=await listLaboratoryPayoutsF1(q,ctx,{work_id:workId,branch_key:branch});
+  return {ok:true,payout:rows[0],summary:summary.summary,assistant_message:`Pago al laboratorio registrado por $${amount.toFixed(2)}. TBE restante $${Number(summary.summary?.tbe||0).toFixed(2)}.`,client_event:{type:'laboratory_changed',work_id:workId}};
+}
+
+
 const handlers = {
+  list_branches: listBranchesF1,
+  select_branch: selectBranchF1,
+  get_dashboard_summary: dashboardSummaryF1,
+  compare_branches: compareBranchesF1,
+  apply_inventory_formula: applyInventoryFormulaF1,
+  get_whatsapp_status: getWhatsAppStatusF1,
+  list_whatsapp_messages: listWhatsAppMessagesF1,
+  get_whatsapp_stats: getWhatsAppStatsF1,
+  lookup_appointments_by_phone: lookupAppointmentsByPhoneF1,
+  send_whatsapp_template: sendWhatsAppTemplateF1,
+  send_today_confirmations: sendTodayConfirmationsF1,
+  list_laboratory_payouts: listLaboratoryPayoutsF1,
+  register_laboratory_payout: registerLaboratoryPayoutF1,
+
   get_productivity_summary: getProductivitySummary,
   list_objectives: listObjectivesF1,
   create_objective: createObjectiveF1,
