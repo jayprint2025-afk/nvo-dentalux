@@ -6802,11 +6802,62 @@ app.delete('/api/companies/:id', authRequired, companiesSuperAdminOnly, ah(async
          )
     `)).rows;
 
-    for (const row of tenantTables) {
-      const schema = String(row.table_schema || 'public').replace(/"/g, '""');
-      const table = String(row.table_name || '').replace(/"/g, '""');
-      if (!table) continue;
-      await client.query(`DELETE FROM "${schema}"."${table}" WHERE tenant_id::text=$1`, [tenantId]);
+    // El orden que devuelve information_schema no garantiza respetar las llaves foráneas.
+    // Por eso borramos en varias pasadas: si una tabla padre todavía tiene hijos,
+    // la aplazamos y continuamos con las demás. SAVEPOINT evita abortar toda la
+    // transacción cuando PostgreSQL devuelve 23503 (foreign_key_violation).
+    let pendingTenantTables = tenantTables.slice();
+    let deletePass = 0;
+
+    while (pendingTenantTables.length > 0) {
+      deletePass += 1;
+      let progress = false;
+      const deferred = [];
+
+      for (let i = 0; i < pendingTenantTables.length; i += 1) {
+        const row = pendingTenantTables[i];
+        const schema = String(row.table_schema || 'public').replace(/"/g, '""');
+        const table = String(row.table_name || '').replace(/"/g, '""');
+        if (!table) continue;
+
+        const savepoint = `company_delete_${deletePass}_${i}`;
+        await client.query(`SAVEPOINT ${savepoint}`);
+
+        try {
+          await client.query(
+            `DELETE FROM "${schema}"."${table}" WHERE tenant_id::text=$1`,
+            [tenantId]
+          );
+          await client.query(`RELEASE SAVEPOINT ${savepoint}`);
+          progress = true;
+        } catch (error) {
+          await client.query(`ROLLBACK TO SAVEPOINT ${savepoint}`);
+          await client.query(`RELEASE SAVEPOINT ${savepoint}`);
+
+          if (error?.code === '23503') {
+            // Otra tabla aún referencia estos registros. Se reintenta en la siguiente pasada.
+            deferred.push({ ...row, fkError: error?.constraint || error?.detail || error?.message });
+            continue;
+          }
+
+          throw error;
+        }
+      }
+
+      if (deferred.length === 0) break;
+
+      if (!progress) {
+        const blockers = deferred
+          .map((row) => `${row.table_schema}.${row.table_name}: ${row.fkError || 'dependencia FK'}`)
+          .join(' | ');
+        const dependencyError = new Error(
+          `No se pudo completar la eliminación de la empresa por dependencias FK pendientes: ${blockers}`
+        );
+        dependencyError.code = 'COMPANY_DELETE_FK_BLOCKED';
+        throw dependencyError;
+      }
+
+      pendingTenantTables = deferred;
     }
 
     await client.query('DELETE FROM tenant_users WHERE tenant_id=$1::uuid', [tenantId]);
