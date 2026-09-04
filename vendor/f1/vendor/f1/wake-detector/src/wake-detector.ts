@@ -9,6 +9,7 @@ import type {
   WakeDetectorProcessor,
   WakeDetectorState,
   WakeFrame,
+  WakeFeatures,
   WakeProcessResult,
   WakeSignal,
 } from "./types/wake.js";
@@ -22,6 +23,7 @@ interface ResolvedWakeConfig {
   readonly strongDetectionThreshold: number;
   readonly minimumVadConfidence: number;
   readonly vadGraceFrames: number;
+  readonly preRollFrames: number;
   readonly cooldownFrames: number;
   readonly maxSilentFramesBeforeReset: number;
   readonly expectedSampleRate: number;
@@ -32,11 +34,12 @@ interface ResolvedWakeConfig {
 const DEFAULTS: ResolvedWakeConfig = {
   featureBands: 16,
   windowFrames: 12,
-  detectionThreshold: 0.64,
+  detectionThreshold: 0.82,
   consecutiveHits: 2,
-  strongDetectionThreshold: 0.80,
-  minimumVadConfidence: 0.42,
-  vadGraceFrames: 6,
+  strongDetectionThreshold: 0.94,
+  minimumVadConfidence: 0.58,
+  vadGraceFrames: 2,
+  preRollFrames: 6,
   cooldownFrames: 15,
   maxSilentFramesBeforeReset: 5,
   expectedSampleRate: 16_000,
@@ -62,6 +65,8 @@ export class WakeDetector implements WakeDetectorProcessor {
   #state: WakeDetectorState = "idle";
   #silentFrames = 0;
   #recentSpeechFrames = 0;
+  #wasSpeech = false;
+  #preRollFeatures: WakeFeatures[] = [];
   #processing: Promise<unknown> = Promise.resolve();
   #audioFrames: Float32Array[] = [];
   #suppressedUntilMs = 0;
@@ -124,6 +129,8 @@ export class WakeDetector implements WakeDetectorProcessor {
     this.#cooldown.reset();
     this.#silentFrames = 0;
     this.#recentSpeechFrames = 0;
+    this.#wasSpeech = false;
+    this.#preRollFeatures = [];
     this.#audioFrames = [];
     if (this.#state !== "disposed" && this.#state !== "failed") this.#setState("ready");
   }
@@ -136,6 +143,8 @@ export class WakeDetector implements WakeDetectorProcessor {
     this.#window.reset();
     this.#policy.reset();
     this.#recentSpeechFrames = 0;
+    this.#wasSpeech = false;
+    this.#preRollFeatures = [];
     this.#audioFrames = [];
   }
 
@@ -184,28 +193,44 @@ export class WakeDetector implements WakeDetectorProcessor {
     const currentSpeech = signal.isSpeech === true ||
       (signal.isSpeech !== false && vadConfidence !== undefined && vadConfidence >= this.#config.minimumVadConfidence);
 
-    // Keep the acoustic window warm continuously. The previous implementation only
-    // pushed frames that already passed VAD, which made a short wake phrase such as
-    // "F1" too brief to fill a 12-frame model window and forced users to repeat it.
-    // VAD now gates *decisions*, not the context window itself. This preserves strict
-    // noise rejection while allowing a normal single utterance to be recognized.
-    this.#window.push(this.#features.extract(frame));
+    // V9: keep only a small pre-roll while sleeping, then build the model window
+    // from the actual speech segment. V8 kept the full model window warm with all
+    // ambient audio, so ordinary speech could inherit unrelated context and create
+    // false wake scores. Pre-roll preserves the beginning of a short "F1" without
+    // allowing arbitrary background audio to become the decision window.
+    const extracted = this.#features.extract(frame);
 
     if (currentSpeech) {
+      if (!this.#wasSpeech) {
+        this.#window.reset();
+        this.#policy.reset();
+        for (const feature of this.#preRollFeatures) this.#window.push(feature);
+      }
+      this.#window.push(extracted);
       this.#recentSpeechFrames = this.#config.vadGraceFrames;
       this.#silentFrames = 0;
+      this.#wasSpeech = true;
     } else {
+      this.#preRollFeatures.push(extracted);
+      while (this.#preRollFeatures.length > this.#config.preRollFrames) this.#preRollFeatures.shift();
       this.#silentFrames += 1;
-      if (this.#recentSpeechFrames > 0) this.#recentSpeechFrames -= 1;
+      if (this.#recentSpeechFrames > 0) {
+        this.#recentSpeechFrames -= 1;
+        // Keep at most a tiny tail after speech to avoid clipping the final phoneme.
+        this.#window.push(extracted);
+      } else {
+        this.#wasSpeech = false;
+      }
     }
 
     const speechGateOpen = currentSpeech || this.#recentSpeechFrames > 0;
     if (!speechGateOpen) {
       if (this.#silentFrames >= this.#config.maxSilentFramesBeforeReset) {
         this.#policy.reset();
+        this.#window.reset();
         this.#silentFrames = this.#config.maxSilentFramesBeforeReset;
       }
-      return { status: this.#window.isReady ? "gated" : "warming", sequence: frame.sequence, timestampMs: frame.timestampMs, detected: false };
+      return { status: "gated", sequence: frame.sequence, timestampMs: frame.timestampMs, detected: false };
     }
 
     if (!this.#window.isReady) {

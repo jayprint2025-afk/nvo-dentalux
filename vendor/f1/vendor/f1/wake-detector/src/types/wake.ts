@@ -64,6 +64,8 @@ export interface WakeDetectorConfig {
   readonly minimumVadConfidence?: number;
   /** Frames after speech ends during which wake scoring may continue. */
   readonly vadGraceFrames?: number;
+  /** Ambient context kept before speech starts; never scored by itself. */
+  readonly preRollFrames?: number;
   readonly consecutiveHits?: number;
   readonly cooldownFrames?: number;
   readonly maxSilentFramesBeforeReset?: number;
