@@ -6739,8 +6739,51 @@ app.delete('/api/companies/:id', authRequired, companiesSuperAdminOnly, ah(async
     // Guardar los usuarios ligados a esta empresa antes de eliminar relaciones.
     const userIds = (await client.query('SELECT user_id FROM tenant_users WHERE tenant_id=$1::uuid', [tenantId])).rows.map(r => r.user_id);
 
+    // IMPORTANTE: algunas tablas hijas apuntan a appointments mediante FK.
+    // Deben eliminarse antes de borrar las citas de la empresa.
+    // 1) Pagos ligados a las citas.
+    await client.query(`
+      DELETE FROM payments
+       WHERE appointment_id IN (
+         SELECT id
+           FROM appointments
+          WHERE tenant_id::text = $1
+       )
+    `, [tenantId]);
+
+    // 2) Facturas ligadas a las citas. factura_conceptos usa ON DELETE CASCADE,
+    // pero limpiamos conceptos de forma defensiva antes de eliminar facturas.
+    await client.query(`
+      DELETE FROM factura_conceptos
+       WHERE factura_id IN (
+         SELECT f.id
+           FROM facturas f
+          WHERE f.cita_id IN (
+            SELECT a.id
+              FROM appointments a
+             WHERE a.tenant_id::text = $1
+          )
+       )
+    `, [tenantId]);
+
+    await client.query(`
+      DELETE FROM facturas
+       WHERE cita_id IN (
+         SELECT id
+           FROM appointments
+          WHERE tenant_id::text = $1
+       )
+    `, [tenantId]);
+
+    // 3) Ahora ya se pueden borrar las citas sin violar
+    // payments_appointment_id_fkey ni referencias de facturación.
+    await client.query(`
+      DELETE FROM appointments
+       WHERE tenant_id::text = $1
+    `, [tenantId]);
+
     // Limpieza defensiva: elimina datos de cualquier tabla BASE que tenga tenant_id.
-    // Se excluyen tenants y tenant_users; estos se eliminan al final en orden controlado.
+    // Las tablas anteriores ya se borraron en orden controlado.
     const tenantTables = (await client.query(`
       SELECT DISTINCT c.table_schema, c.table_name
         FROM information_schema.columns c
@@ -6749,7 +6792,14 @@ app.delete('/api/companies/:id', authRequired, companiesSuperAdminOnly, ah(async
        WHERE c.column_name='tenant_id'
          AND t.table_type='BASE TABLE'
          AND c.table_schema NOT IN ('pg_catalog','information_schema')
-         AND c.table_name NOT IN ('tenants','tenant_users')
+         AND c.table_name NOT IN (
+           'tenants',
+           'tenant_users',
+           'appointments',
+           'payments',
+           'facturas',
+           'factura_conceptos'
+         )
     `)).rows;
 
     for (const row of tenantTables) {
