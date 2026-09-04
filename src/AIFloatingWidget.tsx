@@ -82,14 +82,16 @@ type F1WakeSettings = {
   stabilizationMs: number;
 };
 
-const LEGACY_F1_WAKE_SETTINGS_KEY = "f1_wake_settings_v2";
-const F1_WAKE_SETTINGS_KEY = "f1_wake_settings_v3";
-const F1_MIN_WAKE_CONFIDENCE = 0.82;
-const F1_MAX_WAKE_THRESHOLD = 0.92;
+const LEGACY_F1_WAKE_SETTINGS_KEYS = ["f1_wake_settings_v2", "f1_wake_settings_v3"] as const;
+const F1_WAKE_SETTINGS_KEY = "f1_wake_settings_v4";
+const F1_MIN_WAKE_CONFIDENCE = 0.68;
+// V12: equilibrio práctico. 0.42/1 era demasiado permisivo; 0.86/2 resultó demasiado estricto.
+// El detector mantiene 2 confirmaciones para candidatos moderados y conserva su umbral fuerte interno para un wake muy claro.
+const F1_MAX_WAKE_THRESHOLD = 0.82;
 const DEFAULT_F1_WAKE_SETTINGS: F1WakeSettings = {
   // Compatible con la política profesional del wake detector V10:
   // 2 hits moderados o 1 hit interno muy fuerte.
-  threshold: 0.86,
+  threshold: 0.72,
   consecutiveHits: 2,
   cooldownMs: 3500,
   stabilizationMs: 2200,
@@ -99,7 +101,7 @@ function loadF1WakeSettings(): F1WakeSettings {
   try {
     // V2 permitía 0.42 + 1 confirmación. Esa combinación hacía que voz/ruido
     // pudiera convertirse en una activación. La descartamos deliberadamente.
-    localStorage.removeItem(LEGACY_F1_WAKE_SETTINGS_KEY);
+    for (const legacyKey of LEGACY_F1_WAKE_SETTINGS_KEYS) localStorage.removeItem(legacyKey);
 
     const parsed = JSON.parse(
       localStorage.getItem(F1_WAKE_SETTINGS_KEY) || "{}",
@@ -1423,14 +1425,14 @@ const buildLeadReport = React.useCallback(() => {
         preset === "sensitive"
           ? {
               // Rápido, pero nunca vuelve al modo inseguro 0.42/1.
-              threshold: 0.82,
+              threshold: 0.68,
               consecutiveHits: 2,
               cooldownMs: 3000,
               stabilizationMs: 1800,
             }
           : preset === "strict"
             ? {
-                threshold: 0.90,
+                threshold: 0.78,
                 consecutiveHits: 3,
                 cooldownMs: 4500,
                 stabilizationMs: 2800,
@@ -2415,7 +2417,7 @@ const buildLeadReport = React.useCallback(() => {
                             className="mt-1 w-full"
                           />
                           <span className="text-[10px] text-gray-500">
-                            Rango seguro: 0.82–0.92. Menor = más ágil; mayor =
+                            Rango seguro: 0.68–0.82. Menor = más ágil; mayor =
                             más estricto frente a conversaciones y ruido.
                           </span>
                         </label>
