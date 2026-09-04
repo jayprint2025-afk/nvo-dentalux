@@ -18,6 +18,7 @@ function objectiveFor(profile = {}, turn = {}) {
     return 'Crear el onboarding seguro y compartir el enlace para que el cliente cree personalmente su contraseña.';
   }
   if (turn.intent === 'pricing') return 'Dar el único precio vigente y explicar brevemente que incluye doctores y sucursales ilimitados y los asistentes IA.';
+  if (turn.intent === 'features') return 'Responder con conocimiento experto y concreto sobre las funciones solicitadas. Si pide todos los módulos o detalles, explicar el alcance completo sin omitir Expediente, Inventario, asistentes IA ni recordatorios/confirmaciones automáticas.';
   if (turn.intent === 'objection') return 'Resolver la objeción con información concreta y hacer una sola pregunta de avance.';
   if (turn.intent === 'competition') return 'Comparar sin inventar datos del competidor y conectar la necesidad con CliniqOne.';
   if (!(profile.pain_points || []).length) return 'Descubrir el principal problema operativo del prospecto con una pregunta natural.';

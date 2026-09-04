@@ -61,8 +61,8 @@ async function writeReply({ profile, turn, objective, history = [], offer = {} }
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${API_KEY}` },
     body: JSON.stringify({
       model: DEFAULT_MODEL,
-      temperature: 0.25,
-      max_tokens: 360,
+      temperature: 0.18,
+      max_tokens: 850,
       messages
     })
   }, TIMEOUT);
