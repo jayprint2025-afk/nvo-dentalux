@@ -82,24 +82,33 @@ type F1WakeSettings = {
   stabilizationMs: number;
 };
 
-const F1_WAKE_SETTINGS_KEY = "f1_wake_settings_v2";
+const LEGACY_F1_WAKE_SETTINGS_KEY = "f1_wake_settings_v2";
+const F1_WAKE_SETTINGS_KEY = "f1_wake_settings_v3";
+const F1_MIN_WAKE_CONFIDENCE = 0.82;
+const F1_MAX_WAKE_THRESHOLD = 0.92;
 const DEFAULT_F1_WAKE_SETTINGS: F1WakeSettings = {
-  threshold: 0.48,
+  // Compatible con la política profesional del wake detector V10:
+  // 2 hits moderados o 1 hit interno muy fuerte.
+  threshold: 0.86,
   consecutiveHits: 2,
-  cooldownMs: 3000,
+  cooldownMs: 3500,
   stabilizationMs: 2200,
 };
 
 function loadF1WakeSettings(): F1WakeSettings {
   try {
+    // V2 permitía 0.42 + 1 confirmación. Esa combinación hacía que voz/ruido
+    // pudiera convertirse en una activación. La descartamos deliberadamente.
+    localStorage.removeItem(LEGACY_F1_WAKE_SETTINGS_KEY);
+
     const parsed = JSON.parse(
       localStorage.getItem(F1_WAKE_SETTINGS_KEY) || "{}",
     );
     return {
       threshold: clamp(
         Number(parsed.threshold ?? DEFAULT_F1_WAKE_SETTINGS.threshold),
-        0.35,
-        0.75,
+        F1_MIN_WAKE_CONFIDENCE,
+        F1_MAX_WAKE_THRESHOLD,
       ),
       consecutiveHits: Math.round(
         clamp(
@@ -107,7 +116,7 @@ function loadF1WakeSettings(): F1WakeSettings {
             parsed.consecutiveHits ??
               DEFAULT_F1_WAKE_SETTINGS.consecutiveHits,
           ),
-          1,
+          2,
           4,
         ),
       ),
@@ -1413,17 +1422,18 @@ const buildLeadReport = React.useCallback(() => {
       const next: F1WakeSettings =
         preset === "sensitive"
           ? {
-              threshold: 0.42,
-              consecutiveHits: 1,
-              cooldownMs: 2500,
+              // Rápido, pero nunca vuelve al modo inseguro 0.42/1.
+              threshold: 0.82,
+              consecutiveHits: 2,
+              cooldownMs: 3000,
               stabilizationMs: 1800,
             }
           : preset === "strict"
             ? {
-                threshold: 0.60,
-                consecutiveHits: 2,
-                cooldownMs: 4000,
-                stabilizationMs: 3000,
+                threshold: 0.90,
+                consecutiveHits: 3,
+                cooldownMs: 4500,
+                stabilizationMs: 2800,
               }
             : DEFAULT_F1_WAKE_SETTINGS;
       setWakeSettingsDraft(next);
@@ -1433,9 +1443,13 @@ const buildLeadReport = React.useCallback(() => {
 
   const saveWakeSettings = React.useCallback(async () => {
     const next: F1WakeSettings = {
-      threshold: clamp(Number(wakeSettingsDraft.threshold), 0.35, 0.75),
+      threshold: clamp(
+        Number(wakeSettingsDraft.threshold),
+        F1_MIN_WAKE_CONFIDENCE,
+        F1_MAX_WAKE_THRESHOLD,
+      ),
       consecutiveHits: Math.round(
-        clamp(Number(wakeSettingsDraft.consecutiveHits), 1, 4),
+        clamp(Number(wakeSettingsDraft.consecutiveHits), 2, 4),
       ),
       cooldownMs: Math.round(
         clamp(Number(wakeSettingsDraft.cooldownMs), 1000, 8000),
@@ -1580,7 +1594,23 @@ const buildLeadReport = React.useCallback(() => {
         setF1VoiceEngineStatus(status);
         setF1VoiceEngineDetail(String(detail || ""));
       },
-      onWake: (event) => { void controller.wakeDetected(event); },
+      onWake: (event) => {
+        // Segunda barrera en UI: un evento wake nunca debe abrir Realtime si
+        // su score quedó por debajo del piso profesional, aunque una versión
+        // antigua del detector o una configuración local haya emitido el evento.
+        const confidence = Number((event as any)?.score ?? 0);
+        const requiredConfidence = Math.max(
+          F1_MIN_WAKE_CONFIDENCE,
+          wakeSettings.threshold,
+        );
+        if (!Number.isFinite(confidence) || confidence < requiredConfidence) {
+          setF1VoiceEngineDetail(
+            `Wake rechazado (${Number.isFinite(confidence) ? confidence.toFixed(2) : "sin score"})`,
+          );
+          return;
+        }
+        void controller.wakeDetected(event);
+      },
     });
     f1VoiceEngineRef.current = engine;
 
@@ -1604,7 +1634,10 @@ const buildLeadReport = React.useCallback(() => {
       inactivityTimeoutMs: 15000,
       maxSessionMs: 120000,
       wakeStabilizationMs: wakeSettings.stabilizationMs,
-      minimumWakeConfidence: wakeSettings.threshold,
+      minimumWakeConfidence: Math.max(
+        F1_MIN_WAKE_CONFIDENCE,
+        wakeSettings.threshold,
+      ),
       verifyWakeIdentity: async (event) => {
         if (!voiceProfile?.enabled) {
           return { accepted: true };
@@ -2369,8 +2402,8 @@ const buildLeadReport = React.useCallback(() => {
                           Umbral: {wakeSettingsDraft.threshold.toFixed(2)}
                           <input
                             type="range"
-                            min="0.35"
-                            max="0.75"
+                            min={F1_MIN_WAKE_CONFIDENCE}
+                            max={F1_MAX_WAKE_THRESHOLD}
                             step="0.01"
                             value={wakeSettingsDraft.threshold}
                             onChange={(event) =>
@@ -2382,8 +2415,8 @@ const buildLeadReport = React.useCallback(() => {
                             className="mt-1 w-full"
                           />
                           <span className="text-[10px] text-gray-500">
-                            Menor = reconoce más fácil. Mayor = evita activaciones
-                            accidentales.
+                            Rango seguro: 0.82–0.92. Menor = más ágil; mayor =
+                            más estricto frente a conversaciones y ruido.
                           </span>
                         </label>
 
@@ -2399,9 +2432,9 @@ const buildLeadReport = React.useCallback(() => {
                             }
                             className="mt-1 w-full rounded-lg border bg-white px-2 py-1"
                           >
-                            <option value={1}>1 — respuesta rápida</option>
                             <option value={2}>2 — recomendado</option>
                             <option value={3}>3 — más estricto</option>
+                            <option value={4}>4 — ambiente muy ruidoso</option>
                           </select>
                         </label>
 
