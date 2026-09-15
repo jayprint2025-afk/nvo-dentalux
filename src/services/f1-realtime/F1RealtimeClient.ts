@@ -19,6 +19,22 @@ export class F1RealtimeClient {
   private greetingAudioStopped = false;
   private greetingFinalizing = false;
   private waitingForConversationSessionUpdate = false;
+  // Un 429 de Realtime es transitorio: NO debe derribar la conversación.
+  // Conservamos el response.create pendiente y lo reintentamos en el mismo
+  // DataChannel para mantener todo el contexto conversacional del servidor.
+  private pendingResponseCreate: any | null = null;
+  private responseRetryTimer: number | null = null;
+  private responseRetryAttempt = 0;
+  private readonly maxResponseRetryAttempts = 6;
+  private userTurnAwaitingResponse = false;
+  // Blindaje de transporte: si WebRTC/DataChannel cae, reconstruimos la sesión
+  // sin regresar al Wake Engine y reinyectamos un checkpoint conversacional corto.
+  private recoveryMode = false;
+  private recoveringTransport = false;
+  private transportRecoveryAttempt = 0;
+  private readonly maxTransportRecoveryAttempts = 3;
+  private recoveryJournal: string[] = [];
+  private inFlightTools = 0;
 
   constructor(private readonly options: F1RealtimeClientOptions) {}
 
@@ -26,13 +42,14 @@ export class F1RealtimeClient {
     return this.resources.microphoneOwner;
   }
 
-  async connect(): Promise<void> {
+  async connect(recovery = false): Promise<void> {
     if (this.pc) return;
 
     const token = this.options.getToken();
     if (!token) throw new Error("Inicia sesión nuevamente para usar la voz.");
 
     this.closed = false;
+    this.recoveryMode = recovery;
     this.greetingPending = true;
     this.greetingAudioStarted = false;
     this.greetingAttempts = 0;
@@ -42,8 +59,16 @@ export class F1RealtimeClient {
     this.greetingAudioStopped = false;
     this.greetingFinalizing = false;
     this.waitingForConversationSessionUpdate = false;
+    this.clearResponseRetry();
+    this.pendingResponseCreate = null;
+    this.responseRetryAttempt = 0;
+    this.userTurnAwaitingResponse = false;
     this.clearGreetingFallback();
-    this.executedCalls.clear();
+    if (!recovery) {
+      this.executedCalls.clear();
+      this.recoveryJournal = [];
+      this.transportRecoveryAttempt = 0;
+    }
 
     const pc = new RTCPeerConnection();
     const remoteAudio =
@@ -105,7 +130,8 @@ export class F1RealtimeClient {
       void this.handleMessage(event.data);
     };
     dc.onclose = () => {
-      if (!this.closed) this.options.callbacks.onClosed();
+      if (this.closed || this.recoveringTransport) return;
+      void this.recoverTransport();
     };
 
     const dataChannelOpened = new Promise<void>((resolve, reject) => {
@@ -186,11 +212,105 @@ export class F1RealtimeClient {
       });
 
       this.greetingFallbackTimer = window.setTimeout(() => {
-        this.requestGreetingOnce();
+        if (this.recoveryMode) this.requestRecoveryOnce();
+        else this.requestGreetingOnce();
       }, 900);
     } catch (error) {
-      await this.close().catch(() => undefined);
+      if (recovery) {
+        try { await this.resources.closeRealtime(); } catch {}
+        this.pc = null;
+        this.dc = null;
+        this.stream = null;
+        this.remoteAudio = null;
+      } else {
+        await this.close().catch(() => undefined);
+      }
       throw error;
+    }
+  }
+
+  private rememberRecovery(line: string): void {
+    const clean = String(line || "").replace(/\s+/g, " ").trim().slice(0, 900);
+    if (!clean) return;
+    this.recoveryJournal.push(clean);
+    if (this.recoveryJournal.length > 12) this.recoveryJournal.splice(0, this.recoveryJournal.length - 12);
+  }
+
+  private requestRecoveryOnce(): void {
+    if (this.greetingRequested || this.closed) return;
+    this.greetingRequested = true;
+    this.greetingTranscript = "";
+    this.greetingAudioStarted = false;
+    this.greetingResponseDone = false;
+    this.greetingAudioStopped = false;
+    this.greetingFinalizing = false;
+    this.clearGreetingFallback();
+
+    const checkpoint = this.recoveryJournal.length
+      ? this.recoveryJournal.join("\n")
+      : "La conversación estaba activa cuando se interrumpió el transporte.";
+
+    this.send({
+      type: "conversation.item.create",
+      item: {
+        type: "message",
+        role: "user",
+        content: [{
+          type: "input_text",
+          text: `CONTEXTO DE RECUPERACIÓN INTERNO. No vuelvas a saludar ni pidas repetir desde cero. Retoma exactamente donde quedó el flujo. Si una acción ya aparece como ejecutada, no la repitas.\n${checkpoint}`,
+        }],
+      },
+    });
+    this.sendResponseCreate({
+      type: "response.create",
+      response: {
+        output_modalities: ["audio"],
+        instructions: "Retoma brevemente la conversación desde el checkpoint. No digas Te escucho, no vuelvas a saludar y no repitas una acción ya ejecutada.",
+      },
+    });
+  }
+
+  private async recoverTransport(): Promise<void> {
+    if (this.closed || this.recoveringTransport) return;
+    if (this.transportRecoveryAttempt >= this.maxTransportRecoveryAttempts) {
+      this.options.callbacks.onClosed();
+      return;
+    }
+
+    this.recoveringTransport = true;
+    this.transportRecoveryAttempt += 1;
+    this.clearResponseRetry();
+    try {
+      await this.resources.closeRealtime();
+    } catch {}
+    this.pc = null;
+    this.dc = null;
+    this.stream = null;
+    this.remoteAudio = null;
+
+    // Si la caída ocurrió mientras una acción HTTP ya estaba ejecutándose,
+    // esperamos su resultado antes de reconstruir la sesión. Así el checkpoint
+    // sabe si la acción terminó y Hanna no intenta repetirla con un call_id nuevo.
+    const toolDeadline = Date.now() + 10_000;
+    while (this.inFlightTools > 0 && Date.now() < toolDeadline && !this.closed) {
+      await new Promise((resolve) => window.setTimeout(resolve, 100));
+    }
+
+    const delay = Math.min(4000, 500 * Math.pow(2, this.transportRecoveryAttempt - 1));
+    await new Promise((resolve) => window.setTimeout(resolve, delay));
+    if (this.closed) { this.recoveringTransport = false; return; }
+
+    try {
+      await this.connect(true);
+      this.transportRecoveryAttempt = 0;
+      this.recoveringTransport = false;
+    } catch (error) {
+      this.recoveringTransport = false;
+      if (this.transportRecoveryAttempt < this.maxTransportRecoveryAttempts && !this.closed) {
+        void this.recoverTransport();
+      } else {
+        this.options.callbacks.onError(error instanceof Error ? error : new Error(String(error)));
+      }
     }
   }
 
@@ -206,7 +326,7 @@ export class F1RealtimeClient {
     this.greetingAttempts += 1;
     void this.remoteAudio?.play().catch(() => undefined);
 
-    this.send({
+    this.sendResponseCreate({
       type: "response.create",
       response: {
         // El saludo es fuera de banda: no debe convertirse en un turno de la
@@ -224,6 +344,66 @@ export class F1RealtimeClient {
         },
       },
     });
+  }
+
+  private clearResponseRetry(): void {
+    if (this.responseRetryTimer != null) window.clearTimeout(this.responseRetryTimer);
+    this.responseRetryTimer = null;
+  }
+
+  private sendResponseCreate(payload: any = { type: "response.create" }): void {
+    this.clearResponseRetry();
+    this.pendingResponseCreate = payload;
+    this.send(payload);
+  }
+
+  private isRateLimitError(payload: any): boolean {
+    const error = payload?.error ?? payload?.response?.status_details?.error ?? {};
+    const haystack = [error?.type, error?.code, error?.message, payload?.response?.status_details?.reason]
+      .filter(Boolean).join(" ").toLowerCase();
+    return /rate[_ -]?limit|tokens per min|tpm|429/.test(haystack);
+  }
+
+  private retryDelayMs(payload: any): number {
+    const error = payload?.error ?? payload?.response?.status_details?.error ?? {};
+    const message = String(error?.message ?? payload?.response?.status_details?.reason ?? "");
+    const seconds = message.match(/try again in\s+([0-9.]+)s/i);
+    const milliseconds = message.match(/try again in\s+([0-9.]+)ms/i);
+    if (milliseconds) return Math.max(250, Math.ceil(Number(milliseconds[1])) + 150);
+    if (seconds) return Math.max(250, Math.ceil(Number(seconds[1]) * 1000) + 150);
+    return Math.min(8_000, 750 * Math.pow(2, this.responseRetryAttempt));
+  }
+
+  private scheduleRateLimitRetry(payload: any): void {
+    if (this.closed || !this.pendingResponseCreate) return;
+    if (this.responseRetryAttempt >= this.maxResponseRetryAttempts) {
+      const error = payload?.error ?? payload?.response?.status_details?.error ?? {};
+      this.options.callbacks.onError(new Error(
+        String(error?.message || "Realtime continuó limitado después de varios reintentos."),
+      ));
+      return;
+    }
+
+    const delay = this.retryDelayMs(payload);
+    this.responseRetryAttempt += 1;
+    this.clearResponseRetry();
+    this.responseRetryTimer = window.setTimeout(() => {
+      this.responseRetryTimer = null;
+      if (this.closed || !this.pendingResponseCreate) return;
+      try {
+        this.send(this.pendingResponseCreate);
+      } catch (error) {
+        this.options.callbacks.onError(
+          error instanceof Error ? error : new Error(String(error)),
+        );
+      }
+    }, delay);
+  }
+
+  private markResponseCompleted(): void {
+    this.clearResponseRetry();
+    this.pendingResponseCreate = null;
+    this.responseRetryAttempt = 0;
   }
 
   private clearGreetingFallback(): void {
@@ -263,12 +443,29 @@ export class F1RealtimeClient {
       }
 
       if (this.greetingPending && !this.greetingRequested) {
-        this.requestGreetingOnce();
+        if (this.recoveryMode) this.requestRecoveryOnce();
+        else this.requestGreetingOnce();
       }
       return;
     }
 
     if (type === "error") {
+      // OpenAI puede emitir 429 como evento de error sin cerrar WebRTC. Antes
+      // este camino destruía la sesión completa desde el controller. Para 429
+      // mantenemos micrófono, conversación, tool state y call_id intactos.
+      if (this.isRateLimitError(payload)) {
+        // Los turnos normales los crea server_vad (create_response=true), por
+        // lo que no existe un response.create local que guardar. Si el 429
+        // corresponde a un turno de usuario aún pendiente, recreamos SOLO la
+        // generación; la conversación y el audio ya están en la sesión.
+        if (!this.pendingResponseCreate && this.userTurnAwaitingResponse && !this.greetingPending) {
+          this.pendingResponseCreate = { type: "response.create" };
+        }
+        if (this.pendingResponseCreate) {
+          this.scheduleRateLimitRetry(payload);
+          return;
+        }
+      }
       const details = [
         payload.error?.message || "Error en Realtime",
         payload.error?.code ? `code=${payload.error.code}` : "",
@@ -279,13 +476,14 @@ export class F1RealtimeClient {
     }
 
     if (type === "input_audio_buffer.speech_started") {
+      if (!this.greetingPending) this.userTurnAwaitingResponse = true;
       this.options.callbacks.onUserSpeechStarted();
       return;
     }
 
     if (type === "conversation.item.input_audio_transcription.completed") {
       const transcript = String(payload.transcript ?? "").trim();
-      if (transcript) this.options.callbacks.onUserTranscript(transcript);
+      if (transcript) { this.rememberRecovery(`Usuario: ${transcript}`); this.options.callbacks.onUserTranscript(transcript); }
       return;
     }
 
@@ -314,18 +512,29 @@ export class F1RealtimeClient {
       if (this.greetingPending && transcript) {
         this.greetingTranscript = transcript;
       }
-      if (transcript) this.options.callbacks.onAssistantTranscriptDone(transcript);
+      if (transcript) { this.rememberRecovery(`Hanna: ${transcript}`); this.options.callbacks.onAssistantTranscriptDone(transcript); }
       return;
     }
 
     if (type === "response.output_item.done" && payload.item?.type === "function_call") {
-      await this.handleTool(payload.item);
+      // Esperamos response.done. Ejecutar aquí y además en response.done puede
+      // adelantar el response.create de continuación y confundir qué respuesta
+      // está pendiente durante un 429.
       return;
     }
 
     if (type === "response.done") {
       const status = String(payload.response?.status ?? "");
       if (status === "failed" || status === "cancelled") {
+        if (status === "failed" && this.isRateLimitError(payload)) {
+          if (!this.pendingResponseCreate && this.userTurnAwaitingResponse && !this.greetingPending) {
+            this.pendingResponseCreate = { type: "response.create" };
+          }
+          if (this.pendingResponseCreate) {
+            this.scheduleRateLimitRetry(payload);
+            return;
+          }
+        }
         const details = payload.response?.status_details;
         const message =
           details?.error?.message ||
@@ -335,9 +544,12 @@ export class F1RealtimeClient {
         return;
       }
 
-      for (const item of payload.response?.output ?? []) {
-        if (item?.type === "function_call") await this.handleTool(item);
-      }
+      // La generación actual terminó correctamente. Si produjo una herramienta,
+      // handleTool abrirá una NUEVA respuesta de continuación.
+      this.markResponseCompleted();
+      const toolItems = (payload.response?.output ?? []).filter((item: any) => item?.type === "function_call");
+      if (!toolItems.length && !this.greetingPending) this.userTurnAwaitingResponse = false;
+      for (const item of toolItems) await this.handleTool(item);
 
       if (this.greetingPending) {
         this.greetingResponseDone = true;
@@ -440,6 +652,10 @@ export class F1RealtimeClient {
     if (!call.name || !call.callId || this.executedCalls.has(call.callId)) return;
     this.executedCalls.add(call.callId);
 
+    this.rememberRecovery(`Acción solicitada: ${call.name} ${call.argumentsJson}`);
+    const originDc = this.dc;
+    this.inFlightTools += 1;
+
     let output: unknown;
     try {
       output = await this.options.callbacks.onToolCall(call);
@@ -448,9 +664,16 @@ export class F1RealtimeClient {
         ok: false,
         error: error instanceof Error ? error.message : String(error),
       };
+    } finally {
+      this.inFlightTools = Math.max(0, this.inFlightTools - 1);
     }
 
-    if (!this.dc || this.dc.readyState !== "open") return;
+    this.rememberRecovery(`Resultado de ${call.name}: ${JSON.stringify(output).slice(0, 900)}`);
+
+    // Un function_call_output pertenece a la sesión que emitió ese call_id.
+    // Si WebRTC se reconstruyó mientras la acción estaba en vuelo, NO enviamos
+    // el call_id viejo a la sesión nueva; el resultado ya quedó en el checkpoint.
+    if (!this.dc || this.dc !== originDc || this.dc.readyState !== "open") return;
 
     this.send({
       type: "conversation.item.create",
@@ -460,7 +683,7 @@ export class F1RealtimeClient {
         output: JSON.stringify(output),
       },
     });
-    this.send({ type: "response.create" });
+    this.sendResponseCreate({ type: "response.create" });
   }
 
   async close(): Promise<void> {
@@ -480,8 +703,17 @@ export class F1RealtimeClient {
     this.greetingAudioStopped = false;
     this.greetingFinalizing = false;
     this.waitingForConversationSessionUpdate = false;
+    this.clearResponseRetry();
+    this.pendingResponseCreate = null;
+    this.responseRetryAttempt = 0;
+    this.userTurnAwaitingResponse = false;
     this.clearGreetingFallback();
     this.remoteAudio = null;
+    this.recoveryMode = false;
+    this.recoveringTransport = false;
+    this.transportRecoveryAttempt = 0;
+    this.recoveryJournal = [];
+    this.inFlightTools = 0;
     this.executedCalls.clear();
   }
 }
