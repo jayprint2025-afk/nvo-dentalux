@@ -57,16 +57,18 @@ async function processTurn(pool, lead, text) {
   let stage = Planner.stageFor(profile, turn);
   let objective = Planner.objectiveFor(profile, turn);
 
-  if ((turn.intent === 'close' || profile.buying_intent === 'high') && profile.clinic_name && profile.name && profile.email && !profile.onboarding_url) {
+  if ((turn.intent === 'close' || (profile.buying_intent === 'high' && Boolean(turn.profile_patch?.email))) && profile.clinic_name && profile.name && profile.email && !profile.onboarding_url) {
     const onboarding = await LeadTools.createOnboarding(pool, lead, profile);
     if (onboarding?.url) {
-      profile = State.mergeProfile(profile, { onboarding_url: onboarding.url, onboarding_token_created: true, next_step: 'Completar registro seguro' });
+      profile = State.mergeProfile(profile, { onboarding_url: onboarding.url, onboarding_token_created: true, customer_status: 'onboarding', next_step: 'Completar registro seguro' });
     }
   }
 
   if (profile.onboarding_url) {
-    stage = 'onboarding';
-    objective = 'Compartir el enlace seguro de onboarding directamente en esta conversación. No prometer envío por correo.';
+    stage = (profile.sale_closed || profile.customer_status === 'customer' || profile.onboarding_completed) ? 'won' : 'onboarding';
+    objective = profile.onboarding_link_shared
+      ? 'Modo postventa/onboarding. Responder y guiar al cliente con su duda actual. No repetir el enlace, no volver a vender el mismo plan y no iniciar otro onboarding. Solo abrir una nueva acción comercial si el cliente pide explícitamente upgrade, otra cuenta o contratación adicional.'
+      : 'Compartir una sola vez el enlace seguro de onboarding directamente en esta conversación. No prometer envío por correo.';
   }
   const score = LeadTools.calculateScore(profile, stage);
   profile = State.mergeProfile(profile, { next_step: objective });
@@ -81,6 +83,13 @@ async function processTurn(pool, lead, text) {
     Telemetry.log('writer_error', { lead_id: lead.id, message: error.message });
     const { fallback } = require('./response-writer');
     reply = fallback(profile, turn, objective, offer);
+  }
+
+  // Persistimos que el enlace ya fue entregado. En turnos posteriores Sales AI debe
+  // seguir conversando y solo reenviarlo cuando el cliente lo solicite.
+  if (profile.onboarding_url && !profile.onboarding_link_shared && String(reply || '').includes(profile.onboarding_url)) {
+    profile = State.mergeProfile(profile, { onboarding_link_shared: true, sale_closed: true, customer_status: 'customer', buying_intent: 'converted', next_step: 'Atención postventa y acompañamiento' });
+    await LeadTools.updateLead(pool, lead.id, { profile, stage, score, nextStep: objective });
   }
 
   Telemetry.log('turn', { lead_id: lead.id, intent: turn.intent, stage, score });

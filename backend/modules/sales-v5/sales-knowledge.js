@@ -3,145 +3,79 @@
 const DEFAULT_OFFER = Object.freeze({
   brand: 'CliniqOne',
   promise: 'Tu clínica, todo en un solo lugar.',
-  price_mxn: 1490,
   billing_period: 'mes',
   doctors: 'ilimitados',
   branches: 'ilimitadas',
-  ai_channels: ['WhatsApp', 'Facebook Messenger'],
-  features: [
-    'Agenda inteligente',
-    'Expediente clínico y odontograma',
-    'Caja',
-    'Productividad y reportes',
-    'Laboratorios dentales',
-    'Inventario',
-    'Administración de sucursales',
-    'Asistente virtual IA para WhatsApp',
-    'Asistente virtual IA para Facebook Messenger',
-    'Recordatorios y confirmaciones automáticas de citas'
-  ]
-});
-
-const PRODUCT_MODULES = Object.freeze({
-  agenda: {
-    name: 'Agenda inteligente',
-    facts: [
-      'Permite crear, editar y eliminar citas.',
-      'Registra paciente, doctor, servicio, estado, fecha, hora de inicio, duración y teléfono.',
-      'La cita se conecta con el expediente médico del paciente.',
-      'Trabaja con recordatorios y confirmaciones automáticas de citas.',
-      'Cuando el paciente responde a una confirmación automática, el sistema puede actualizar el estado de la cita de Pendiente a Confirmada o Cancelada según la respuesta recibida.'
-    ]
-  },
-  expediente: {
-    name: 'Expediente clínico',
-    facts: [
-      'Centraliza la información clínica y general del paciente.',
-      'Incluye historial médico y odontograma para el seguimiento odontológico.',
-      'Se accede al expediente desde la operación de la agenda para mantener la atención ligada al paciente.',
-      'Permite conservar el seguimiento clínico en un solo sistema en lugar de manejar información dispersa.'
-    ]
-  },
-  caja: {
-    name: 'Caja',
-    facts: [
-      'Lleva control de ingresos y egresos de la clínica.',
-      'Permite relacionar la operación económica con la actividad registrada en el sistema.',
-      'Facilita consultar movimientos para tener mayor control administrativo.'
-    ]
-  },
-  productividad: {
-    name: 'Productividad',
-    facts: [
-      'Presenta indicadores y gráficas de productividad.',
-      'Ayuda a revisar el desempeño de la clínica y de los doctores con información registrada en la operación.',
-      'Está orientado a convertir los datos diarios de la clínica en información útil para administración y seguimiento.'
-    ]
-  },
-  laboratorios: {
-    name: 'Laboratorios dentales',
-    facts: [
-      'No es un módulo de análisis clínicos: está diseñado para controlar trabajos enviados a laboratorios dentales.',
-      'Permite registrar laboratorio, paciente, servicio, presupuesto, fechas, etapa del trabajo y notas.',
-      'Da seguimiento al flujo del trabajo desde la toma o envío hasta la entrega.',
-      'Permite registrar abonos y pagos relacionados con trabajos de laboratorio.'
-    ]
-  },
-  inventario: {
-    name: 'Inventario',
-    facts: [
-      'Controla materiales, insumos e instrumental de la clínica.',
-      'Registra existencias y niveles mínimos/máximos de stock para facilitar la detección de faltantes.',
-      'Puede registrar datos como categoría, tipo, precio, proveedor, última compra, consumo estimado y fecha de caducidad cuando corresponda.',
-      'Ayuda a tener visibilidad del inventario en lugar de depender de controles manuales separados.'
-    ]
-  },
-  sucursales: {
-    name: 'Administración de sucursales',
-    facts: [
-      'CliniqOne está preparado para trabajar con múltiples sucursales dentro de la misma plataforma.',
-      'La oferta comercial contempla sucursales ilimitadas y doctores ilimitados.',
-      'La información operativa se organiza por empresa y sucursal para evitar mezclar configuraciones.'
-    ]
-  },
-  ia: {
-    name: 'Asistentes virtuales IA',
-    facts: [
-      'Incluye asistentes virtuales para WhatsApp y Facebook Messenger.',
-      'Atienden conversaciones de pacientes y pueden apoyar el proceso de agenda, cancelación y reagendado según la configuración de la clínica.',
-      'Trabajan conectados con la operación de la clínica para que la conversación no sea un chatbot aislado.',
-      'Los recordatorios y confirmaciones automáticas complementan la atención: una respuesta de confirmación o cancelación puede reflejarse en el estado de la cita.'
-    ]
-  },
-  soporte: {
-    name: 'Capacitación y soporte',
-    facts: [
-      'CliniqOne contempla capacitación y soporte para acompañar a la clínica en el aprendizaje y uso de la plataforma.'
-    ]
+  patients: 'ilimitados',
+  plans: {
+    cliniqone: {
+      name: 'CliniqOne',
+      price_mxn: 799,
+      description: 'Sistema completo para administrar la clínica, sin asistentes virtuales automáticos ni Hanna.'
+    },
+    cliniqone_ai: {
+      name: 'CliniqOne AI',
+      price_mxn: 1490,
+      description: 'Todo CliniqOne más automatización, asistentes virtuales de pacientes y Hanna.'
+    }
   }
 });
 
-const COMPETITOR_POLICY = {
-  rule: 'Nunca inventes características, precios ni defectos de competidores. Si no existe una comparación verificada, explica las fortalezas comprobadas de CliniqOne y ofrece comparar punto por punto con lo que el prospecto usa.',
-  verified: {}
-};
+const BASE_FEATURES = [
+  'Agenda inteligente', 'Caja', 'Expediente clínico, historial médico y odontograma', 'Consentimientos',
+  'Historial de pacientes y citas', 'Inventario', 'Productividad y reportes', 'Laboratorios dentales',
+  'Administración multisucursal', 'Mensajes manuales de WhatsApp'
+];
+const AI_FEATURES = [
+  'Recordatorios y confirmaciones automáticas por WhatsApp', 'Asistente virtual IA para WhatsApp',
+  'Asistente virtual IA para Facebook Messenger', 'Asistente virtual IA para Instagram',
+  'Hanna, asistente personal por voz para operar CliniqOne'
+];
+
+const PRODUCT_MODULES = Object.freeze({
+  agenda: { name: 'Agenda inteligente', facts: ['Permite crear, editar y eliminar citas.', 'Registra paciente, doctor, servicio, estado, fecha, hora de inicio, duración y teléfono.', 'La cita se conecta con el expediente del paciente.', 'En CliniqOne AI trabaja además con recordatorios y confirmaciones automáticas por WhatsApp.'] },
+  expediente: { name: 'Expediente clínico, odontograma y consentimientos', facts: ['Centraliza la información clínica y general del paciente.', 'Incluye historial médico, odontograma y seguimiento odontológico.', 'Incluye gestión de consentimientos vinculados al paciente y su atención.', 'Se conecta con la agenda y conserva el historial del paciente en un solo sistema.'] },
+  caja: { name: 'Caja', facts: ['Lleva control de ingresos y egresos de la clínica.', 'Permite relacionar la operación económica con la actividad registrada.', 'Facilita consultar movimientos para mayor control administrativo.'] },
+  productividad: { name: 'Productividad y reportes', facts: ['Presenta indicadores y gráficas de productividad.', 'Permite revisar el desempeño de la clínica y de los doctores con la información registrada.', 'Convierte datos diarios en información útil para administración y seguimiento.'] },
+  laboratorios: { name: 'Laboratorios dentales', facts: ['Controla trabajos enviados a laboratorios dentales; no se refiere a análisis clínicos.', 'Permite registrar laboratorio, paciente, servicio, presupuesto, fechas, etapa y notas.', 'Da seguimiento al trabajo hasta la entrega y permite registrar abonos y pagos.'] },
+  inventario: { name: 'Inventario', facts: ['Controla materiales, insumos e instrumental.', 'Registra existencias y niveles mínimos/máximos de stock.', 'Puede registrar categoría, tipo, precio, proveedor, última compra, consumo estimado y caducidad cuando corresponda.'] },
+  sucursales: { name: 'Multisucursal', facts: ['Permite trabajar con múltiples sucursales dentro de la misma plataforma.', 'Actualmente no se cobra extra por agregar doctores o sucursales: ambos se ofrecen sin límite.', 'La información se organiza por empresa y sucursal para evitar mezclar configuraciones.'] },
+  whatsapp_manual: { name: 'Mensajes manuales de WhatsApp', facts: ['CliniqOne permite comunicación manual por WhatsApp como parte del plan CliniqOne de $799.', 'No confundir mensajes manuales con el asistente virtual de WhatsApp ni con recordatorios automáticos, que pertenecen a CliniqOne AI.'] },
+  automatizaciones: { name: 'Recordatorios y confirmaciones automáticas', facts: ['Disponibles en CliniqOne AI.', 'Automatizan recordatorios por WhatsApp relacionados con las citas.', 'La respuesta del paciente puede actualizar una cita de Pendiente a Confirmada o Cancelada según confirme o cancele.'] },
+  ia_pacientes: { name: 'Asistentes virtuales para pacientes', facts: ['Disponibles en CliniqOne AI para WhatsApp, Facebook Messenger e Instagram.', 'Atienden conversaciones de los pacientes de la clínica y apoyan agenda, cancelación y reagendado según la configuración.', 'Son asistentes de cada clínica/doctor; NO son AI Sales.'] },
+  hanna: { name: 'Hanna', facts: ['Disponible en CliniqOne AI.', 'Hanna es el asistente personal interno de CliniqOne y se utiliza mediante voz.', 'Puede ayudar al usuario a realizar acciones y operar funciones del sistema mediante comandos de voz.', 'Hanna es el mismo asistente que anteriormente se identificaba como F1; Hanna es el comando/nombre actual.', 'No es un asistente de atención a pacientes.'] },
+  soporte: { name: 'Capacitación y soporte', facts: ['CliniqOne contempla capacitación y soporte para acompañar a la clínica en el aprendizaje y uso de la plataforma.'] }
+});
+
+const COMPETITOR_POLICY = { rule: 'Nunca inventes características, precios ni defectos de competidores. Si no existe una comparación verificada, explica las fortalezas comprobadas de CliniqOne y ofrece comparar punto por punto con lo que el prospecto usa.', verified: {} };
 
 function normalizeOffer(value = {}) {
-  const price = Number(value.price_mxn);
-  return { ...DEFAULT_OFFER, ...(value || {}), price_mxn: Number.isFinite(price) && price > 0 ? price : DEFAULT_OFFER.price_mxn };
+  // Los precios/planes oficiales viven en código. Conservamos solo metadatos inocuos de una configuración antigua.
+  return { ...DEFAULT_OFFER, brand: value.brand || DEFAULT_OFFER.brand, promise: value.promise || DEFAULT_OFFER.promise };
 }
-
-function moduleKnowledge() {
-  return Object.values(PRODUCT_MODULES)
-    .map(m => `${m.name}:\n- ${m.facts.join('\n- ')}`)
-    .join('\n\n');
-}
-
+function moduleKnowledge() { return Object.values(PRODUCT_MODULES).map(m => `${m.name}:\n- ${m.facts.join('\n- ')}`).join('\n\n'); }
 function summarizeKnowledge(offerValue = {}) {
-  const offer = normalizeOffer(offerValue);
+  const offer = normalizeOffer(offerValue); const basic = offer.plans.cliniqone; const ai = offer.plans.cliniqone_ai;
   return [
-    `Marca: ${offer.brand}.`,
-    `Propuesta: ${offer.promise}`,
-    `Oferta comercial actual: un solo producto completo por $${offer.price_mxn.toLocaleString('es-MX')} MXN al ${offer.billing_period}.`,
-    `Doctores: ${offer.doctors}. Sucursales: ${offer.branches}.`,
-    `Asistentes virtuales IA incluidos para ${offer.ai_channels.join(' y ')}.`,
-    `Módulos/capacidades incluidos actualmente: ${offer.features.join(', ')}.`,
-    '',
-    'CONOCIMIENTO OFICIAL DEL PRODUCTO:',
-    moduleKnowledge(),
-    '',
-    'REGLAS DE PRECISIÓN DEL PRODUCTO:',
-    '- Si preguntan por todos los módulos, enumera TODOS los módulos/capacidades anteriores; no omitas Expediente ni Inventario.',
-    '- Si preguntan por un módulo, explica concretamente qué hace y cómo ayuda; no respondas con frases vagas.',
-    '- Laboratorios significa laboratorios DENTALES y seguimiento de trabajos; nunca lo describas como pruebas o análisis clínicos.',
-    '- Explica que las confirmaciones automáticas pueden cambiar el estado de una cita a Confirmada o Cancelada según la respuesta del paciente.',
-    '- Distingue asistentes IA de recordatorios automáticos: son capacidades relacionadas, pero no son lo mismo.',
-    '- No afirmes una función que no aparezca en este conocimiento oficial.',
-    '- Si te preguntan un detalle no documentado, di con seguridad que ese detalle específico debe confirmarse; no improvises.',
-    '- No existen planes Básico, Medio o Completo. No preguntes qué plan desea el prospecto.',
-    '- No prometas IA o mensajería ilimitada; los asistentes están incluidos y la política de uso puede definirse comercialmente.',
+    `Marca: ${offer.brand}.`, `Propuesta: ${offer.promise}`,
+    `PLAN 1 — ${basic.name}: $${basic.price_mxn.toLocaleString('es-MX')} MXN al mes. ${basic.description}`,
+    `Incluye: ${BASE_FEATURES.join(', ')}.`,
+    `PLAN 2 — ${ai.name}: $${ai.price_mxn.toLocaleString('es-MX')} MXN al mes. ${ai.description}`,
+    `Funciones adicionales AI: ${AI_FEATURES.join(', ')}.`,
+    `En ambos planes: doctores ${offer.doctors}, sucursales ${offer.branches} y pacientes ${offer.patients}; actualmente no hay cargo adicional por cantidad de doctores o sucursales.`,
+    '', 'CONOCIMIENTO OFICIAL DEL PRODUCTO:', moduleKnowledge(), '',
+    'REGLAS COMERCIALES Y DE PRECISIÓN:',
+    '- Existen exactamente dos planes vigentes: CliniqOne $799 MXN/mes y CliniqOne AI $1,490 MXN/mes.',
+    '- CliniqOne $799 contiene el sistema administrativo completo y mensajes manuales de WhatsApp; NO incluye recordatorios automáticos, asistentes virtuales de WhatsApp/Facebook/Instagram ni Hanna.',
+    '- CliniqOne AI $1,490 incluye TODO lo del plan CliniqOne más recordatorios/confirmaciones automáticas, IA de WhatsApp, Facebook Messenger, Instagram y Hanna.',
+    '- AI Sales pertenece a la empresa CliniqOne y vende CliniqOne; NO es una función o asistente que se entregue al doctor.',
+    '- Hanna es el asistente personal interno por voz. Los asistentes de WhatsApp/Facebook/Instagram atienden pacientes. No mezcles sus funciones.',
+    '- No cobres ni sugieras cargos adicionales por doctores o sucursales en la oferta actual.',
+    '- No prometas mensajería, tokens o consumo de IA ilimitados. Tampoco inventes límites: si preguntan por políticas de uso no documentadas, indica que deben confirmarse.',
+    '- Si preguntan por todos los módulos, enumera todas las capacidades relevantes sin omitir expediente, consentimientos, inventario, laboratorio, multisucursal y WhatsApp manual.',
+    '- Laboratorios significa laboratorios DENTALES y seguimiento de trabajos; nunca análisis clínicos.',
+    '- No afirmes funciones que no aparezcan en este conocimiento oficial.',
     `Competencia: ${COMPETITOR_POLICY.rule}`
   ].join('\n');
 }
-
-module.exports = { DEFAULT_OFFER, PRODUCT_MODULES, COMPETITOR_POLICY, normalizeOffer, summarizeKnowledge, moduleKnowledge };
+module.exports = { DEFAULT_OFFER, BASE_FEATURES, AI_FEATURES, PRODUCT_MODULES, COMPETITOR_POLICY, normalizeOffer, summarizeKnowledge, moduleKnowledge };

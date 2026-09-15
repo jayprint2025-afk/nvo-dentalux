@@ -11,10 +11,13 @@ const DEFAULT_PROFILE = Object.freeze({
   pain_points: [],
   interested_features: [],
   objections: [],
-  recommended_plan: 'cliniqone_complete',
+  recommended_plan: 'cliniqone',
   onboarding_url: null,
   onboarding_token_created: false,
+  onboarding_link_shared: false,
   onboarding_completed: false,
+  customer_status: 'prospect', // prospect | onboarding | customer
+  sale_closed: false,
   buying_intent: 'unknown',
   next_step: null
 });

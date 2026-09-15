@@ -22,12 +22,15 @@ function extractBranches(text) {
 
 function inferIntent(text) {
   const n = norm(text);
-  if (/(quiero probar|quiero registr|me registro|crear cuenta|empezar|contratar|lo quiero|me interesa mucho|envia(?:melo|lo)?|mand(?:a|ame)lo|m[aá]ndamelo|ok dale|dale|listo|hazlo|continua|contin[uú]a|procede|adelante)/.test(n)) return 'close';
-  if (/(precio|costo|cuanto cuesta|planes|mensualidad)/.test(n)) return 'pricing';
+  if (/(cambiar(?:me)? al plan|subir(?:me)? al plan|upgrade|actualizar.*plan|quiero.*(?:plan ai|cliniqone ai))/.test(n)) return 'features';
+  // Si una frase de compra viene acompañada de una duda concreta, primero se responde
+  // la duda. La intención de compra se conserva en profile_patch para continuar el cierre después.
+  if (/(precio|costo|cuanto cuesta|planes|mensualidad|diferencia.*plan|plan.*diferencia|diferencia.*(?:799|1490)|(?:799|1490).*diferencia)/.test(n)) return 'pricing';
   if (/(compar|vs\b|versus|agenda.?pro|dentidesk|doctoralia|software que uso|otro programa)/.test(n)) return 'competition';
-  if (/(demo|demostracion|ver el sistema|prueba)/.test(n)) return 'demo';
-  if (/(funcion|modulo|incluye|que hace|puede hacer|whatsapp|inventario|factur|laboratorio|agenda|expediente|odontograma)/.test(n)) return 'features';
+  if (/(funcion|modulo|incluye|que hace|puede hacer|whatsapp|facebook|messenger|instagram|hanna|inventario|factur|laboratorio|agenda|expediente|odontograma|recordatorio|confirmacion|sucursal|doctor)/.test(n)) return 'features';
   if (/(caro|mucho dinero|no quiero cambiar|miedo|dificil|complicado|ya tengo|no me convence)/.test(n)) return 'objection';
+  if (/(demo|demostracion|ver el sistema|prueba)/.test(n)) return 'demo';
+  if (/(quiero probar|quiero registr|me registro|crear cuenta|empezar|contratar|lo quiero|me interesa mucho|envia(?:melo|lo)?|mand(?:a|ame)lo|m[aá]ndamelo|ok dale|dale|listo|hazlo|continua|contin[uú]a|procede|adelante)/.test(n)) return 'close';
   return 'conversation';
 }
 
@@ -44,7 +47,9 @@ function inferSignals(text) {
   if (/(inventario|stock|insumos)/.test(n)) pain.push('inventario');
   if (/(factur|cfdi)/.test(n)) interests.push('facturación CFDI');
   if (/(whatsapp|recordatorio|confirmacion)/.test(n)) interests.push('WhatsApp automático');
-  if (/(\bia\b|inteligencia artificial|messenger|facebook)/.test(n)) interests.push('IA');
+  if (/(instagram)/.test(n)) interests.push('Instagram AI');
+  if (/(hanna|asistente personal|voz)/.test(n)) interests.push('Hanna');
+  if (/(\bia\b|inteligencia artificial|messenger|facebook|instagram|hanna)/.test(n)) interests.push('IA');
   if (/(\bagenda\b|\bcitas?\b)/.test(n)) interests.push('agenda');
   if (/(expediente|odontograma)/.test(n)) interests.push('expediente/odontograma');
   if (/(caro|precio alto|mucho dinero)/.test(n)) objections.push('precio');
