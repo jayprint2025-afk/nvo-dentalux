@@ -1019,15 +1019,10 @@ const buildLeadReport = React.useCallback(() => {
 
 
   const applyF1ClientActions = React.useCallback((actions: any[]) => {
-    // V19: las respuestas de /f1/actions pueden envolver result/client_event
-    // en más de un nivel. Recorremos el resultado completo para no perder
-    // appointments_changed cuando Hanna ejecuta una herramienta por voz.
-    const visit = (node: any, seen = new Set<any>()) => {
-      if (!node || typeof node !== 'object' || seen.has(node)) return;
-      seen.add(node);
-
-      const clientAction = node?.client_action;
-      const clientEvent = node?.client_event;
+    for (const action of actions || []) {
+      const result = action?.result || action;
+      const clientAction = result?.client_action;
+      const clientEvent = result?.client_event;
 
       if (clientAction?.type === 'navigate' && clientAction?.target) {
         window.dispatchEvent(new CustomEvent('cliniqone:f1-navigate', {
@@ -1036,30 +1031,10 @@ const buildLeadReport = React.useCallback(() => {
       }
 
       if (clientEvent?.type === 'appointments_changed') {
-        const rawAction = String(
-          clientEvent.event_name ||
-          clientEvent.action ||
-          node.event_name ||
-          node.action ||
-          ''
-        ).toLowerCase();
-
-        const eventName =
-          rawAction.includes('confirm') ? 'appointment.confirmed' :
-          rawAction.includes('cancel') ? 'appointment.cancelled' :
-          rawAction.includes('resched') || rawAction.includes('reagend') ? 'appointment.rescheduled' :
-          rawAction.includes('creat') || rawAction.includes('agend') ? 'appointment.created' :
-          'appointment.updated';
-
         window.dispatchEvent(new CustomEvent('dentalux:appointments-changed', {
           detail: {
             source: 'f1',
-            event_name: eventName,
-            appointment_id:
-              clientEvent.appointment_id ||
-              node.appointment_id ||
-              node.appointment?.id ||
-              null,
+            appointment_id: clientEvent.appointment_id || null,
           },
         }));
       }
@@ -1073,15 +1048,7 @@ const buildLeadReport = React.useCallback(() => {
           },
         }));
       }
-
-      if (Array.isArray(node)) {
-        node.forEach((value) => visit(value, seen));
-      } else {
-        Object.values(node).forEach((value) => visit(value, seen));
-      }
-    };
-
-    for (const action of actions || []) visit(action);
+    }
   }, []);
 
   const describeF1Event = React.useCallback((event: any) => {
@@ -1469,14 +1436,6 @@ const buildLeadReport = React.useCallback(() => {
       body: JSON.stringify({ name, arguments: args, call_id: callId, branch_key: sucursalId || 'sucursal_1' }),
     });
     applyF1ClientActions([output]);
-
-    // V19: respaldo inmediato. Aunque una versión del backend no incluya
-    // client_event, la Agenda vuelve a consultar justo al terminar CUALQUIER
-    // herramienta de Hanna. No reproduce sonido por sí sola.
-    window.dispatchEvent(new CustomEvent('cliniqone:f1-action-complete', {
-      detail: { name, call_id: callId, source: 'f1' },
-    }));
-
     await loadF1Dashboard();
     return output;
   }, [sucursalId, loadF1Dashboard, applyF1ClientActions]);

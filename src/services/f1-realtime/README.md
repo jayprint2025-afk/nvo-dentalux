@@ -22,11 +22,3 @@ flowchart LR
   F -->|6 s| X[REALTIME_DISCONNECTING]
   X --> W
 ```
-
-## Blindaje de continuidad (429 + transporte)
-- Los 429/TPM reintentan `response.create` sin derribar la conversación.
-- Una caída inesperada del DataChannel intenta reconstruir WebRTC hasta 3 veces sin volver al Wake Engine.
-- Se conserva un checkpoint corto de los últimos turnos y resultados de herramientas para retomar la conversación.
-- Los `call_id` ya ejecutados se conservan durante la recuperación y nunca se envía un `function_call_output` de una sesión vieja a una sesión nueva.
-- Si una herramienta estaba en vuelo cuando cayó WebRTC, la recuperación espera su resultado antes de reinyectar el checkpoint, reduciendo el riesgo de duplicar acciones.
-- El límite de salida de Hanna no se reduce; este módulo no modifica `F1_REALTIME_MAX_OUTPUT_TOKENS`.
