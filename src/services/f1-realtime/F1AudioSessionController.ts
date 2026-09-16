@@ -74,10 +74,32 @@ export class F1AudioSessionController {
       this.wakeAcceptAfter = Number.POSITIVE_INFINITY;
       this.move("WAKE_DETECTED", "Validando perfil de voz");
 
-      const identity =
-        this.options.verifyWakeIdentity && event
-          ? await this.options.verifyWakeIdentity(event)
-          : { accepted: true };
+      // Owner Lock V18: la activación automática falla cerrada.
+      // Exigimos una muestra NUEVA del mismo evento wake y un verificador de identidad.
+      if (!event || !event.audioWindow || !event.sampleRate || !this.options.verifyWakeIdentity) {
+        this.wakeAcceptAfter = Date.now() + 1200;
+        this.move("WAKE_LISTENING", "Hana: muestra de voz requerida");
+        return;
+      }
+
+      // Rechaza eventos viejos/reutilizados y ventanas sin energía de voz suficiente.
+      const ageMs = Math.abs(Date.now() - Number(event.detectedAt || 0));
+      const samples = event.audioWindow;
+      let sumSq = 0;
+      let peak = 0;
+      for (let i = 0; i < samples.length; i += 1) {
+        const v = Number(samples[i] || 0);
+        sumSq += v * v;
+        peak = Math.max(peak, Math.abs(v));
+      }
+      const rms = samples.length ? Math.sqrt(sumSq / samples.length) : 0;
+      if (ageMs > 4000 || samples.length < 1600 || rms < 0.008 || peak < 0.025) {
+        this.wakeAcceptAfter = Date.now() + 900;
+        this.move("WAKE_LISTENING", "Escuchando Hana");
+        return;
+      }
+
+      const identity = await this.options.verifyWakeIdentity(event);
 
       if (!identity.accepted) {
         const similarity = Math.round(Number(identity.similarity ?? 0) * 100);

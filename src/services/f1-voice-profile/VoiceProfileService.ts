@@ -80,7 +80,7 @@ export class VoiceProfileService {
   ): Promise<{ accepted: boolean; displayName?: string; similarity: number; requiredSimilarity: number; profileRequired: boolean }> {
     const profile = await this.store.get(scope);
     if (!profile || !profile.enabled) {
-      return { accepted: true, similarity: 0, requiredSimilarity: 0, profileRequired: false };
+      return { accepted: false, similarity: 0, requiredSimilarity: 0, profileRequired: true };
     }
     if (profile.samples.length < 3 || !profile.centroid.length) {
       return { accepted: false, displayName: profile.displayName, similarity: 0, requiredSimilarity: profile.acceptanceThreshold, profileRequired: true };
