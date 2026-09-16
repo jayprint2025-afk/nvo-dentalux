@@ -121,7 +121,7 @@ export class F1AudioSessionController {
         "WAKE_DETECTED",
         this.activeSpeakerName
           ? `Voz reconocida: ${this.activeSpeakerName}`
-          : "Hola F1 detectado",
+          : "Hana detectada",
       );
 
       await this.stopWakeAndVerify();
@@ -343,7 +343,7 @@ export class F1AudioSessionController {
 
     this.wakeAcceptAfter =
       Date.now() + (this.options.wakeStabilizationMs ?? 2500);
-    this.move("WAKE_LISTENING", "Esperando “Hola F1”");
+    this.move("WAKE_LISTENING", "Esperando “Hana”");
   }
 
   private async stopWakeAndVerify(): Promise<void> {

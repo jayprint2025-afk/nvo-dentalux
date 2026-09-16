@@ -121,7 +121,12 @@ async function transcribeWakeCandidate(wavBuffer) {
   if (!upstream.ok) throw new Error(`Wake transcription ${upstream.status}: ${text.slice(0, 500)}`);
   let parsed = {};
   try { parsed = JSON.parse(text); } catch {}
-  return String(parsed?.text || '').trim();
+  const transcript = String(parsed?.text || '').trim();
+  // Algunos modelos pueden ecoar el prompt/contexto ante silencio o audio vacío.
+  // Eso nunca debe mostrarse ni considerarse una emisión del usuario.
+  const normalized = normalizeWakeTranscript(transcript);
+  if (normalized.includes('transcribe literalmente') || normalized.startsWith('context ')) return '';
+  return transcript;
 }
 
 async function executeActionOnce(key, task) {
