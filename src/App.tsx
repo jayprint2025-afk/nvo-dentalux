@@ -4012,7 +4012,7 @@ const offsetTop = laneIdx * (citaHeight + gap);
       )}
       <div
         onPointerDown={(e)=>onPointerDownResize(e,a)}
-        className="absolute bottom-0 left-0 right-0 h-1 bg-black/20 hover:bg-black/30 rounded-b cursor-ns-resize"
+        className="absolute bottom-0 left-1 right-1 h-1 bg-black/15 hover:bg-black/25 rounded-full cursor-ns-resize"
       />
       <button
   onClick={(e)=>{ e.stopPropagation(); setOpenMenuId(openMenuId===a.id?null:a.id) }}
@@ -4273,7 +4273,7 @@ const groups = new Map<number, Appointment[]>();
                 return (
                   <div
                     key={a.id}
-                    className="absolute text-white text-xs p-1.5 rounded shadow-md cursor-grab active:cursor-grabbing select-none border touch-none"
+                    className="absolute text-white text-xs px-2 py-1.5 rounded-lg cursor-grab active:cursor-grabbing select-none border touch-none transition-all duration-200 ease-out hover:-translate-y-0.5 hover:brightness-105 hover:scale-[1.015]"
                     style={{
                       top: offsetTop,
                       left: 2, 
@@ -4287,6 +4287,9 @@ const groups = new Map<number, Appointment[]>();
                       justifyContent: 'center',
                       zIndex: 20 + laneIdx,
                       minHeight: '28px',
+                      border: `1px solid rgba(255,255,255,0.34)`,
+                      boxShadow: '0 7px 16px rgba(15, 23, 42, 0.20), 0 2px 5px rgba(15, 23, 42, 0.16), inset 0 1px 0 rgba(255,255,255,0.24)',
+                      backdropFilter: 'saturate(1.08)',
                     }}
                     onPointerDown={(e)=>onPointerDownMove(e,a,dayIdx)}
 onDoubleClick={!isTouchDevice ? () => onEdit(a) : undefined}
@@ -4294,9 +4297,18 @@ onDoubleClick={!isTouchDevice ? () => onEdit(a) : undefined}
                         title={a.patient + ' • ' + ((serviceById(a.serviceId)?.name)||'')}
                       >
                         <CornerChecks status={a.status} />
-                        <div className="font-semibold truncate leading-tight text-[10px] sm:text-xs">{a.patient}</div>
+                        <div className="font-bold truncate leading-tight text-[10px] sm:text-xs pr-7 drop-shadow-sm">{a.patient}</div>
                         {citaHeight > 28 && (
-                          <div className="opacity-90 truncate leading-tight text-[9px] sm:text-[10px]">{serviceById(a.serviceId)?.name}</div>
+                          <div className="opacity-95 truncate leading-tight text-[9px] sm:text-[10px] font-medium pr-6">{serviceById(a.serviceId)?.name}</div>
+                        )}
+                        {citaHeight > 42 && (
+                          <div className="mt-0.5 flex items-center gap-1 text-[8px] sm:text-[9px] leading-none text-white/90 pr-6">
+                            <span>{a.startTime}</span>
+                            <span className="opacity-60">–</span>
+                            <span>{addMinutesToTime(a.startTime, Math.round(a.durationHours * 60))}</span>
+                            <span className="opacity-60">•</span>
+                            <span>{a.status || 'Pendiente'}</span>
+                          </div>
                         )}
                         <div
                           onPointerDown={(e)=>onPointerDownResize(e,a,dayIdx)}
