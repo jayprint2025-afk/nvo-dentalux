@@ -1616,7 +1616,7 @@ const buildLeadReport = React.useCallback(() => {
       modelUrl,
       // V14: cualquier segmento de voz suficientemente claro puede convertirse
       // en CANDIDATO. Solo /f1/wake/verify puede autorizar "Hana".
-      threshold: 0.0,
+      threshold: 0.55,
       consecutiveHits: 1,
       cooldownMs: wakeSettings.cooldownMs,
       onStatus: (status, detail) => {
@@ -1659,13 +1659,19 @@ const buildLeadReport = React.useCallback(() => {
             const heard = String(verification?.transcript || 'Hana').trim();
             setLastWakeIdentity(`Hana verificada: ${heard.slice(0, 60)}`);
             wakeVerificationCooldownUntilRef.current = Date.now() + 1800;
-            // V15: la palabra clave ya fue autorizada por el backend. No volvemos
-            // a pasar por los guards del wake local (stabilization/confidence),
-            // porque pueden descartar una activación válida aun después de verificar Hana.
-            // startManualConversation() es aquí la transición segura: solo se invoca
-            // DESPUÉS de verification.accepted === true. Detiene el wake y abre Realtime.
-            setF1VoiceEngineDetail("Hana verificada · activando F1…");
-            await controller.startManualConversation();
+            // V17 OWNER LOCK: una sola pronunciación de “Hana” debe superar DOS candados:
+            // 1) /f1/wake/verify confirma lexicalmente que se dijo “Hana”.
+            // 2) controller.wakeDetected() ejecuta verifyWakeIdentity() contra el perfil
+            //    biométrico local ANTES de abrir Realtime.
+            // IMPORTANTE: no usar startManualConversation() aquí: ese camino omite
+            // verifyWakeIdentity y permitía activar F1 sin comprobar al propietario.
+            setF1VoiceEngineDetail("Hana verificada · comprobando voz autorizada…");
+            await controller.wakeDetected({
+              confidence: 1, // la identidad lexical ya fue autorizada por backend
+              detectedAt: Number((event as any)?.detectedAt || Date.now()),
+              audioWindow,
+              sampleRate,
+            });
           } catch (error) {
             // Falla cerrada: si el verificador no está disponible no activar.
             setF1VoiceEngineDetail(
@@ -1704,8 +1710,11 @@ const buildLeadReport = React.useCallback(() => {
       // Solo llegan eventos que ya superaron la verificación lexical remota.
       minimumWakeConfidence: 0.99,
       verifyWakeIdentity: async (event) => {
-        if (!voiceProfile?.enabled) {
-          return { accepted: true };
+        // V17 OWNER LOCK = fail closed. La activación automática exige un perfil
+        // habilitado y al menos 3 muestras. El botón manual sigue disponible.
+        if (!voiceProfile?.enabled || (voiceProfile?.samples?.length ?? 0) < 3) {
+          setLastWakeIdentity("Bloqueado: registra al menos 3 muestras de la voz autorizada");
+          return { accepted: false, similarity: 0, requiredSimilarity: 1 };
         }
         if (!event.audioWindow || !event.sampleRate) {
           setLastWakeIdentity("No llegó la ventana de audio del Wake Engine");
