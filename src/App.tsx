@@ -2638,6 +2638,31 @@ export default function App(){
     };
   }, [reloadAppointments, playF1AgendaSound]);
 
+  // V19: respaldo para herramientas Realtime de Hanna.
+  // Si el backend guardó la cita pero el Event Bus/SSE tarda o no envía
+  // appointments_changed, refrescamos la agenda inmediatamente al terminar
+  // la herramienta. Esto NO genera sonido por sí mismo; el sonido sigue
+  // reservado para un evento de cita identificado.
+  React.useEffect(() => {
+    let timer: number | undefined;
+
+    const refreshAfterF1Tool = () => {
+      if (timer) window.clearTimeout(timer);
+      // pequeño margen para que la transacción del backend ya sea visible
+      timer = window.setTimeout(() => {
+        void reloadAppointments().catch((error) => {
+          console.error('No se pudo sincronizar Agenda después de una herramienta de Hanna:', error);
+        });
+      }, 120);
+    };
+
+    window.addEventListener('cliniqone:f1-action-complete', refreshAfterF1Tool as EventListener);
+    return () => {
+      window.removeEventListener('cliniqone:f1-action-complete', refreshAfterF1Tool as EventListener);
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [reloadAppointments]);
+
 
 
 // 🆕 Estados para módulos adicionales
