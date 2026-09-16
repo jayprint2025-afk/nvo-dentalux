@@ -2563,6 +2563,81 @@ export default function App(){
   const [conflictMsg, setConflictMsg] = useState('');
   const [editingApt, setEditingApt] = useState<Appointment|null>(null);
 
+  // ✨ Agenda UI V2: microanimaciones/sonidos para acciones realizadas por Hanna/F1
+  const [f1AgendaEffect, setF1AgendaEffect] = useState<{
+    appointmentId: number | null;
+    eventName: string;
+    nonce: number;
+  } | null>(null);
+
+  const playF1AgendaSound = React.useCallback((eventName: string) => {
+    try {
+      const AudioCtx = (window as any).AudioContext || (window as any).webkitAudioContext;
+      if (!AudioCtx) return;
+      const ctx = new AudioCtx();
+      const now = ctx.currentTime;
+      const gain = ctx.createGain();
+      gain.connect(ctx.destination);
+      gain.gain.setValueAtTime(0.0001, now);
+      gain.gain.exponentialRampToValueAtTime(0.11, now + 0.015);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.34);
+
+      const tones = eventName === 'appointment.cancelled' ? [330, 220]
+        : eventName === 'appointment.rescheduled' ? [440, 587]
+        : eventName === 'appointment.confirmed' ? [659, 880]
+        : [523, 784];
+
+      tones.forEach((frequency, index) => {
+        const osc = ctx.createOscillator();
+        const toneGain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.value = frequency;
+        toneGain.gain.value = index === 0 ? 0.75 : 0.55;
+        osc.connect(toneGain);
+        toneGain.connect(gain);
+        const start = now + index * 0.075;
+        osc.start(start);
+        osc.stop(start + 0.16);
+      });
+      window.setTimeout(() => { try { ctx.close(); } catch {} }, 700);
+    } catch {}
+  }, []);
+
+  React.useEffect(() => {
+    let clearTimer: number | undefined;
+    let lastSignature = '';
+    let lastAt = 0;
+
+    const handleF1AppointmentChange = async (event: Event) => {
+      const detail = (event as CustomEvent)?.detail || {};
+      // Los CRUD manuales también emiten este evento; los efectos especiales son solo para Hanna/F1.
+      if (detail.source !== 'f1' && detail.source !== 'event-bus') return;
+
+      const appointmentId = Number(detail.appointment_id || 0) || null;
+      const eventName = String(detail.event_name || 'appointment.updated');
+      const signature = `${eventName}:${appointmentId || 'unknown'}`;
+      const now = Date.now();
+      if (signature === lastSignature && now - lastAt < 900) return;
+      lastSignature = signature;
+      lastAt = now;
+
+      try { await reloadAppointments(); } catch (error) {
+        console.error('No se pudo refrescar la agenda después de una acción F1:', error);
+      }
+
+      setF1AgendaEffect({ appointmentId, eventName, nonce: now });
+      playF1AgendaSound(eventName);
+      if (clearTimer) window.clearTimeout(clearTimer);
+      clearTimer = window.setTimeout(() => setF1AgendaEffect(null), 2200);
+    };
+
+    window.addEventListener('dentalux:appointments-changed', handleF1AppointmentChange as EventListener);
+    return () => {
+      window.removeEventListener('dentalux:appointments-changed', handleF1AppointmentChange as EventListener);
+      if (clearTimer) window.clearTimeout(clearTimer);
+    };
+  }, [reloadAppointments, playF1AgendaSound]);
+
 
 
 // 🆕 Estados para módulos adicionales
@@ -3838,7 +3913,8 @@ type DayViewProps = {
   selectedDoctor: string,
   onDoctorFilter: (doctorId: string) => void,
   doctors: Doctor[],
-  onTimeSlotClick: (time: string) => void
+  onTimeSlotClick: (time: string) => void,
+  f1Effect?: { appointmentId: number | null; eventName: string; nonce: number } | null
 }
 
 function DayView({
@@ -4065,7 +4141,7 @@ type WeekViewProps = {
   onTimeSlotClick: (time: string) => void
 }
 
-function WeekView({ days, getDoctor, serviceById, onStatus, onEdit, onMove, onResize, selectedDoctor, onDoctorFilter, doctors, onTimeSlotClick }: WeekViewProps){
+function WeekView({ days, getDoctor, serviceById, onStatus, onEdit, onMove, onResize, selectedDoctor, onDoctorFilter, doctors, onTimeSlotClick, f1Effect }: WeekViewProps){
 const startHour = 8, endHour = 20, slotsPerHour = 2;
 const totalSlots = (endHour - startHour) * slotsPerHour;
 const slotPx = 40;
@@ -4132,6 +4208,28 @@ return () => {
 const docColor = (id: any) => getDoctor(id)?.color ?? DOCTOR_PALETTE[0];
 return (
 <div className="flex flex-col lg:flex-row gap-2 relative">
+<style>{`
+  @keyframes f1AgendaCreate { 0% { transform: scale(.82); opacity:.15; filter:brightness(1.8); } 45% { transform:scale(1.06); opacity:1; } 100% { transform:scale(1); filter:brightness(1); } }
+  @keyframes f1AgendaUpdate { 0%,100% { transform:translateX(0); } 30% { transform:translateX(5px); } 60% { transform:translateX(-3px); } }
+  @keyframes f1AgendaConfirm { 0% { transform:scale(.94); } 45% { transform:scale(1.05); filter:brightness(1.35); } 100% { transform:scale(1); } }
+  @keyframes f1AgendaCancel { 0% { opacity:.35; transform:scale(.96); } 50% { opacity:1; transform:scale(1.02); } 100% { opacity:1; transform:scale(1); } }
+  .f1-agenda-created { animation:f1AgendaCreate .62s cubic-bezier(.2,.9,.25,1.15); box-shadow:0 0 0 3px rgba(56,189,248,.38),0 0 30px rgba(56,189,248,.55),0 10px 24px rgba(15,23,42,.24)!important; }
+  .f1-agenda-rescheduled,.f1-agenda-updated { animation:f1AgendaUpdate .52s ease-out; box-shadow:0 0 0 3px rgba(168,85,247,.34),0 0 28px rgba(168,85,247,.45),0 10px 24px rgba(15,23,42,.22)!important; }
+  .f1-agenda-confirmed { animation:f1AgendaConfirm .58s ease-out; box-shadow:0 0 0 3px rgba(34,197,94,.34),0 0 28px rgba(34,197,94,.48),0 10px 24px rgba(15,23,42,.22)!important; }
+  .f1-agenda-cancelled { animation:f1AgendaCancel .58s ease-out; box-shadow:0 0 0 3px rgba(239,68,68,.30),0 0 25px rgba(239,68,68,.42),0 10px 24px rgba(15,23,42,.22)!important; }
+`}</style>
+{f1Effect && (
+  <div key={f1Effect.nonce} className="fixed top-4 left-1/2 -translate-x-1/2 z-[80] pointer-events-none">
+    <div className="rounded-full border border-white/70 bg-slate-950/90 text-white shadow-2xl backdrop-blur px-4 py-2 text-xs sm:text-sm font-semibold flex items-center gap-2">
+      <span className="inline-flex h-2.5 w-2.5 rounded-full bg-cyan-400 animate-pulse" />
+      {f1Effect.eventName === 'appointment.created' ? 'Hanna agendó una cita' :
+       f1Effect.eventName === 'appointment.confirmed' ? 'Hanna confirmó una cita' :
+       f1Effect.eventName === 'appointment.cancelled' ? 'Hanna canceló una cita' :
+       f1Effect.eventName === 'appointment.rescheduled' ? 'Hanna reagendó una cita' :
+       'Hanna actualizó la agenda'}
+    </div>
+  </div>
+)}
 {/* Sidebar móvil como modal */}
 {sidebarOpen && (
 <div className="fixed inset-0 z-40 lg:hidden">
@@ -4273,7 +4371,7 @@ const groups = new Map<number, Appointment[]>();
                 return (
                   <div
                     key={a.id}
-                    className="absolute text-white text-xs px-2 py-1.5 rounded-lg cursor-grab active:cursor-grabbing select-none border touch-none transition-all duration-200 ease-out hover:-translate-y-0.5 hover:brightness-105 hover:scale-[1.015]"
+                    className={`absolute text-white text-xs px-2 py-1.5 rounded-lg cursor-grab active:cursor-grabbing select-none border touch-none transition-all duration-200 ease-out hover:-translate-y-0.5 hover:brightness-105 hover:scale-[1.015] ${f1Effect?.appointmentId === a.id ? `f1-agenda-${String(f1Effect.eventName || 'appointment.updated').replace('appointment.', '')}` : ''}`}
                     style={{
                       top: offsetTop,
                       left: 2, 
@@ -4797,6 +4895,7 @@ const [to, setTo] = useState<string>(defaultTo);
               onDoctorFilter={setSelectedDoctor}
               doctors={doctors}
               onTimeSlotClick={handleTimeSlotClick}
+              f1Effect={f1AgendaEffect}
               />
 
 
