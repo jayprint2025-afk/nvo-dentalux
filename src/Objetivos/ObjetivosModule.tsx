@@ -80,10 +80,25 @@ const defaultDoctors: DoctorConfig[] = [
 ];
 
 // ===== Utils =====
+function currentTenantStorageKey(key: string) {
+  try {
+    for (const storageKey of Object.keys(localStorage)) {
+      const token = localStorage.getItem(storageKey) || '';
+      if (token.split('.').length !== 3) continue;
+      try {
+        const payload = JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
+        if (payload?.tenantId) return `${key}:${payload.tenantId}`;
+      } catch {}
+    }
+  } catch {}
+  return `${key}:anonymous`;
+}
+
 function useLocalStorage<T>(key: string, initial: T) {
+  const scopedKey = currentTenantStorageKey(key);
   const [state, setState] = useState<T>(() => {
     try {
-      const raw = localStorage.getItem(key);
+      const raw = localStorage.getItem(scopedKey);
       return raw ? (JSON.parse(raw) as T) : initial;
     } catch {
       return initial;
@@ -91,11 +106,11 @@ function useLocalStorage<T>(key: string, initial: T) {
   });
   useEffect(() => {
     try {
-      localStorage.setItem(key, JSON.stringify(state));
+      localStorage.setItem(scopedKey, JSON.stringify(state));
     } catch {
       // ignore
     }
-  }, [key, state]);
+  }, [scopedKey, state]);
   return [state, setState] as const;
 }
 
