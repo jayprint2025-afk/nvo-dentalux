@@ -18,7 +18,7 @@ type ModuleId = 'agenda' | 'reminders' | 'correo' | 'whatsapp' | 'llamadas' | 'i
 type Pos = { x: number; y: number };
 
 /* Orden del arco, igual que en el diseÃ±o:
-   Correo Â· Agenda Â· Recordatorios Â· WhatsApp Â· Llamadas Â· Internet */
+   Correo · Agenda · Recordatorios · WhatsApp · Llamadas · Internet */
 const modules: { id: ModuleId; label: string; sub: string; icon: any; accent: string }[] = [
   { id: 'correo',    label: 'Correo',        sub: 'Gestiona tu correo con IA',   icon: Mail,          accent: 'cyan'   },
   { id: 'agenda',    label: 'Agenda',        sub: 'Reuniones, citas y compromisos', icon: CalendarDays, accent: 'blue'  },
@@ -37,8 +37,8 @@ const navItems: { id: ModuleId | null; label: string; icon: any }[] = [
   { id: 'llamadas',  label: 'Llamadas',      icon: Phone },
   { id: 'internet',  label: 'Internet',      icon: Globe2 },
   { id: null,        label: 'Documentos',    icon: FileText },
-  { id: null,        label: 'AnÃ¡lisis IA',   icon: BarChart3 },
-  { id: null,        label: 'ConfiguraciÃ³n', icon: Settings },
+  { id: null,        label: 'Análisis IA',   icon: BarChart3 },
+  { id: null,        label: 'Configuración', icon: Settings },
 ];
 
 const WAVE = [22, 46, 30, 68, 40, 88, 52, 34, 70, 44, 96, 58, 30, 76, 42, 62, 28, 84, 48, 36,
@@ -86,7 +86,7 @@ export default function JarvisApp() {
     voiceRef.current = new JarvisVoiceController({
       onStatus: setVoiceStatus,
       onTranscript: (t, w) => {
-        setLastText(`${w === 'jarvis' ? 'JARVIS' : 'TÃº'}: ${t}`);
+        setLastText(`${w === 'jarvis' ? 'JARVIS' : 'Tú'}: ${t}`);
         if (w === 'jarvis') window.setTimeout(safeLoad, 500);
       },
       onError: e => setLastText(`Error: ${e.message}`)
@@ -109,9 +109,9 @@ export default function JarvisApp() {
   };
   const listening = ['listening', 'speaking', 'connecting'].includes(voiceStatus);
   const voiceTitle =
-    voiceStatus === 'connecting' ? 'Conectandoâ€¦' :
-    voiceStatus === 'listening'  ? 'Te escuchoâ€¦' :
-    voiceStatus === 'speaking'   ? 'Hablandoâ€¦'   :
+    voiceStatus === 'connecting' ? 'Conectando…' :
+    voiceStatus === 'listening'  ? 'Te escucho…' :
+    voiceStatus === 'speaking'   ? 'Hablando…'   :
     voiceStatus === 'error'      ? 'Error de voz' : 'En espera';
 
   const activate = (id: ModuleId) => {
@@ -139,8 +139,8 @@ export default function JarvisApp() {
   const renderPanel = (id: ModuleId) => {
     if (id === 'agenda') return <>
       {events.length
-        ? events.map(x => <div className="jv-row" key={x.id}><CalendarDays /><div><b>{x.title}</b><small>{fmt(x.start_at)}{x.location ? ` Â· ${x.location}` : ''}</small></div></div>)
-        : <div className="jv-panel-empty">No hay eventos prÃ³ximos.</div>}
+        ? events.map(x => <div className="jv-row" key={x.id}><CalendarDays /><div><b>{x.title}</b><small>{fmt(x.start_at)}{x.location ? ` · ${x.location}` : ''}</small></div></div>)
+        : <div className="jv-panel-empty">No hay eventos próximos.</div>}
       <button className="jv-action"><Plus /> Crear evento por voz</button>
     </>;
     if (id === 'reminders') return <>
@@ -155,18 +155,18 @@ export default function JarvisApp() {
       <button className="jv-action secondary"><Send /> Redactar</button>
     </>;
     if (id === 'whatsapp') return <>
-      <div className="jv-panel-empty">Centro de WhatsApp listo para conversaciones y envÃ­os.</div>
+      <div className="jv-panel-empty">Centro de WhatsApp listo para conversaciones y envíos.</div>
       <button className="jv-action"><MessageCircle /> Conversaciones</button>
       <button className="jv-action secondary"><Send /> Nuevo mensaje</button>
     </>;
     if (id === 'llamadas') return <>
       <div className="jv-call-ring"><PhoneCall /></div>
-      <div className="jv-panel-empty">MÃ³dulo de llamadas listo.</div>
+      <div className="jv-panel-empty">Módulo de llamadas listo.</div>
       <button className="jv-action"><PhoneCall /> Iniciar llamada</button>
     </>;
     return <>
-      <div className="jv-search"><Search /><span>Pregunta a JARVIS y los resultados aparecerÃ¡n aquÃ­.</span></div>
-      <button className="jv-action"><Globe2 /> Nueva bÃºsqueda</button>
+      <div className="jv-search"><Search /><span>Pregunta a JARVIS y los resultados aparecerÃ¡n aquí.</span></div>
+      <button className="jv-action"><Globe2 /> Nueva búsqueda</button>
     </>;
   };
 
@@ -175,7 +175,7 @@ export default function JarvisApp() {
   const badge = (id: ModuleId) => {
     if (id === 'agenda')    return `Hoy ${events.length}`;
     if (id === 'reminders') return `${items.length} activos`;
-    if (id === 'internet')  return 'En lÃ­nea';
+    if (id === 'internet')  return 'En línea';
     // Placeholders visuales hasta conectar correo/WhatsApp
     if (id === 'correo')    return '5 nuevos';
     if (id === 'whatsapp')  return '12 mensajes';
@@ -217,7 +217,7 @@ export default function JarvisApp() {
       </div>
       <div className="jv-weather">
         <Sun />
-        <div><small>Yuma, AZ</small><b>32Â°C</b></div>
+        <div><small>Yuma, AZ</small><b>32°C</b></div>
       </div>
       <div className="jv-user">
         <span>Y</span>
@@ -263,7 +263,7 @@ export default function JarvisApp() {
             </svg>
           </button>
           <h2>{voiceTitle}</h2>
-          <p>{lastText || 'Pulsa el nÃºcleo para iniciar JARVIS Realtime.'}</p>
+          <p>{lastText || 'Pulsa el núcleo para iniciar JARVIS Realtime.'}</p>
           <div className={listening ? 'jv-wave on' : 'jv-wave'} aria-hidden="true">
             {WAVE.map((h, i) => <span key={i} style={{ height: `${h}%`, animationDelay: `${(i % 9) * 0.08}s`, '--h': `${h}%` } as React.CSSProperties} />)}
           </div>
@@ -273,17 +273,17 @@ export default function JarvisApp() {
 
       <section className="jv-summary">
         <article>
-          <h3><CalendarDays />Agenda ejecutiva ({events.length})<a onClick={() => activate('agenda')}>Ver agenda â†’</a></h3>
+          <h3><CalendarDays />Agenda ejecutiva ({events.length})<a onClick={() => activate('agenda')}>Ver agenda →</a></h3>
           {events.length
             ? events.slice(0, 4).map(x => <div className="rem" key={x.id}>
                 <span className="dot"><CalendarDays /></span>
-                <div><b>{x.title}</b><small>{fmt(x.start_at)}{x.location ? ` Â· ${x.location}` : ''}</small></div>
+                <div><b>{x.title}</b><small>{fmt(x.start_at)}{x.location ? ` · ${x.location}` : ''}</small></div>
                 <ChevronRight className="chev" />
               </div>)
             : <div className="empty">Agenda personal y empresarial</div>}
         </article>
         <article>
-          <h3><Bell />Recordatorios ({items.length})<a onClick={() => activate('reminders')}>Ver todos â†’</a></h3>
+          <h3><Bell />Recordatorios ({items.length})<a onClick={() => activate('reminders')}>Ver todos →</a></h3>
           {items.length
             ? items.slice(0, 4).map(x => <div className="rem" key={x.id}>
                 <span className="dot"><Clock3 /></span>
@@ -299,8 +299,8 @@ export default function JarvisApp() {
     {/* ------------------------------- derecha ------------------------------ */}
     <aside className="jv-right">
       <section className="jv-quote">
-        <blockquote>â€œUn gran asistente convierte tus ideas en resultados.â€</blockquote>
-        <div className="jv-sign">â€” JARVIS</div>
+        <blockquote>“Un gran asistente convierte tus ideas en resultados.”</blockquote>
+        <div className="jv-sign">— JARVIS</div>
         <div className="jv-robot-stage" aria-hidden="true">
           <img
             className="jv-armor-image"
@@ -313,14 +313,14 @@ export default function JarvisApp() {
       </section>
       <section className="jv-status">
         <h4>Estado del sistema</h4>
-        <strong><i /> Todo en lÃ­nea</strong>
+        <strong><i /> Todo en línea</strong>
         <div className="system-globe" aria-hidden="true"><span /><span /></div>
         <div className="meters">
           <span>IA<b>100%</b></span>
           <span>Voz<b>100%</b></span>
           <span>Servicios<b>{health?.central_connected ? '100%' : '--'}</b></span>
         </div>
-        <small>â€œLa tecnologÃ­a al servicio de tus metas.â€</small>
+        <small>“La tecnologÃ­a al servicio de tus metas.”</small>
       </section>
     </aside>
 
