@@ -79,7 +79,7 @@ function setupJarvisRoutes(app, q, deps={}) {
     } catch(error) { res.status(503).json({ok:false,accepted:false,error:error.message}); }
   });
 
-  app.get('/api/jarvis/realtime/profile', (req,res) => res.json({ok:true,wake_words:['JARVIS'],voice:process.env.JARVIS_VOICE || 'onyx',model:process.env.JARVIS_REALTIME_MODEL || process.env.F1_REALTIME_MODEL || 'gpt-realtime'}));
+  app.get('/api/jarvis/realtime/profile', (req,res) => res.json({ok:true,wake_words:['JARVIS'],voice:process.env.JARVIS_VOICE || 'cedar',model:process.env.JARVIS_REALTIME_MODEL || process.env.F1_REALTIME_MODEL || 'gpt-realtime'}));
 
   app.post('/api/jarvis/realtime/call', express.text({type:'application/sdp',limit:'1mb'}), async (req,res) => {
     try {
@@ -90,7 +90,7 @@ function setupJarvisRoutes(app, q, deps={}) {
       const session = {
         type:'realtime', model:process.env.JARVIS_REALTIME_MODEL || process.env.F1_REALTIME_MODEL || 'gpt-realtime',
         instructions:jarvisInstructions(ctx), output_modalities:['audio'],
-        audio:{input:{transcription:{model:process.env.JARVIS_TRANSCRIBE_MODEL || process.env.F1_TRANSCRIBE_MODEL || 'gpt-4o-mini-transcribe',language:'es',prompt:'JARVIS. Asistente personal y empresarial. Agenda, recordatorios, correo, WhatsApp, llamadas e Internet.'},noise_reduction:{type:'near_field'},turn_detection:{type:'semantic_vad',eagerness:'low',create_response:true,interrupt_response:false}},output:{voice:process.env.JARVIS_VOICE || 'onyx',speed:1.0}},
+        audio:{input:{transcription:{model:process.env.JARVIS_TRANSCRIBE_MODEL || process.env.F1_TRANSCRIBE_MODEL || 'gpt-4o-mini-transcribe',language:'es',prompt:'JARVIS. Asistente personal y empresarial. Agenda, recordatorios, correo, WhatsApp, llamadas e Internet.'},noise_reduction:{type:'near_field'},turn_detection:{type:'semantic_vad',eagerness:'low',create_response:true,interrupt_response:false}},output:{voice:process.env.JARVIS_VOICE || 'cedar',speed:1.0}},
         tools, tool_choice:'auto', max_output_tokens:1200,
       };
       const boundary=`----JarvisRealtime${Date.now().toString(16)}${Math.random().toString(16).slice(2)}`;
