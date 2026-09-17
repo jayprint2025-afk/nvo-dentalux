@@ -2,7 +2,7 @@ import React from 'react';
 import {
   Activity, CalendarDays, Bell, Mail, MessageCircle, Phone, Globe2, Mic,
   ShieldCheck, X, Minus, GripHorizontal, ChevronLeft, ChevronRight,
-  Plus, CheckCircle2, Clock3, Send, Search, PhoneCall, Sparkles
+  Plus, CheckCircle2, Clock3, Send, Search, PhoneCall, Sparkles, FileText, BarChart3, Settings, Home, Sun, Cpu
 } from 'lucide-react';
 import {jarvisApi} from './lib/jarvisApi';
 import {JarvisVoiceController} from './voice/JarvisVoiceController';
@@ -113,19 +113,19 @@ export default function JarvisApp(){
    <aside className="jv-side">
      <div className="brand"><span>J</span><div><b>JARVIS</b><small>PERSONAL COMMAND SYSTEM</small></div></div>
      <nav>
-       <button className="active"><Activity/>Centro de comando</button>
-       {modules.map(m=>{const I=m.icon;return <button key={m.id} onClick={()=>activate(m.id)}><I/>{m.label}</button>})}
+       <button className="active"><Home/>Centro de comando</button>
+       {modules.map(m=>{const I=m.icon;return <button key={m.id} onClick={()=>activate(m.id)}><I/>{m.label}</button>})}<button><FileText/>Documentos</button><button><BarChart3/>Análisis IA</button><button><Settings/>Configuración</button>
      </nav>
-     <div className="lock"><ShieldCheck/><div><b>Owner Lock</b><small>F1 Voice Core reservado</small></div></div>
+     <div className="lock"><ShieldCheck/><div><b>Owner Lock</b><small>F1 Voice Core reservado</small></div></div><div className="jv-version">JARVIS v1.0<small>Designed for a greater you</small></div>
    </aside>
 
    <main className="jv-main">
      <header className="jv-header">
        <div><label>COMMAND CENTER</label><h1>JARVIS</h1><p>Asistente personal y empresarial</p></div>
-       <div className="jv-system"><i className={health?.ok?'on':''}/><div><b>{health?.ok?'SISTEMA EN LÍNEA':'CONECTANDO'}</b><small>Central · Voz · Tools</small></div></div>
+       <div className="jv-topwidgets"><div className="jv-clock"><b>{new Date().toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'})}</b><small>{new Date().toLocaleDateString('es-MX',{weekday:'long',day:'numeric',month:'short',year:'numeric'})}</small></div><div className="jv-weather"><Sun/><div><small>Yuma, AZ</small><b>32°C</b></div></div><div className="jv-user"><span>Y</span><div><b>Yaneth Caballero</b><small>Dentalux2</small></div></div></div>
      </header>
 
-     <section className="jv-orbit-zone">
+     <div className="jv-world"/><section className="jv-orbit-zone">
        <div className="hud-ring ring-a"/><div className="hud-ring ring-b"/><div className="hud-ring ring-c"/>
        <button className="orbit-arrow left" onClick={()=>setCarousel(v=>(v-1+modules.length)%modules.length)}><ChevronLeft/></button>
        <div className="jv-orbit">
