@@ -4,6 +4,8 @@ const express = require('express');
 const { tools } = require('../f1/tool-definitions');
 const { executeTool } = require('../f1/management-tools');
 const { jarvisInstructions } = require('./jarvis-instructions');
+const { jarvisTools } = require('./jarvis-tools');
+const { executeJarvisPersonalTool, ensureJarvisPersonalSchema } = require('./jarvis-personal-agenda');
 
 function buildContext(req, getTenantId, getSucursal) {
   return {
@@ -57,6 +59,11 @@ function setupJarvisRoutes(app, q, deps={}) {
 
   app.use('/api/jarvis', authRequired);
 
+  // JARVIS Personal V1 — agenda ejecutiva + recordatorios persistentes
+  ensureJarvisPersonalSchema(q).catch((error) => {
+    console.error('❌ No se pudo preparar JARVIS Personal V1:', error);
+  });
+
   app.get('/api/jarvis/health', (req,res) => res.json({ ok:true, service:'jarvis', central_connected:true, wake_word:'JARVIS', voice:'realtime-v1' }));
 
   app.post('/api/jarvis/actions', async (req,res) => {
@@ -64,9 +71,24 @@ function setupJarvisRoutes(app, q, deps={}) {
       const ctx = buildContext(req,getTenantId,getSucursal);
       const name = String(req.body?.name || '');
       const args = typeof req.body?.arguments === 'string' ? JSON.parse(req.body.arguments || '{}') : (req.body?.arguments || req.body?.args || {});
-      const result = await executeTool(q, ctx, name, args);
+      const result = jarvisTools.some((tool) => tool.name === name)
+        ? await executeJarvisPersonalTool(q, ctx, name, args)
+        : await executeTool(q, ctx, name, args);
       res.json({ok:true,name,result});
     } catch(error) { res.status(error.statusCode || error.status || 400).json({ok:false,error:error.message}); }
+  });
+
+  app.get('/api/jarvis/personal/dashboard', async (req,res) => {
+    try {
+      const ctx = buildContext(req,getTenantId,getSucursal);
+      const result = await executeJarvisPersonalTool(q, ctx, 'get_personal_dashboard', {
+        from: req.query?.from,
+        to: req.query?.to,
+      });
+      res.json({ok:true,...result});
+    } catch(error) {
+      res.status(error.statusCode || error.status || 400).json({ok:false,error:error.message});
+    }
   });
 
   app.post('/api/jarvis/wake/verify', async (req,res) => {
@@ -91,7 +113,7 @@ function setupJarvisRoutes(app, q, deps={}) {
         type:'realtime', model:process.env.JARVIS_REALTIME_MODEL || process.env.F1_REALTIME_MODEL || 'gpt-realtime',
         instructions:jarvisInstructions(ctx), output_modalities:['audio'],
         audio:{input:{transcription:{model:process.env.JARVIS_TRANSCRIBE_MODEL || process.env.F1_TRANSCRIBE_MODEL || 'gpt-4o-mini-transcribe',language:'es',prompt:'JARVIS. Asistente personal y empresarial. Agenda, recordatorios, correo, WhatsApp, llamadas e Internet.'},noise_reduction:{type:'near_field'},turn_detection:{type:'semantic_vad',eagerness:'low',create_response:true,interrupt_response:false}},output:{voice:process.env.JARVIS_VOICE || 'cedar',speed:1.0}},
-        tools, tool_choice:'auto', max_output_tokens:1200,
+        [...tools, ...jarvisTools], tool_choice:'auto', max_output_tokens:1200,
       };
       const boundary=`----JarvisRealtime${Date.now().toString(16)}${Math.random().toString(16).slice(2)}`;
       const body=Buffer.concat([
