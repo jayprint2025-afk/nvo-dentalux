@@ -154,6 +154,21 @@ export default function JarvisApp(){
      </section>
    </main>
 
+   <aside className="jv-right">
+     <section className="jv-quote">
+       <blockquote>“Un gran asistente convierte tus ideas en resultados.”</blockquote>
+       <div className="jv-sign">— JARVIS</div>
+       <div className="jv-armor" aria-hidden="true"><div className="armor-head"/><div className="armor-neck"/><div className="armor-body"><span/></div></div>
+       <div className="jv-modes"><b>⌁ ANALYZE</b><b>⌁ ORGANIZE</b><b>⌁ EXECUTE</b><b>⌁ SIMPLIFY</b></div>
+     </section>
+     <section className="jv-status">
+       <h4>Estado del sistema</h4><strong><i/> Todo en línea</strong>
+       <div className="system-globe"><Globe2/><span/><span/></div>
+       <div className="meters"><span>IA<b>100%</b></span><span>Voz<b>100%</b></span><span>Servicios<b>{health?.central_connected?'100%':'--'}</b></span></div>
+       <small>“La tecnología al servicio de tus metas.”</small>
+     </section>
+   </aside>
+
    <div className="jv-floating-layer">
      {open.map((id,i)=>{
        const m=modules.find(x=>x.id===id)!; const I=m.icon; const pos=positions[id]||defaultPos(i);
