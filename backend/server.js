@@ -7198,6 +7198,18 @@ try {
 }
 
 // ===============================================================================
+// JARVIS — asistente personal conectado al mismo backend central
+// Módulo independiente. No crea otro servidor ni otro puerto.
+try {
+  const { setupJarvisRoutes } = require('./modules/jarvis');
+  setupJarvisRoutes(app, q, { authRequired, getTenantId, getSucursal });
+  console.log('✅ JARVIS conectado al backend central');
+} catch (error) {
+  console.error('❌ No se pudo montar JARVIS:', error);
+}
+
+
+// ===============================================================================
 // WHATSAPP CLOUD API
 // Monta GET/POST /api/whatsapp/webhook y las demás rutas del módulo.
 const whatsappRoutes = require('./routes/whatsapp');
