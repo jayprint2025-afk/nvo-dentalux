@@ -1,82 +1,111 @@
 'use strict';
 
-/**
- * JARVIS backend module.
- * Se monta sobre el MISMO Express app, PostgreSQL q(), JWT, tenant y sucursal
- * del backend central. No abre puerto y no crea otro Web Service.
- */
-function setupJarvisRoutes(app, q, deps = {}) {
-  const { authRequired, getTenantId, getSucursal } = deps;
+const express = require('express');
+const { tools } = require('../f1/tool-definitions');
+const { executeTool } = require('../f1/management-tools');
+const { jarvisInstructions } = require('./jarvis-instructions');
 
-  if (!app || typeof app.get !== 'function') {
-    throw new Error('JARVIS requiere una instancia Express válida');
-  }
-  if (typeof q !== 'function') {
-    throw new Error('JARVIS requiere el query runner q() del backend central');
-  }
-  if (typeof authRequired !== 'function' ||
-      typeof getTenantId !== 'function' ||
-      typeof getSucursal !== 'function') {
-    throw new Error('JARVIS requiere authRequired, getTenantId y getSucursal');
-  }
-
-  // Candado global: todo /api/jarvis exige la misma sesión JWT del backend.
-  app.use('/api/jarvis', authRequired);
-
-  app.get('/api/jarvis/health', (req, res) => {
-    res.json({
-      ok: true,
-      service: 'jarvis',
-      mode: 'central-backend-module',
-      tenant_id: getTenantId(req),
-      sucursal_id: getSucursal(req),
-      capabilities: {
-        voice: 'reserved-f1-core',
-        agenda: 'foundation',
-        reminders: 'foundation',
-        email: 'planned',
-        whatsapp: 'central-bridge',
-        calls: 'planned',
-        realtime_web: 'planned'
-      }
-    });
-  });
-
-  // Primer endpoint de contexto: comprueba que Jarvis puede usar la BD central
-  // respetando tenant y sucursal, sin duplicar conexiones.
-  app.get('/api/jarvis/context', async (req, res) => {
-    try {
-      const tenantId = getTenantId(req);
-      const sucursalId = getSucursal(req);
-
-      const result = await q(
-        `SELECT
-           (SELECT COUNT(*)::int
-              FROM appointments
-             WHERE tenant_id=$1
-               AND (sucursal_id=$2 OR sucursal_id IS NULL)
-               AND date = CURRENT_DATE) AS citas_hoy,
-           (SELECT COUNT(*)::int
-              FROM inventory
-             WHERE tenant_id=$1
-               AND (sucursal_id=$2 OR sucursal_id IS NULL)
-               AND quantity <= min_stock) AS inventario_bajo`,
-        [tenantId, sucursalId]
-      );
-
-      res.json({
-        ok: true,
-        tenant_id: tenantId,
-        sucursal_id: sucursalId,
-        today: result.rows?.[0] || { citas_hoy: 0, inventario_bajo: 0 }
-      });
-    } catch (error) {
-      console.error('❌ JARVIS /context:', error);
-      res.status(500).json({ ok: false, error: 'No se pudo obtener el contexto de JARVIS' });
-    }
-  });
-
-  console.log('✅ JARVIS montado en /api/jarvis usando el backend central');
+function buildContext(req, getTenantId, getSucursal) {
+  return {
+    tenant_id: getTenantId(req),
+    branch_key: String(req.body?.branch_key || req.query?.branch_key || getSucursal(req) || 'sucursal_1'),
+    user_id: req.auth?.sub || null,
+    user_name: req.auth?.name || req.auth?.email || 'Usuario',
+    authorization: String(req.headers?.authorization || ''),
+    timezone: process.env.JARVIS_TIMEZONE || process.env.F1_TIMEZONE || process.env.TZ || 'America/Tijuana',
+  };
 }
 
-module.exports = { setupJarvisRoutes };
+function normalizeWake(value) {
+  return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+async function transcribeWake(wavBuffer) {
+  const key = process.env.OPENAI_API_KEY;
+  if (!key) throw new Error('Falta OPENAI_API_KEY');
+  const model = process.env.JARVIS_TRANSCRIBE_MODEL || process.env.F1_TRANSCRIBE_MODEL || 'gpt-4o-mini-transcribe';
+  const boundary = `----JarvisWake${Date.now().toString(16)}${Math.random().toString(16).slice(2)}`;
+  const field = (name, value) => Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n${value}\r\n`, 'utf8');
+  const body = Buffer.concat([
+    field('model', model), field('language', 'es'),
+    field('prompt', 'Transcribe literalmente. La palabra clave posible es “JARVIS”. No inventes JARVIS ante silencio, ruido, respiración o golpes.'),
+    Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="wake.wav"\r\nContent-Type: audio/wav\r\n\r\n`, 'utf8'),
+    wavBuffer, Buffer.from(`\r\n--${boundary}--\r\n`, 'utf8'),
+  ]);
+  const upstream = await fetch('https://api.openai.com/v1/audio/transcriptions', { method:'POST', headers:{Authorization:`Bearer ${key}`,'Content-Type':`multipart/form-data; boundary=${boundary}`,'Content-Length':String(body.length)}, body });
+  const text = await upstream.text();
+  if (!upstream.ok) throw new Error(`Wake transcription ${upstream.status}: ${text.slice(0,300)}`);
+  try { return String(JSON.parse(text)?.text || '').trim(); } catch { return ''; }
+}
+
+function pcm16Base64ToWav(base64, sampleRate=16000) {
+  const pcm = Buffer.from(String(base64 || ''), 'base64');
+  const sr = Number(sampleRate || 16000);
+  if (!pcm.length || pcm.length % 2) throw new Error('Audio PCM16 inválido');
+  if (sr !== 16000) throw new Error('Wake verifier requiere 16 kHz');
+  const wav = Buffer.alloc(44 + pcm.length);
+  wav.write('RIFF',0); wav.writeUInt32LE(36+pcm.length,4); wav.write('WAVE',8); wav.write('fmt ',12);
+  wav.writeUInt32LE(16,16); wav.writeUInt16LE(1,20); wav.writeUInt16LE(1,22); wav.writeUInt32LE(sr,24);
+  wav.writeUInt32LE(sr*2,28); wav.writeUInt16LE(2,32); wav.writeUInt16LE(16,34); wav.write('data',36);
+  wav.writeUInt32LE(pcm.length,40); pcm.copy(wav,44); return wav;
+}
+
+function setupJarvisRoutes(app, q, deps={}) {
+  const { authRequired, getTenantId, getSucursal } = deps;
+  if (!app || typeof q !== 'function' || !authRequired || !getTenantId || !getSucursal) throw new Error('Dependencias JARVIS incompletas');
+
+  app.use('/api/jarvis', authRequired);
+
+  app.get('/api/jarvis/health', (req,res) => res.json({ ok:true, service:'jarvis', central_connected:true, wake_word:'JARVIS', voice:'realtime-v1' }));
+
+  app.post('/api/jarvis/actions', async (req,res) => {
+    try {
+      const ctx = buildContext(req,getTenantId,getSucursal);
+      const name = String(req.body?.name || '');
+      const args = typeof req.body?.arguments === 'string' ? JSON.parse(req.body.arguments || '{}') : (req.body?.arguments || req.body?.args || {});
+      const result = await executeTool(q, ctx, name, args);
+      res.json({ok:true,name,result});
+    } catch(error) { res.status(error.statusCode || error.status || 400).json({ok:false,error:error.message}); }
+  });
+
+  app.post('/api/jarvis/wake/verify', async (req,res) => {
+    try {
+      const wav = pcm16Base64ToWav(req.body?.pcm16_base64, req.body?.sample_rate || 16000);
+      const transcript = await transcribeWake(wav);
+      const normalized = normalizeWake(transcript);
+      const accepted = /^jarvis\b/.test(normalized);
+      res.json({ok:true,accepted,transcript,normalized,phrase:accepted?'jarvis':null});
+    } catch(error) { res.status(503).json({ok:false,accepted:false,error:error.message}); }
+  });
+
+  app.get('/api/jarvis/realtime/profile', (req,res) => res.json({ok:true,wake_words:['JARVIS'],voice:process.env.JARVIS_VOICE || process.env.F1_VOICE || 'marin',model:process.env.JARVIS_REALTIME_MODEL || process.env.F1_REALTIME_MODEL || 'gpt-realtime'}));
+
+  app.post('/api/jarvis/realtime/call', express.text({type:'application/sdp',limit:'1mb'}), async (req,res) => {
+    try {
+      const ctx = buildContext(req,getTenantId,getSucursal);
+      const key = process.env.OPENAI_API_KEY;
+      if (!key) return res.status(503).json({error:'Falta OPENAI_API_KEY'});
+      if (!req.body || typeof req.body !== 'string') return res.status(400).json({error:'Oferta SDP vacía'});
+      const session = {
+        type:'realtime', model:process.env.JARVIS_REALTIME_MODEL || process.env.F1_REALTIME_MODEL || 'gpt-realtime',
+        instructions:jarvisInstructions(ctx), output_modalities:['audio'],
+        audio:{input:{transcription:{model:process.env.JARVIS_TRANSCRIBE_MODEL || process.env.F1_TRANSCRIBE_MODEL || 'gpt-4o-mini-transcribe',language:'es',prompt:'JARVIS. Asistente personal y empresarial. Agenda, recordatorios, correo, WhatsApp, llamadas e Internet.'},noise_reduction:{type:'near_field'},turn_detection:{type:'semantic_vad',eagerness:'low',create_response:true,interrupt_response:false}},output:{voice:process.env.JARVIS_VOICE || process.env.F1_VOICE || 'marin',speed:1.0}},
+        tools, tool_choice:'auto', max_output_tokens:1200,
+      };
+      const boundary=`----JarvisRealtime${Date.now().toString(16)}${Math.random().toString(16).slice(2)}`;
+      const body=Buffer.concat([
+        Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="sdp"\r\nContent-Type: application/sdp\r\n\r\n`),Buffer.from(req.body),
+        Buffer.from(`\r\n--${boundary}\r\nContent-Disposition: form-data; name="session"\r\nContent-Type: application/json\r\n\r\n${JSON.stringify(session)}\r\n--${boundary}--\r\n`)
+      ]);
+      const upstream=await fetch('https://api.openai.com/v1/realtime/calls',{method:'POST',headers:{Authorization:`Bearer ${key}`,'Content-Type':`multipart/form-data; boundary=${boundary}`,'Content-Length':String(body.length)},body});
+      const answer=await upstream.text();
+      if(!upstream.ok) return res.status(upstream.status).type('text/plain').send(answer);
+      res.status(201).type('application/sdp').send(answer);
+    } catch(error){res.status(500).json({error:error.message});}
+  });
+
+  console.log('✅ JARVIS Core V1: Realtime + wake JARVIS + herramientas F1 montados');
+}
+
+module.exports={setupJarvisRoutes};
