@@ -10,9 +10,37 @@ export default function JarvisApp(){
  const [voiceStatus,setVoiceStatus]=React.useState<VoiceStatus>('idle'),[lastText,setLastText]=React.useState('');
  const voiceRef=React.useRef<JarvisVoiceController|null>(null);
  React.useEffect(()=>{
+   let alive=true;
+   const loadReminders=async()=>{
+     try{
+       const data:any=await jarvisApi<any>('/api/jarvis/reminders');
+       const rows=Array.isArray(data)?data:(Array.isArray(data?.items)?data.items:(Array.isArray(data?.reminders)?data.reminders:[]));
+       if(alive)setItems(rows);
+     }catch(e){console.warn('JARVIS reminders:',e)}
+   };
    jarvisApi<Health>('/api/jarvis/health').then(setHealth).catch(console.warn);
-   voiceRef.current=new JarvisVoiceController({onStatus:setVoiceStatus,onTranscript:(t,w)=>setLastText(`${w==='jarvis'?'JARVIS':'Tú'}: ${t}`),onError:e=>setLastText(`Error: ${e.message}`)});
-   return()=>voiceRef.current?.stop();
+   loadReminders();
+   const timer=window.setInterval(loadReminders,2000);
+   const refresh=()=>loadReminders();
+   window.addEventListener('focus',refresh);
+   window.addEventListener('jarvis:reminders-changed',refresh as EventListener);
+   document.addEventListener('visibilitychange',refresh);
+   voiceRef.current=new JarvisVoiceController({
+     onStatus:setVoiceStatus,
+     onTranscript:(t,w)=>{
+       setLastText(`${w==='jarvis'?'JARVIS':'Tú'}: ${t}`);
+       if(w==='jarvis')window.setTimeout(loadReminders,500);
+     },
+     onError:e=>setLastText(`Error: ${e.message}`)
+   });
+   return()=>{
+     alive=false;
+     window.clearInterval(timer);
+     window.removeEventListener('focus',refresh);
+     window.removeEventListener('jarvis:reminders-changed',refresh as EventListener);
+     document.removeEventListener('visibilitychange',refresh);
+     voiceRef.current?.stop();
+   };
  },[]);
  const toggleVoice=async()=>{if(voiceStatus==='idle'||voiceStatus==='error'){try{await voiceRef.current?.start()}catch{}}else voiceRef.current?.stop()};
  const listening=voiceStatus==='listening'||voiceStatus==='speaking'||voiceStatus==='connecting';
