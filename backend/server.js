@@ -7188,6 +7188,18 @@ app.post('/api/f1/channels/conversations/:id/messages', authRequired, ah(async (
 // ===============================================================================
 
 // ===============================================================================
+// JARVIS — módulo independiente conectado al backend central
+// Toda la lógica de Jarvis vive en ./modules/jarvis; server.js solo lo monta.
+try {
+  const { setupJarvisRoutes } = require('./modules/jarvis');
+  setupJarvisRoutes(app, q, { authRequired, getTenantId, getSucursal });
+} catch (error) {
+  console.error('❌ No se pudo montar JARVIS:', error);
+}
+
+// ===============================================================================
+
+// ===============================================================================
 // F1 COPILOT — gestión por texto y voz OpenAI Realtime
 // Se agrega sin sustituir la Recepcionista V5, Messenger, WhatsApp ni la agenda.
 try {
