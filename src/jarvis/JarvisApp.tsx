@@ -300,51 +300,14 @@ export default function JarvisApp() {
       <section className="jv-quote">
         <blockquote>“Un gran asistente convierte tus ideas en resultados.”</blockquote>
         <div className="jv-sign">— JARVIS</div>
-        <svg className="jv-armor" viewBox="0 0 150 212" aria-hidden="true">
-          <defs>
-            <linearGradient id="armorFill" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="#0b5482" stopOpacity=".68"/>
-              <stop offset="55%" stopColor="#062c48" stopOpacity=".5"/>
-              <stop offset="100%" stopColor="#01121e" stopOpacity=".32"/>
-            </linearGradient>
-            <radialGradient id="armorCore">
-              <stop offset="0%" stopColor="#ffffff"/>
-              <stop offset="45%" stopColor="#8fefff"/>
-              <stop offset="100%" stopColor="#0aa8e6"/>
-            </radialGradient>
-            <linearGradient id="armorFade" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="#fff"/>
-              <stop offset="76%" stopColor="#fff"/>
-              <stop offset="100%" stopColor="#fff" stopOpacity="0"/>
-            </linearGradient>
-            <mask id="armorMask"><rect width="150" height="212" fill="url(#armorFade)"/></mask>
-          </defs>
-          <g mask="url(#armorMask)">
-            <path className="plate" d="M75 8 90 14 96 30 94 46 88 59 75 66 62 59 56 46 54 30 60 14Z"/>
-            <path className="edge" d="M58 34h34M63 51 75 56l12-5"/>
-            <path className="lit" d="M61 32 72 35v5l-11-2z"/>
-            <path className="lit" d="M89 32 78 35v5l11-2z"/>
-            <path className="edge" d="M69 51v5M73 52v4M77 52v4M81 51v5"/>
-            <path className="plate" d="M67 65h16v9l-8 4-8-4z"/>
-            <path className="plate" d="M58 76 33 82 21 101l4 20 17 1 4-22 12-10z"/>
-            <path className="plate" d="M92 76l25 6 12 19-4 20-17 1-4-22-12-10z"/>
-            <path className="edge" d="M28 95h14M122 95h-14"/>
-            <path className="plate" d="M58 76h34l7 18 3 31-7 27-20 12-20-12-7-27 3-31z"/>
-            <path className="edge" d="M57 97 72 107M93 97 78 107M59 136h32M61 146h28"/>
-            <circle className="coreGlow" cx="75" cy="117" r="19" fill="#25c8ff" opacity=".3"/>
-            <path className="edge" d="M75 102 88 117 75 132 62 117Z"/>
-            <circle className="core" cx="75" cy="117" r="9"/>
-            <path className="plate" d="M25 123l16 2 2 28-14 2z"/>
-            <path className="plate" d="M29 155l14-2 3 27-14 2z"/>
-            <path className="plate" d="M32 182h14l1 12-14 1z"/>
-            <path className="plate" d="M125 123l-16 2-2 28 14 2z"/>
-            <path className="plate" d="M121 155l-14-2-3 27 14 2z"/>
-            <path className="plate" d="M118 182h-14l-1 12 14 1z"/>
-            <path className="plate" d="M55 152h40l-5 23H60z"/>
-            <path className="plate" d="M59 177h14l-2 31H61z"/>
-            <path className="plate" d="M91 177H77l2 31h10z"/>
-          </g>
-        </svg>
+        <div className="jv-robot-stage" aria-hidden="true">
+          <img
+            className="jv-armor-image"
+            src="/jarvis-robot.png"
+            alt=""
+            draggable={false}
+          />
+        </div>
         <div className="jv-modes"><b>ANALYZE</b><b>ORGANIZE</b><b>EXECUTE</b><b>SIMPLIFY</b></div>
       </section>
       <section className="jv-status">
