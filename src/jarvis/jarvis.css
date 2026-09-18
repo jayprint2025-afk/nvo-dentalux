@@ -615,10 +615,9 @@ button{font:inherit;color:inherit}
   isolation:isolate;
   background-image:linear-gradient(rgba(1,8,16,.025),rgba(1,8,16,.055)),url('./assets/jarvis-bg.png')!important;
   background-repeat:no-repeat!important;
-  /* Fixed intrinsic size (no stretch) so the ring in the artwork always
-     lands on the mic orb, no matter how tall the browser window is. */
-  background-size:1180px auto!important;
-  background-position:center -305px!important;
+  /* El recurso final ya tiene proporción horizontal para el dashboard. */
+  background-size:cover!important;
+  background-position:center center!important;
 }
 .jv-main .jv-earth,.jv-main .jv-horizon,.jv-main .hud-ring,.jv-main .jv-orbit-zone::before{display:none!important}
 
@@ -748,8 +747,8 @@ button{font:inherit;color:inherit}
 @media (min-width:1241px) and (max-height:760px){
   .jv-main{
     padding-top:48px;
-    background-size:1060px auto!important;
-    background-position:center -271px!important;
+    background-size:cover!important;
+    background-position:center center!important;
   }
   .jv-orbit-zone{height:398px}
   .jv-orbit{transform:translateX(-50%) scale(.92);transform-origin:50% 0}
