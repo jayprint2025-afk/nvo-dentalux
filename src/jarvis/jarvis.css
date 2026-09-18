@@ -1644,3 +1644,98 @@ button{font:inherit;color:inherit}
 @media (max-width:760px){
   .jv-right .jv-quote .jv-armor-image{object-position:center 20%!important}
 }
+
+/* =========================================================
+   CELULAR — ALINEACIÓN FINAL CON EL ANILLO DE jarvis-bg.png
+   SOLO <= 760px. No altera tablet ni escritorio.
+   ========================================================= */
+@media (max-width:760px){
+  /* Mantener el fondo inmóvil para que el anillo sea la referencia visual. */
+  .jv-main{
+    background-size:auto 590px!important;
+    background-position:center top!important;
+  }
+
+  /* El micrófono baja al centro óptico del anillo impreso en el fondo. */
+  .voice-core{
+    left:50%!important;
+    top:286px!important;
+    width:100%!important;
+    margin:0!important;
+    transform:translateX(-50%) scale(.53)!important;
+    transform-origin:50% 0!important;
+    z-index:32!important;
+  }
+  .voice-core .orb{
+    margin-left:auto!important;
+    margin-right:auto!important;
+  }
+
+  /* Las tarjetas forman el arco superior alrededor del mismo anillo. */
+  .jv-orbit{
+    left:0!important;
+    top:118px!important;
+    width:100%!important;
+    height:150px!important;
+    transform:none!important;
+    perspective:none!important;
+  }
+  .module-card{display:none!important}
+  .module-card:nth-child(2),
+  .module-card:nth-child(3),
+  .module-card:nth-child(4){
+    display:flex!important;
+    width:104px!important;
+    height:112px!important;
+    padding:7px 6px!important;
+    border-radius:15px!important;
+    transform:none!important;
+  }
+  .module-card:nth-child(2){
+    left:calc(50% - 178px)!important;
+    top:48px!important;
+    opacity:.68!important;
+    filter:brightness(.78)!important;
+  }
+  .module-card:nth-child(3){
+    left:50%!important;
+    top:2px!important;
+    margin-left:-52px!important;
+    z-index:8!important;
+    opacity:1!important;
+    filter:none!important;
+  }
+  .module-card:nth-child(4){
+    left:auto!important;
+    right:calc(50% - 178px)!important;
+    top:48px!important;
+    opacity:.68!important;
+    filter:brightness(.78)!important;
+  }
+
+  /* Flechas acompañan el arco, sin mover el centro del micrófono. */
+  .orbit-arrow{
+    top:302px!important;
+    width:38px!important;
+    height:46px!important;
+    z-index:45!important;
+  }
+  .orbit-arrow.left{left:17px!important}
+  .orbit-arrow.right{right:17px!important}
+}
+
+@media (max-width:390px){
+  .jv-main{
+    background-size:auto 570px!important;
+    background-position:center top!important;
+  }
+  .voice-core{
+    left:50%!important;
+    top:276px!important;
+    transform:translateX(-50%) scale(.51)!important;
+  }
+  .jv-orbit{top:112px!important}
+  .module-card:nth-child(2){left:calc(50% - 170px)!important;top:46px!important}
+  .module-card:nth-child(4){right:calc(50% - 170px)!important;top:46px!important}
+  .orbit-arrow{top:292px!important}
+}
