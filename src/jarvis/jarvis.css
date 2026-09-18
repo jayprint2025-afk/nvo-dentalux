@@ -677,65 +677,11 @@ button{font:inherit;color:inherit}
 }
 
 @media (min-width:1241px) and (max-height:760px){
- .jv-main{padding-top:50px}.jv-orbit-zone{height:412px}.jv-orbit{transform:translateX(-50%) scale(.92);transform-origin:50% 0}.voice-core{top:190px;transform:translateX(-50%) scale(.90);transform-origin:50% 0}.orbit-arrow{top:231px}.jv-summary{height:148px;min-height:148px;max-height:148px}.jv-summary article{height:148px}
+ .jv-main{padding-top:50px;background-size:1060px auto!important;background-position:center -271px!important}.jv-orbit-zone{height:412px}.jv-orbit{transform:translateX(-50%) scale(.92);transform-origin:50% 0}.voice-core{top:190px;transform:translateX(-50%) scale(.90);transform-origin:50% 0}.orbit-arrow{top:231px}.jv-summary{height:148px;min-height:148px;max-height:148px;margin-top:26px}.jv-summary article{height:148px}
 }
 @media (min-width:761px) and (max-width:1240px){
  .jv-right{display:none}.jv-main{margin-right:0;margin-left:82px;padding:72px 12px 16px;background-size:cover!important;background-position:center 8%!important}.jv-orbit-zone{height:430px}.jv-orbit{width:900px;transform:translateX(-50%) scale(.78);transform-origin:50% 0}.voice-core{top:188px;transform:translateX(-50%) scale(.82)}.orbit-arrow{top:225px}.jv-summary{grid-template-columns:1fr 1fr;gap:10px}.jv-summary article{min-height:170px}
 }
 @media (max-width:760px){
  .jv-stark{min-height:100svh;overflow-y:auto}.jv-side{position:sticky;top:0;width:100%;height:60px;padding:8px 12px;z-index:100}.jv-side nav,.lock,.jv-version,.brand small,.brand i{display:none}.jv-main{margin:0;padding:14px 10px 20px;background-size:cover!important;background-position:center 14%!important}.jv-orbit-zone{height:420px}.jv-orbit{width:760px;transform:translateX(-50%) scale(.72);transform-origin:50% 0}.module-card{display:none}.module-card.selected{display:flex;left:50%;top:20px;width:150px;height:178px;transform:translateX(-50%)!important}.voice-core{top:190px;width:96%;transform:translateX(-50%) scale(.88)}.orbit-arrow{top:225px;width:46px;height:56px}.orbit-arrow.left{left:calc(50% - 125px)}.orbit-arrow.right{right:calc(50% - 125px)}.jv-summary{grid-template-columns:1fr;gap:10px}.jv-summary article{min-height:175px}.jv-right{display:grid;position:relative;inset:auto;width:auto;margin:0 10px 20px}.jv-topwidgets{display:none}
-}
-
-/* =========================================================
-   V14 — desktop 1365×690 alignment, no nested scaling
-   ========================================================= */
-@media (min-width:1241px) and (max-height:760px){
-  .jv-main{
-    padding-top:50px;
-    background-size:1180px auto!important;
-    background-position:center -305px!important;
-  }
-
-  /* Keep only the card fan at 75%; do not scale the microphone subtree. */
-  .jv-orbit-zone{height:432px;overflow:visible}
-  .jv-orbit{
-    top:0;
-    transform:translateX(-50%) scale(.75)!important;
-    transform-origin:50% 0!important;
-  }
-
-  /* Background central ring center for this composition ≈ x 50%, y 296px
-     inside the main viewport. Core top is relative to orbit-zone start (50px). */
-  .voice-core{
-    left:50%!important;
-    top:168px!important;
-    width:560px!important;
-    transform:translateX(-50%)!important;
-    transform-origin:50% 50%!important;
-  }
-
-  /* Reference-like core dimensions; independent of the carousel scale. */
-  .orb{width:156px;height:156px!important}
-  .orb::before{width:190px;height:190px}
-  .orb-halo{width:200px;height:200px}
-  .orb-arc{width:180px;height:180px}
-  .orb-ring{width:158px;height:158px}
-  .orb-disc{width:134px;height:134px}
-  .orb-mic{width:54px;height:54px}
-
-  /* Arrows are siblings, positioned around—not inside—the microphone. */
-  .orbit-arrow{top:215px!important}
-  .orbit-arrow.left{left:calc(50% - 132px)!important}
-  .orbit-arrow.right{right:calc(50% - 132px)!important}
-
-  /* Lower Agenda / Recordatorios as real flow spacing, not top offsets. */
-  .jv-summary{
-    position:relative!important;
-    top:auto!important;
-    margin-top:66px!important;
-    height:148px!important;
-    min-height:148px!important;
-    max-height:148px!important;
-  }
-  .jv-summary article{height:148px!important}
 }
