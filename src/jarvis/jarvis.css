@@ -26,6 +26,7 @@ body{
   -webkit-font-smoothing:antialiased;
 }
 button{font:inherit;color:inherit}
+.jv-menu-toggle{display:none}
 ::-webkit-scrollbar{width:7px;height:7px}
 ::-webkit-scrollbar-thumb{background:#0d5f7d;border-radius:8px}
 
@@ -509,6 +510,28 @@ button{font:inherit;color:inherit}
   filter:none!important;
 }
 
+/* Las reglas de integración del robot anteriores son de escritorio.
+   En tablet/celular vuelve a ocupar el panel aprobado. */
+@media (max-width:1240px){
+  .jv-right .jv-quote{
+    position:relative!important;
+    overflow:hidden!important;
+    border:1px solid rgba(45,205,255,.55)!important;
+    border-radius:18px!important;
+    background:radial-gradient(ellipse at 50% 48%,rgba(0,170,255,.16),rgba(1,12,22,.88) 72%)!important;
+    box-shadow:0 0 24px rgba(0,180,255,.15),inset 0 0 30px rgba(0,190,255,.06)!important;
+  }
+  .jv-right .jv-quote .jv-robot-stage{overflow:hidden!important}
+  .jv-right .jv-quote .jv-armor-image{
+    object-fit:cover!important;
+    object-position:center 24%!important;
+  }
+}
+
+@media (max-width:760px){
+  .jv-right .jv-quote .jv-armor-image{object-position:center 20%!important}
+}
+
 /* =========================================================
    AMBIENTE FUTURISTA EN MOVIMIENTO
    Capas visuales únicamente: no cambia tamaños ni posiciones
@@ -772,7 +795,7 @@ button{font:inherit;color:inherit}
 }
 .system-globe svg{display:none}
 .system-globe::before{ /* órbita inclinada */
-  content:"";position:absolute;inset:-13px -26px;border-radius:50%;
+  content:"";position:absolute;inset:-16px -38px;border-radius:50%;
   border:1px solid rgba(120,235,255,.8);
   transform:rotate(-14deg) rotateX(73deg);
   box-shadow:0 0 16px rgba(0,185,255,.65);
@@ -1027,11 +1050,238 @@ button{font:inherit;color:inherit}
   .jv-quote,.jv-status{min-height:0;overflow:hidden}
   .jv-quote{height:330px}
   .jv-robot-stage{height:160px;align-items:center}
-  .jv-armor-image{width:100%;height:100%;object-fit:contain;object-position:center center}
+.jv-armor-image{width:100%;height:100%;object-fit:contain;object-position:center center}
   .jv-status{height:auto}
   .system-globe{width:62px;height:62px;margin:4px auto 6px}
   .meters{padding:6px 4px}
   .jv-status>small{padding-top:7px;font-size:10px}
+}
+
+/* =========================================================
+   TABLET Y CELULAR — composición responsive aprobada
+   Escritorio (>=1241px) permanece sin cambios.
+   ========================================================= */
+@media (max-width:1240px){
+  .jv-stark{
+    min-height:100svh;
+    height:auto;
+    overflow-x:hidden;
+    overflow-y:auto;
+    padding-top:132px;
+  }
+
+  /* Encabezado compacto y menú desplegable */
+  .jv-side{
+    position:fixed;
+    inset:0 0 auto 0;
+    width:100%;
+    height:68px;
+    padding:10px 18px;
+    border-right:0;
+    border-bottom:1px solid rgba(40,211,255,.55);
+    flex-direction:row;
+    align-items:center;
+    z-index:100;
+    overflow:visible;
+  }
+  .jv-menu-toggle{
+    display:grid;
+    place-items:center;
+    width:46px;
+    height:46px;
+    flex:none;
+    padding:0;
+    border:1px solid rgba(74,224,255,.75);
+    border-radius:14px;
+    background:rgba(4,38,57,.92);
+    color:#93efff;
+    box-shadow:0 0 18px rgba(0,190,255,.24),inset 0 0 14px rgba(0,190,255,.12);
+    cursor:pointer;
+  }
+  .jv-menu-toggle svg{width:25px;height:25px}
+  .jv-side .brand{margin:0 0 0 15px;padding:0}
+  .jv-side .brand b{font-size:25px;letter-spacing:.20em}
+  .jv-side .brand small{display:block;margin-top:5px;font-size:7px}
+  .jv-side .brand i,.jv-side .lock,.jv-side .jv-version{display:none}
+  .jv-side nav{
+    display:none;
+    position:absolute;
+    left:12px;
+    top:62px;
+    width:min(320px,calc(100vw - 24px));
+    max-height:calc(100svh - 76px);
+    padding:12px;
+    overflow:auto;
+    border:1px solid rgba(58,215,255,.75);
+    border-radius:0 0 18px 18px;
+    background:linear-gradient(150deg,rgba(2,25,39,.985),rgba(0,8,16,.99));
+    box-shadow:0 18px 50px rgba(0,0,0,.72),0 0 28px rgba(0,190,255,.2);
+  }
+  .jv-side.menu-open nav{display:grid}
+  .jv-side nav button{
+    justify-content:flex-start;
+    gap:12px;
+    min-height:44px;
+    padding:10px 12px;
+    font-size:13px;
+  }
+
+  .jv-topwidgets{
+    display:grid;
+    grid-template-columns:repeat(3,minmax(0,1fr));
+    gap:10px;
+    position:fixed;
+    left:50%;
+    right:auto;
+    top:76px;
+    width:min(720px,calc(100% - 28px));
+    transform:translateX(-50%);
+    z-index:88;
+  }
+  .jv-topwidgets>div{
+    width:auto;
+    min-width:0;
+    height:48px;
+    padding:5px 10px;
+    justify-content:center;
+    border-radius:14px;
+  }
+  .jv-clock b{font-size:18px}.jv-clock small{font-size:9px}
+  .jv-weather svg{width:30px;height:30px}.jv-weather b{font-size:18px}.jv-weather small{font-size:9px}
+  .jv-user{display:flex}.jv-user>span{width:29px;height:29px}.jv-user b{font-size:10px}.jv-user small{font-size:9px}
+
+  /* Zona central conserva carrusel, fondo y micrófono */
+  .jv-main{
+    margin:0;
+    width:100%;
+    height:auto;
+    min-height:0;
+    padding:10px 18px 0;
+    overflow:visible;
+    background-size:auto 690px!important;
+    background-position:center top!important;
+  }
+  .jv-orbit-zone{height:470px;overflow:hidden}
+  .jv-orbit{top:0;width:900px;height:270px;transform:translateX(-50%) scale(.82);transform-origin:50% 0}
+  .voice-core{top:202px;width:620px;transform:translateX(-50%) scale(.84);transform-origin:50% 0}
+  .orbit-arrow{top:245px;width:50px;height:62px}
+  .orbit-arrow.left{left:calc(50% - 145px)}
+  .orbit-arrow.right{right:calc(50% - 145px)}
+
+  /* Agenda y recordatorios quedan como controles plegados */
+  .jv-summary{
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:12px;
+    height:auto;
+    margin:0;
+  }
+  .jv-summary article{
+    min-height:58px;
+    height:58px;
+    padding:0 16px;
+    overflow:hidden;
+    display:flex;
+    align-items:center;
+    cursor:pointer;
+  }
+  .jv-summary h3{width:100%;margin:0;font-size:15px}
+  .jv-summary h3 a{font-size:0}
+  .jv-summary h3 a::after{content:'›';font-size:26px;color:#57e4ff}
+  .jv-summary .rem,.jv-summary .empty{display:none}
+
+  /* Robot y sistema pasan al contenido principal */
+  .jv-right{
+    display:grid;
+    position:relative;
+    inset:auto;
+    width:auto;
+    margin:14px 18px 24px;
+    grid-template-columns:minmax(0,1.12fr) minmax(310px,.88fr);
+    gap:14px;
+    overflow:visible;
+  }
+  .jv-quote,.jv-status{min-height:330px}
+  .jv-quote{height:330px}
+  .jv-quote .jv-robot-stage{height:100%!important}
+  .jv-quote .jv-armor-image{transform:none!important;object-fit:cover!important;object-position:center 24%!important}
+  .jv-status{padding:18px 22px;justify-content:center;overflow:hidden}
+  .jv-status h4{font-size:18px}.jv-status strong{font-size:17px}
+  .jv-status .system-globe{width:132px!important;height:132px!important;margin:12px auto 16px!important}
+  .system-globe::before{inset:-20px -54px}
+  .jv-status .meters{padding:11px 7px}
+
+  .jv-float{position:fixed;left:50%!important;top:148px!important;width:min(520px,calc(100vw - 28px));transform:translateX(-50%)}
+  .jv-reset{right:16px;bottom:16px}
+}
+
+@media (max-width:760px){
+  .jv-stark{padding-top:126px}
+  .jv-side{height:62px;padding:8px 12px}
+  .jv-menu-toggle{width:43px;height:43px;border-radius:13px}
+  .jv-side .brand{margin-left:12px}
+  .jv-side .brand b{font-size:22px}
+  .jv-side .brand small{font-size:6.5px;letter-spacing:.22em}
+  .jv-side nav{top:57px}
+
+  .jv-topwidgets{top:69px;gap:6px;width:calc(100% - 16px)}
+  .jv-topwidgets>div{height:50px;padding:4px 5px;border-radius:12px}
+  .jv-clock b{font-size:15px}.jv-clock small{font-size:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+  .jv-weather{gap:4px}.jv-weather svg{width:25px;height:25px}.jv-weather b{font-size:15px}.jv-weather small{font-size:7.5px}
+  .jv-user{gap:5px}.jv-user>span{width:25px;height:25px;font-size:11px}.jv-user b{font-size:8px}.jv-user small{font-size:7px}
+
+  .jv-main{padding:8px 10px 0;background-size:auto 590px!important;background-position:center top!important}
+  .jv-orbit-zone{height:535px;overflow:hidden}
+
+  /* Un elemento central y vistas parciales de los vecinos: carrusel táctil legible */
+  .jv-orbit{top:6px;width:100%;height:210px;transform:none;left:0;perspective:none}
+  .module-card{display:none!important}
+  .module-card:nth-child(2),.module-card:nth-child(3),.module-card:nth-child(4){
+    display:flex!important;
+    top:13px;
+    width:142px;
+    height:174px;
+    padding:13px 9px 10px;
+    transform:none!important;
+  }
+  .module-card:nth-child(2){left:-100px;opacity:.58;filter:brightness(.72)}
+  .module-card:nth-child(3){left:50%;margin-left:-71px;z-index:6}
+  .module-card:nth-child(4){left:auto;right:-100px;opacity:.58;filter:brightness(.72)}
+  .module-card b{margin-top:26px;font-size:14px}
+  .module-card small{font-size:9px}.module-card em{font-size:8px}
+
+  .voice-core{top:205px;width:100%;transform:translateX(-50%) scale(.88)}
+  .orbit-arrow{top:248px;width:48px;height:58px;z-index:45}
+  .orbit-arrow.left{left:10px}.orbit-arrow.right{right:10px}
+
+  .jv-summary{grid-template-columns:1fr 1fr;gap:8px}
+  .jv-summary article{height:54px;min-height:54px;padding:0 10px;border-radius:14px}
+  .jv-summary h3{font-size:11px;gap:6px;white-space:nowrap}
+  .jv-summary h3 svg{width:19px;height:19px}
+
+  .jv-right{grid-template-columns:1fr;margin:12px 10px 18px;gap:12px}
+  .jv-quote,.jv-status{min-height:0}
+  .jv-quote{height:286px}
+  .jv-quote .jv-armor-image{object-fit:cover!important;object-position:center 20%!important}
+  .jv-status{min-height:360px;padding:18px 16px}
+  .jv-status h4{font-size:18px}.jv-status strong{font-size:17px}
+  .jv-status .system-globe{width:142px!important;height:142px!important;margin:15px auto 20px!important}
+  .system-globe::before{inset:-21px -48px}
+  .system-globe span{inset:-25px}.system-globe span+span{inset:-36px}
+  .jv-status .meters{padding:10px 4px}.meters b{font-size:15px}
+  .jv-status>small{font-size:11px}
+
+  .jv-float{top:132px!important;max-height:calc(100svh - 150px)}
+  .jv-float-body{max-height:calc(100svh - 205px)}
+  .jv-reset{font-size:0;width:46px;height:46px;padding:0;display:grid;place-items:center}
+}
+
+@media (max-width:390px){
+  .jv-side .brand small{display:none}
+  .jv-clock small{display:none}
+  .jv-user>span{display:none}
+  .jv-orbit-zone{height:510px}
+  .voice-core{top:197px;transform:translateX(-50%) scale(.82)}
 }
 
 /* Robot holográfico integrado — solo afecta el área del robot */
@@ -1115,4 +1365,24 @@ button{font:inherit;color:inherit}
   -webkit-mask-image:none!important;
   mask-image:none!important;
   filter:none!important;
+}
+
+/* Excepción responsive final: ocupa el panel como en los mockups aprobados. */
+@media (max-width:1240px){
+  .jv-right .jv-quote{
+    position:relative!important;
+    overflow:hidden!important;
+    border:1px solid rgba(45,205,255,.55)!important;
+    border-radius:18px!important;
+    background:radial-gradient(ellipse at 50% 48%,rgba(0,170,255,.16),rgba(1,12,22,.88) 72%)!important;
+    box-shadow:0 0 24px rgba(0,180,255,.15),inset 0 0 30px rgba(0,190,255,.06)!important;
+  }
+  .jv-right .jv-quote .jv-robot-stage{overflow:hidden!important}
+  .jv-right .jv-quote .jv-armor-image{
+    object-fit:cover!important;
+    object-position:center 24%!important;
+  }
+}
+@media (max-width:760px){
+  .jv-right .jv-quote .jv-armor-image{object-position:center 20%!important}
 }
