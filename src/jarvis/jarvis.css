@@ -685,3 +685,35 @@ button{font:inherit;color:inherit}
 @media (max-width:760px){
  .jv-stark{min-height:100svh;overflow-y:auto}.jv-side{position:sticky;top:0;width:100%;height:60px;padding:8px 12px;z-index:100}.jv-side nav,.lock,.jv-version,.brand small,.brand i{display:none}.jv-main{margin:0;padding:14px 10px 20px;background-size:cover!important;background-position:center 14%!important}.jv-orbit-zone{height:420px}.jv-orbit{width:760px;transform:translateX(-50%) scale(.72);transform-origin:50% 0}.module-card{display:none}.module-card.selected{display:flex;left:50%;top:20px;width:150px;height:178px;transform:translateX(-50%)!important}.voice-core{top:190px;width:96%;transform:translateX(-50%) scale(.88)}.orbit-arrow{top:225px;width:46px;height:56px}.orbit-arrow.left{left:calc(50% - 125px)}.orbit-arrow.right{right:calc(50% - 125px)}.jv-summary{grid-template-columns:1fr;gap:10px}.jv-summary article{min-height:175px}.jv-right{display:grid;position:relative;inset:auto;width:auto;margin:0 10px 20px}.jv-topwidgets{display:none}
 }
+
+/* =========================================================
+   AJUSTE SOLICITADO — 75% GENERAL + REUBICACIÓN FINAL
+   No modifica lógica ni contenido.
+   ========================================================= */
+@media (min-width:1241px){
+  /* 1) Toda la composición general al 75% */
+  .jv-stark{
+    width:133.333333%;
+    height:133.333333vh;
+    transform:scale(.75);
+    transform-origin:top left;
+  }
+
+  /* 2) Después del escalado general, centrar específicamente el núcleo
+        del micrófono dentro del anillo de la referencia. */
+  .voice-core{
+    left:50%;
+    top:205px;
+    transform:translateX(-50%);
+  }
+
+  /* 3) Bajar Agenda + Recordatorios hasta el nivel inferior del panel
+        Estado del sistema, sin alterar sus tamaños internos. */
+  .jv-summary{
+    position:absolute;
+    left:18px;
+    right:18px;
+    bottom:8px;
+    margin-top:0;
+  }
+}
