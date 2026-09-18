@@ -720,6 +720,77 @@ button{font:inherit;color:inherit}
 }
 
 /* =========================================================
+   CELULAR AJUSTADO AL VIEWPORT — sin desplazamiento inferior
+   ========================================================= */
+@media (max-width:760px){
+  html,body,#root{height:100%;overflow:hidden!important}
+  .jv-stark{
+    width:100%!important;
+    height:100svh!important;
+    min-height:100svh!important;
+    max-height:100svh!important;
+    overflow:hidden!important;
+    overscroll-behavior:none!important;
+    padding-top:106px!important;
+  }
+  .jv-main{
+    height:calc(100svh - 302px)!important;
+    min-height:275px!important;
+    max-height:none!important;
+    overflow:hidden!important;
+  }
+  .jv-orbit-zone{
+    width:100%!important;
+    height:100%!important;
+    min-height:275px!important;
+    overflow:hidden!important;
+  }
+
+  /* El núcleo coincide con el centro óptico del círculo del fondo. */
+  .voice-core{
+    left:calc(50% - 14px)!important;
+    top:132px!important;
+    transform:translateX(-50%) scale(.53)!important;
+    transform-origin:50% 0!important;
+  }
+  .orbit-arrow{top:169px!important}
+
+  /* Ambos paneles permanecen pegados al borde inferior. */
+  .jv-right{
+    position:absolute!important;
+    left:8px!important;
+    right:8px!important;
+    bottom:7px!important;
+    top:auto!important;
+    width:auto!important;
+    height:184px!important;
+    margin:0!important;
+    padding:0!important;
+    overflow:hidden!important;
+    grid-template-columns:1fr 1fr!important;
+    gap:7px!important;
+    z-index:48!important;
+  }
+  .jv-right .jv-quote,
+  .jv-right .jv-status{
+    height:184px!important;
+    min-height:184px!important;
+    max-height:184px!important;
+  }
+  .jv-summary{display:none!important}
+}
+
+@media (max-width:390px){
+  .jv-main{height:calc(100svh - 294px)!important;min-height:268px!important}
+  .jv-orbit-zone{min-height:268px!important}
+  .voice-core{left:calc(50% - 13px)!important;top:126px!important;transform:translateX(-50%) scale(.51)!important}
+  .orbit-arrow{top:163px!important}
+  .jv-right{height:176px!important}
+  .jv-right .jv-quote,
+  .jv-right .jv-status{height:176px!important;min-height:176px!important;max-height:176px!important}
+}
+
+/* =========================================================
    AMBIENTE FUTURISTA EN MOVIMIENTO
    Capas visuales únicamente: no cambia tamaños ni posiciones
    ========================================================= */
