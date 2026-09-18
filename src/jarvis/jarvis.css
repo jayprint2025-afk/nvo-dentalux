@@ -752,7 +752,7 @@ button{font:inherit;color:inherit}
   }
   .jv-orbit-zone{height:390px}
   .jv-orbit{transform:translateX(-50%) scale(.84);transform-origin:50% 0}
-  .voice-core{top:220px;transform:translateX(-50%) scale(.82);transform-origin:50% 0}
+  .voice-core{left:calc(50% - 18px);top:190px;transform:translateX(-50%) scale(.82);transform-origin:50% 0}
   .orbit-arrow{top:218px;transform:scale(.84)}
   .orbit-arrow.left{left:calc(50% - 132px)}
   .orbit-arrow.right{right:calc(50% - 132px)}
