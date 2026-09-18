@@ -533,6 +533,91 @@ button{font:inherit;color:inherit}
 }
 
 /* =========================================================
+   CELULAR COMPACTO — acerca la composición al mockup aprobado
+   y permite que el robot aparezca mucho antes al desplazarse.
+   ========================================================= */
+@media (max-width:760px){
+  .jv-stark{padding-top:118px!important}
+  .jv-side{height:58px!important;padding:7px 12px!important}
+  .jv-menu-toggle{
+    display:grid!important;
+    width:42px!important;
+    height:42px!important;
+    margin:0!important;
+    visibility:visible!important;
+    opacity:1!important;
+  }
+  .jv-side .brand{margin-left:11px!important}
+  .jv-side .brand b{font-size:21px!important}
+  .jv-side nav{top:54px!important}
+
+  .jv-topwidgets{top:64px!important;height:48px!important}
+  .jv-topwidgets>div{height:48px!important}
+
+  .jv-main{
+    padding:5px 8px 0!important;
+    background-size:auto 500px!important;
+  }
+  .jv-orbit-zone{height:355px!important}
+  .jv-orbit{top:0!important;height:150px!important}
+  .module-card:nth-child(2),
+  .module-card:nth-child(3),
+  .module-card:nth-child(4){
+    top:8px!important;
+    width:116px!important;
+    height:138px!important;
+    padding:9px 7px 8px!important;
+    border-radius:18px!important;
+  }
+  .module-card:nth-child(2){left:-78px!important}
+  .module-card:nth-child(3){left:50%!important;margin-left:-58px!important}
+  .module-card:nth-child(4){right:-78px!important}
+  .module-card .mc-icon{left:8px!important;top:8px!important;width:26px!important;height:26px!important}
+  .module-card .mc-icon svg{width:14px!important;height:14px!important}
+  .module-card b{margin-top:19px!important;font-size:12px!important}
+  .module-card small{font-size:7.5px!important;min-height:22px!important;line-height:1.25!important}
+  .module-card em{font-size:7px!important;padding:2px 7px!important}
+
+  .voice-core{
+    top:137px!important;
+    width:118%!important;
+    transform:translateX(-50%) scale(.66)!important;
+    transform-origin:50% 0!important;
+  }
+  .orbit-arrow{
+    top:190px!important;
+    width:42px!important;
+    height:50px!important;
+  }
+  .orbit-arrow.left{left:12px!important}
+  .orbit-arrow.right{right:12px!important}
+  .voice-core h2{margin-top:8px!important}
+  .voice-core p{margin-top:2px!important}
+  .jv-wave{height:30px!important;margin-top:2px!important}
+  .tags{margin-top:3px!important}
+
+  .jv-summary{gap:7px!important}
+  .jv-summary article{
+    height:48px!important;
+    min-height:48px!important;
+    padding:0 8px!important;
+  }
+  .jv-summary h3{font-size:10px!important}
+  .jv-summary h3 svg{width:17px!important;height:17px!important}
+
+  .jv-right{margin-top:9px!important}
+  .jv-quote{height:245px!important}
+  .jv-status{min-height:330px!important}
+}
+
+@media (max-width:390px){
+  .jv-side .brand b{font-size:19px!important}
+  .jv-orbit-zone{height:345px!important}
+  .voice-core{top:132px!important;transform:translateX(-50%) scale(.63)!important}
+  .orbit-arrow{top:184px!important}
+}
+
+/* =========================================================
    AMBIENTE FUTURISTA EN MOVIMIENTO
    Capas visuales únicamente: no cambia tamaños ni posiciones
    ========================================================= */
