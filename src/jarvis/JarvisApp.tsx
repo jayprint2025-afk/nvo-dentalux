@@ -63,6 +63,56 @@ export default function JarvisApp() {
   const [now, setNow] = React.useState(() => new Date());
   const voiceRef = React.useRef<JarvisVoiceController | null>(null);
   const stageRef = React.useRef<HTMLDivElement | null>(null);
+  const audioRef = React.useRef<AudioContext | null>(null);
+  const lastHoverSound = React.useRef(0);
+
+  const flashUi = React.useCallback((kind: 'open' | 'slide' | 'close' | 'mic' | 'hover') => {
+    const stage = stageRef.current;
+    if (!stage) return;
+    const className = `jv-fx-${kind}`;
+    stage.classList.remove(className);
+    void stage.offsetWidth;
+    stage.classList.add(className);
+    window.setTimeout(() => stage.classList.remove(className), 650);
+  }, []);
+
+  const playUiSound = React.useCallback((kind: 'open' | 'slide' | 'minimize' | 'close' | 'mic' | 'hover') => {
+    try {
+      const AudioCtor = window.AudioContext;
+      const ctx = audioRef.current || new AudioCtor();
+      audioRef.current = ctx;
+      if (ctx.state === 'suspended') void ctx.resume();
+      const now = ctx.currentTime;
+      const master = ctx.createGain();
+      master.gain.setValueAtTime(0.0001, now);
+      master.gain.exponentialRampToValueAtTime(kind === 'hover' ? 0.025 : 0.07, now + 0.012);
+      master.gain.exponentialRampToValueAtTime(0.0001, now + (kind === 'mic' ? 0.42 : 0.24));
+      master.connect(ctx.destination);
+
+      const tone = (from: number, to: number, delay = 0, duration = 0.2, type: OscillatorType = 'sine') => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = type;
+        osc.frequency.setValueAtTime(from, now + delay);
+        osc.frequency.exponentialRampToValueAtTime(to, now + delay + duration);
+        gain.gain.setValueAtTime(0.0001, now + delay);
+        gain.gain.exponentialRampToValueAtTime(0.65, now + delay + 0.012);
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + delay + duration);
+        osc.connect(gain); gain.connect(master);
+        osc.start(now + delay); osc.stop(now + delay + duration + 0.02);
+      };
+
+      if (kind === 'open') { tone(310, 760, 0, .22, 'sine'); tone(620, 1180, .035, .18, 'triangle'); }
+      if (kind === 'slide') { tone(950, 430, 0, .16, 'sine'); tone(1250, 720, .025, .13, 'triangle'); }
+      if (kind === 'minimize') { tone(620, 260, 0, .21, 'triangle'); }
+      if (kind === 'close') { tone(360, 110, 0, .23, 'sine'); }
+      if (kind === 'mic') { tone(240, 720, 0, .2, 'sine'); tone(480, 1280, .09, .26, 'triangle'); }
+      if (kind === 'hover') { tone(880, 1040, 0, .07, 'sine'); }
+      flashUi(kind === 'minimize' ? 'close' : kind);
+    } catch { /* Audio no disponible: la interfaz sigue funcionando. */ }
+  }, [flashUi]);
+
+  React.useEffect(() => () => { void audioRef.current?.close(); }, []);
 
   React.useEffect(() => {
     let frame = 0;
@@ -123,6 +173,7 @@ export default function JarvisApp() {
   }, [loadDashboard]);
 
   const toggleVoice = async () => {
+    playUiSound('mic');
     if (voiceStatus === 'idle' || voiceStatus === 'error') { try { await voiceRef.current?.start(); } catch {} }
     else voiceRef.current?.stop();
   };
@@ -134,14 +185,30 @@ export default function JarvisApp() {
     voiceStatus === 'error'      ? 'Error de voz' : 'En espera';
 
   const activate = (id: ModuleId) => {
+    playUiSound('open');
     setSelected(id);
     if (!open.includes(id)) {
       setOpen(v => [...v, id]);
       setPositions(p => ({ ...p, [id]: p[id] || defaultPos(open.length) }));
     }
   };
-  const closePanel = (id: ModuleId) => setOpen(v => v.filter(x => x !== id));
-  const resetPanels = () => { setOpen([]); setPositions({}); };
+  const closePanel = (id: ModuleId, sound: 'minimize' | 'close' = 'close') => {
+    playUiSound(sound);
+    setOpen(v => v.filter(x => x !== id));
+  };
+  const resetPanels = () => { playUiSound('slide'); setOpen([]); setPositions({}); };
+
+  const slideCarousel = (direction: -1 | 1) => {
+    playUiSound('slide');
+    setCarousel(v => (v + direction + modules.length) % modules.length);
+  };
+
+  const hoverCard = () => {
+    const now = performance.now();
+    if (now - lastHoverSound.current < 180) return;
+    lastHoverSound.current = now;
+    playUiSound('hover');
+  };
 
   const beginDrag = (id: ModuleId, e: React.PointerEvent<HTMLDivElement>) => {
     if ((e.target as HTMLElement).closest('button')) return;
@@ -252,7 +319,7 @@ export default function JarvisApp() {
         <div className="hud-ring ring-a" /><div className="hud-ring ring-b" /><div className="hud-ring ring-c" />
 
         <button className="orbit-arrow left" aria-label="Anterior"
-          onClick={() => setCarousel(v => (v - 1 + modules.length) % modules.length)}><ChevronLeft /></button>
+          onClick={() => slideCarousel(-1)}><ChevronLeft /></button>
 
         <div className="jv-orbit">
           {rotated.map((m, i) => {
@@ -260,6 +327,7 @@ export default function JarvisApp() {
             return <button key={m.id}
               className={`module-card ${m.accent} ${selected === m.id ? 'selected' : ''}`}
               style={{ '--slot': slot, '--lift': Math.abs(slot) } as React.CSSProperties}
+              onPointerEnter={hoverCard}
               onClick={() => activate(m.id)}>
               <span className="mc-icon"><I /></span>
               <b>{m.label}</b><small>{m.sub}</small>
@@ -269,7 +337,7 @@ export default function JarvisApp() {
         </div>
 
         <button className="orbit-arrow right" aria-label="Siguiente"
-          onClick={() => setCarousel(v => (v + 1) % modules.length)}><ChevronRight /></button>
+          onClick={() => slideCarousel(1)}><ChevronRight /></button>
 
         <section className="voice-core">
           <button className={listening ? 'orb listening' : 'orb'} onClick={toggleVoice} aria-label="Activar JARVIS">
@@ -355,8 +423,8 @@ export default function JarvisApp() {
           <header>
             <div><I /><b>{m.label}</b></div>
             <span><GripHorizontal />
-              <button title="Minimizar" onClick={() => closePanel(id)}><Minus /></button>
-              <button title="Cerrar" onClick={() => closePanel(id)}><X /></button>
+              <button title="Minimizar" onClick={() => closePanel(id, 'minimize')}><Minus /></button>
+              <button title="Cerrar" onClick={() => closePanel(id, 'close')}><X /></button>
             </span>
           </header>
           <div className="jv-float-body">{renderPanel(id)}</div>
