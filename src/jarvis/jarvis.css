@@ -1912,3 +1912,49 @@ button{font:inherit;color:inherit}
     transform:translateX(-50%) scale(.48)!important;
   }
 }
+
+/* =========================================================
+   CELULAR V6 — texto debajo del núcleo + swipe táctil carrusel
+   SOLO <=760px. No modifica tablet ni escritorio.
+   ========================================================= */
+@media (max-width:760px){
+  /* El núcleo conserva exactamente la posición aprobada de V5. */
+  .voice-core{
+    left:calc(50% - 15px)!important;
+    top:228px!important;
+  }
+
+  /* El botón/micrófono queda arriba; estado, instrucción, onda y tags debajo. */
+  .voice-core .orb{
+    position:relative!important;
+    z-index:3!important;
+    margin-bottom:10px!important;
+  }
+  .voice-core h2,
+  .voice-core p,
+  .voice-core .jv-wave,
+  .voice-core .tags{
+    position:relative!important;
+    z-index:4!important;
+  }
+  .voice-core h2{margin-top:10px!important;margin-bottom:3px!important}
+  .voice-core p{margin-top:0!important;margin-bottom:4px!important}
+  .voice-core .jv-wave{margin-top:2px!important}
+  .voice-core .tags{margin-top:3px!important}
+
+  /* Permite deslizar horizontalmente las tarjetas con el dedo sin bloquear scroll vertical. */
+  .jv-orbit{
+    touch-action:pan-y!important;
+    user-select:none!important;
+    -webkit-user-select:none!important;
+    -webkit-touch-callout:none!important;
+  }
+  .module-card{touch-action:pan-y!important}
+}
+
+@media (max-width:390px){
+  .voice-core{
+    left:calc(50% - 14px)!important;
+    top:222px!important;
+  }
+}
