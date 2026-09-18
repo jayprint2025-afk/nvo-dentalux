@@ -509,6 +509,130 @@ button{font:inherit;color:inherit}
   filter:none!important;
 }
 
+/* =========================================================
+   AMBIENTE FUTURISTA EN MOVIMIENTO
+   Capas visuales únicamente: no cambia tamaños ni posiciones
+   ========================================================= */
+.jv-stark{
+  --jv-px:0;
+  --jv-py:0;
+}
+.jv-main{
+  background-position:
+    calc(50% + var(--jv-px) * 9px)
+    calc(50% + var(--jv-py) * 6px)!important;
+  transition:background-position .18s ease-out;
+}
+.jv-grid{
+  inset:-24px!important;
+  animation:jvGridTravel 18s linear infinite;
+  transform:translate(
+    calc(var(--jv-px) * -7px),
+    calc(var(--jv-py) * -5px)
+  );
+  will-change:transform,background-position;
+}
+.jv-stars{
+  inset:-30px!important;
+  animation:jvStarDrift 22s ease-in-out infinite alternate;
+  transform:translate(
+    calc(var(--jv-px) * 12px),
+    calc(var(--jv-py) * 8px)
+  );
+  will-change:transform,opacity;
+}
+.jv-stars::before,
+.jv-stars::after{
+  content:"";
+  position:absolute;
+  width:170px;
+  height:2px;
+  left:-220px;
+  top:17%;
+  border-radius:50%;
+  background:linear-gradient(90deg,transparent,rgba(124,238,255,.3),#fff);
+  box-shadow:0 0 7px #6eeaff,0 0 18px rgba(0,170,255,.8);
+  transform:rotate(-16deg);
+  opacity:0;
+  animation:jvMeteor 11s ease-in-out infinite;
+}
+.jv-stars::after{
+  top:31%;
+  animation-delay:6.5s;
+  animation-duration:14s;
+  transform:rotate(-9deg) scale(.72);
+}
+.jv-scan{
+  opacity:.75;
+  animation:jvScanLines 7s linear infinite;
+}
+.jv-main::before{
+  content:"";
+  position:absolute;
+  inset:0;
+  z-index:0;
+  pointer-events:none;
+  background:
+    radial-gradient(circle at 50% 47%,rgba(122,241,255,.24) 0 1px,transparent 3px 100%),
+    conic-gradient(from 0deg at 50% 47%,transparent 0 13%,rgba(71,218,255,.12) 14%,transparent 15% 42%,rgba(0,129,255,.10) 43%,transparent 44% 100%);
+  mix-blend-mode:screen;
+  animation:jvEnergySweep 14s linear infinite;
+}
+.jv-main::after{
+  content:"";
+  position:absolute;
+  left:0;right:0;top:-28%;height:18%;
+  z-index:4;
+  pointer-events:none;
+  background:linear-gradient(180deg,transparent,rgba(105,232,255,.08) 45%,rgba(186,250,255,.18) 50%,rgba(105,232,255,.06) 55%,transparent);
+  mix-blend-mode:screen;
+  filter:blur(.4px);
+  animation:jvHoloSweep 8s ease-in-out infinite;
+}
+.module-card,
+.voice-core,
+.jv-summary article,
+.jv-status{
+  animation:jvPanelBreath 4.8s ease-in-out infinite;
+}
+.module-card:nth-child(2n),
+.jv-summary article:nth-child(2){animation-delay:-2.4s}
+
+@keyframes jvGridTravel{
+  to{background-position:46px 46px}
+}
+@keyframes jvStarDrift{
+  0%{opacity:.43;filter:brightness(.9)}
+  50%{opacity:.7;filter:brightness(1.35)}
+  100%{opacity:.52;filter:brightness(1.05)}
+}
+@keyframes jvMeteor{
+  0%,70%{left:-220px;opacity:0}
+  73%{opacity:1}
+  88%{left:112%;opacity:.85}
+  92%,100%{left:112%;opacity:0}
+}
+@keyframes jvScanLines{
+  to{background-position:0 120px}
+}
+@keyframes jvEnergySweep{
+  to{transform:rotate(360deg)}
+}
+@keyframes jvHoloSweep{
+  0%,8%{transform:translateY(-20vh);opacity:0}
+  18%{opacity:1}
+  75%{opacity:.7}
+  92%,100%{transform:translateY(145vh);opacity:0}
+}
+@keyframes jvPanelBreath{
+  0%,100%{filter:brightness(1);}
+  50%{filter:brightness(1.08) drop-shadow(0 0 7px rgba(44,211,255,.18));}
+}
+
+@media (prefers-reduced-motion:reduce){
+  .jv-main{transition:none!important}
+}
+
 /* Panel derecho: el robot ocupa todo el rectángulo */
 .jv-quote{
   position:relative;
