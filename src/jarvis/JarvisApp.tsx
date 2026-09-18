@@ -62,6 +62,25 @@ export default function JarvisApp() {
   const [carousel, setCarousel] = React.useState(0);
   const [now, setNow] = React.useState(() => new Date());
   const voiceRef = React.useRef<JarvisVoiceController | null>(null);
+  const stageRef = React.useRef<HTMLDivElement | null>(null);
+
+  React.useEffect(() => {
+    let frame = 0;
+    const move = (event: PointerEvent) => {
+      if (frame) window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(() => {
+        const x = (event.clientX / window.innerWidth - 0.5) * 2;
+        const y = (event.clientY / window.innerHeight - 0.5) * 2;
+        stageRef.current?.style.setProperty('--jv-px', `${x.toFixed(3)}`);
+        stageRef.current?.style.setProperty('--jv-py', `${y.toFixed(3)}`);
+      });
+    };
+    window.addEventListener('pointermove', move, { passive: true });
+    return () => {
+      if (frame) window.cancelAnimationFrame(frame);
+      window.removeEventListener('pointermove', move);
+    };
+  }, []);
 
   const loadDashboard = React.useCallback(async () => {
     try {
@@ -182,7 +201,7 @@ export default function JarvisApp() {
     return null;
   };
 
-  return <div className="jv-stark">
+  return <div className="jv-stark" ref={stageRef}>
     <div className="jv-grid" />
     <div className="jv-scan" />
     <div className="jv-stars" />
