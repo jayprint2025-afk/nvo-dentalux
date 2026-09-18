@@ -4,7 +4,7 @@ import {
   CalendarDays, Bell, Mail, MessageCircle, Phone, Globe2,
   Lock, X, Minus, GripHorizontal, ChevronLeft, ChevronRight,
   Plus, CheckCircle2, Clock3, Send, Search, PhoneCall, Sparkles,
-  FileText, BarChart3, Settings, Home, Sun
+  FileText, BarChart3, Settings, Home, Sun, Menu
 } from 'lucide-react';
 import { jarvisApi } from './lib/jarvisApi';
 import { JarvisVoiceController } from './voice/JarvisVoiceController';
@@ -60,6 +60,7 @@ export default function JarvisApp() {
   const [open, setOpen] = React.useState<ModuleId[]>([]);
   const [positions, setPositions] = React.useState<Partial<Record<ModuleId, Pos>>>({});
   const [carousel, setCarousel] = React.useState(0);
+  const [menuOpen, setMenuOpen] = React.useState(false);
   const [now, setNow] = React.useState(() => new Date());
   const voiceRef = React.useRef<JarvisVoiceController | null>(null);
   const stageRef = React.useRef<HTMLDivElement | null>(null);
@@ -275,17 +276,25 @@ export default function JarvisApp() {
     <div className="jv-horizon" aria-hidden="true"><i /><i /><i /><i /></div>
 
     {/* ------------------------------ lateral ------------------------------ */}
-    <aside className="jv-side">
+    <aside className={`jv-side ${menuOpen ? 'menu-open' : ''}`}>
+      <button
+        className="jv-menu-toggle"
+        type="button"
+        aria-label={menuOpen ? 'Cerrar menú' : 'Abrir menú'}
+        aria-expanded={menuOpen}
+        onClick={() => setMenuOpen(v => !v)}>
+        {menuOpen ? <X /> : <Menu />}
+      </button>
       <div className="brand" translate="no">
         <b>JARVIS</b>
         <small>PERSONAL COMMAND SYSTEM</small>
         <i>Asistente personal y empresarial</i>
       </div>
       <nav>
-        <button className="active"><Home />Centro de comando</button>
+        <button className="active" onClick={() => setMenuOpen(false)}><Home />Centro de comando</button>
         {navItems.map(n => {
           const I = n.icon;
-          return <button key={n.label} onClick={() => n.id && activate(n.id)}><I />{n.label}</button>;
+          return <button key={n.label} onClick={() => { if (n.id) activate(n.id); setMenuOpen(false); }}><I />{n.label}</button>;
         })}
       </nav>
       <div className="lock" translate="no">
