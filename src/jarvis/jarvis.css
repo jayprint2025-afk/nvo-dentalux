@@ -618,6 +618,108 @@ button{font:inherit;color:inherit}
 }
 
 /* =========================================================
+   CELULAR FINAL — todo el tablero principal en una pantalla
+   ========================================================= */
+@media (max-width:760px){
+  .jv-stark{padding-top:112px!important}
+  .jv-side{height:56px!important}
+  .jv-topwidgets{top:61px!important;height:45px!important}
+  .jv-topwidgets>div{height:45px!important}
+
+  .jv-main{padding:3px 8px 0!important}
+  .jv-orbit-zone{height:282px!important}
+  .jv-orbit{top:0!important;height:118px!important}
+  .module-card:nth-child(2),
+  .module-card:nth-child(3),
+  .module-card:nth-child(4){
+    top:3px!important;
+    width:104px!important;
+    height:112px!important;
+    padding:7px 6px!important;
+    border-radius:15px!important;
+  }
+  .module-card:nth-child(2){left:-72px!important}
+  .module-card:nth-child(3){left:50%!important;margin-left:-52px!important}
+  .module-card:nth-child(4){right:-72px!important}
+  .module-card .mc-icon{width:23px!important;height:23px!important;left:7px!important;top:7px!important}
+  .module-card b{margin-top:15px!important;font-size:10.5px!important}
+  .module-card small{font-size:6.5px!important;min-height:17px!important}
+  .module-card em{font-size:6.5px!important;padding:2px 6px!important}
+
+  /* Centro matemático del núcleo: 50% real del anillo de fondo */
+  .voice-core{
+    left:50%!important;
+    top:108px!important;
+    width:100%!important;
+    margin:0!important;
+    transform:translateX(-50%) scale(.54)!important;
+    transform-origin:50% 0!important;
+  }
+  .voice-core .orb{margin-left:auto!important;margin-right:auto!important}
+  .orbit-arrow{top:150px!important;width:38px!important;height:46px!important}
+  .orbit-arrow.left{left:17px!important}
+  .orbit-arrow.right{right:17px!important}
+  .voice-core h2{margin-top:5px!important}
+  .voice-core p{margin-top:0!important}
+  .jv-wave{height:25px!important;margin-top:0!important}
+  .tags{margin-top:0!important;gap:6px!important}
+  .tags i{padding:4px 10px!important}
+
+  /* En celular se eliminan por completo los dos resúmenes. */
+  .jv-summary{display:none!important}
+
+  /* Robot y estado, reducidos y colocados a la par. */
+  .jv-right{
+    display:grid!important;
+    grid-template-columns:1fr 1fr!important;
+    gap:7px!important;
+    margin:5px 8px 10px!important;
+    align-items:stretch!important;
+  }
+  .jv-right .jv-quote,
+  .jv-right .jv-status{
+    width:100%!important;
+    height:190px!important;
+    min-height:190px!important;
+    max-height:190px!important;
+    border-radius:13px!important;
+  }
+  .jv-right .jv-quote .jv-armor-image{
+    object-fit:cover!important;
+    object-position:center 20%!important;
+  }
+  .jv-right .jv-status{
+    padding:9px 7px!important;
+    justify-content:flex-start!important;
+    overflow:hidden!important;
+  }
+  .jv-status h4{margin:0 0 4px!important;font-size:11px!important}
+  .jv-status>strong{font-size:10px!important;gap:5px!important}
+  .jv-status>strong i{width:8px!important;height:8px!important}
+  .jv-status .system-globe{
+    width:68px!important;
+    height:68px!important;
+    margin:7px auto 7px!important;
+  }
+  .jv-status .system-globe::before{inset:-11px -25px!important}
+  .jv-status .system-globe::after{inset:-6px!important}
+  .jv-status .system-globe span{inset:-12px!important}
+  .jv-status .system-globe span+span{inset:-18px!important}
+  .jv-status .meters{gap:1px!important;padding:5px 1px!important;border-radius:8px!important}
+  .jv-status .meters span{font-size:7px!important}
+  .jv-status .meters b{font-size:10px!important;margin-top:1px!important}
+  .jv-status>small{padding-top:5px!important;margin:0!important;font-size:6.5px!important;line-height:1.2!important}
+}
+
+@media (max-width:390px){
+  .jv-orbit-zone{height:274px!important}
+  .voice-core{top:104px!important;transform:translateX(-50%) scale(.52)!important}
+  .orbit-arrow{top:147px!important}
+  .jv-right .jv-quote,
+  .jv-right .jv-status{height:180px!important;min-height:180px!important;max-height:180px!important}
+}
+
+/* =========================================================
    AMBIENTE FUTURISTA EN MOVIMIENTO
    Capas visuales únicamente: no cambia tamaños ni posiciones
    ========================================================= */
