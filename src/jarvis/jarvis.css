@@ -731,3 +731,29 @@ button{font:inherit;color:inherit}
   }
   .jv-summary article{height:148px!important}
 }
+
+/* =========================================================
+   V13 — final alignment pass for 1365x690 desktop
+   - voice core centered on the photographic HUD ring
+   - agenda/reminders lowered without moving cards/background
+   ========================================================= */
+@media (min-width:1241px) and (max-height:760px){
+  /* In the deployed capture the photographic ring center sits ~16px left
+     and ~23px above the V12 microphone center. Correct that offset only. */
+  .voice-core{
+    left:calc(50% - 16px)!important;
+    top:135px!important;
+    transform:translateX(-50%) scale(.75)!important;
+    transform-origin:50% 0!important;
+  }
+
+  /* Keep carousel arrows symmetric around the corrected microphone. */
+  .orbit-arrow{top:192px!important}
+  .orbit-arrow.left{left:calc(50% - 144px)!important}
+  .orbit-arrow.right{right:calc(50% - 112px)!important}
+
+  /* Lower both dashboard bars another 48px from V12. */
+  .jv-summary{
+    top:76px!important;
+  }
+}
