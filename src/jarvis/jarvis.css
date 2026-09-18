@@ -865,3 +865,39 @@ button{font:inherit;color:inherit}
     drop-shadow(0 0 10px rgba(64,224,255,.95))
     drop-shadow(0 0 24px rgba(0,125,255,.65));
 }
+
+/* Sin rectángulo: imagen completa y sin recortes */
+.jv-quote{
+  border:0!important;
+  border-radius:0!important;
+  padding:0!important;
+  background:transparent!important;
+  box-shadow:none!important;
+  overflow:visible!important;
+}
+.jv-quote .jv-robot-stage{
+  position:absolute!important;
+  inset:0!important;
+  width:100%!important;
+  height:100%!important;
+  margin:0!important;
+  border:0!important;
+  border-radius:0!important;
+  background:transparent!important;
+  overflow:visible!important;
+}
+.jv-quote .jv-robot-stage::before,
+.jv-quote .jv-robot-stage::after{
+  display:none!important;
+}
+.jv-quote .jv-armor-image{
+  width:100%!important;
+  height:100%!important;
+  object-fit:contain!important;
+  object-position:center center!important;
+  transform:none!important;
+  mix-blend-mode:normal!important;
+  -webkit-mask-image:none!important;
+  mask-image:none!important;
+  filter:none!important;
+}
