@@ -667,3 +667,280 @@ button{font:inherit;color:inherit}
   .jv-earth{top:250px;height:380px;background-size:auto 100%}.jv-horizon{height:180px}
   .jv-float{left:10px!important;right:10px!important;top:82px!important;width:auto;max-height:calc(100svh - 100px)}
 }
+
+
+/* =========================================================
+   JARVIS VIEWPORT FIT V2
+   Corrección de solapamiento en laptops/PC de poca altura.
+   ========================================================= */
+
+/* Escritorio ancho: reservar una franja real para Agenda/Recordatorios */
+@media (min-width:1241px){
+  .jv-main{
+    padding-top:72px;
+    padding-bottom:10px;
+  }
+
+  .jv-orbit-zone{
+    height:455px;
+  }
+
+  .jv-orbit{
+    top:-2px;
+    transform:translateX(-50%) scale(.78);
+    transform-origin:50% 0;
+  }
+
+  .voice-core{
+    top:168px;
+    transform:translateX(-50%) scale(.76);
+    transform-origin:50% 0;
+  }
+
+  .orbit-arrow{
+    top:206px;
+    transform:scale(.82);
+  }
+
+  .hud-ring{top:270px}
+  .ring-b{top:292px}
+  .ring-c{top:314px}
+  .jv-earth{top:282px}
+
+  .jv-summary{
+    height:calc(100vh - 537px);
+    min-height:190px;
+    max-height:245px;
+    margin-top:0;
+    position:relative;
+    z-index:35;
+  }
+
+  .jv-summary article{
+    height:100%;
+    min-height:0;
+    overflow:hidden;
+    background:linear-gradient(150deg,rgba(5,40,61,.94),rgba(1,12,22,.97));
+  }
+
+  .jv-right{
+    top:82px;
+    bottom:10px;
+    gap:9px;
+    overflow:hidden;
+  }
+
+  .jv-quote{
+    min-height:0;
+    padding:11px 12px 9px;
+  }
+
+  .jv-quote blockquote{
+    font-size:14px;
+    line-height:1.3;
+  }
+
+  .jv-sign{
+    margin-top:5px;
+    font-size:13px;
+  }
+
+  .jv-robot-stage{
+    height:185px;
+    margin-top:2px;
+  }
+
+  .jv-armor-image{
+    width:100%;
+    height:100%;
+    max-width:100%;
+    object-fit:contain;
+    object-position:center center;
+  }
+
+  .jv-modes{
+    gap:6px;
+    margin-top:5px;
+  }
+
+  .jv-modes b{
+    font-size:10.5px;
+  }
+
+  .jv-status{
+    min-height:0;
+    padding:11px 12px;
+  }
+
+  .system-globe{
+    width:82px;
+    height:82px;
+    margin:9px auto 11px;
+  }
+
+  .meters{
+    padding:6px 3px;
+  }
+
+  .meters span{font-size:10px}
+  .meters b{font-size:13px}
+  .jv-status>small{
+    padding-top:6px;
+    font-size:10px;
+    line-height:1.3;
+  }
+}
+
+/* Laptops muy bajas: compactar el HUD sin encimar el resumen */
+@media (min-width:1241px) and (max-height:820px){
+  .jv-side{
+    padding-top:14px;
+    padding-bottom:10px;
+  }
+
+  .brand{margin-bottom:8px}
+  .brand b{font-size:27px}
+  .brand i{font-size:12px}
+  .jv-side nav button{
+    padding:7px 12px;
+    font-size:12.5px;
+  }
+  .lock{
+    padding:9px 10px;
+  }
+  .jv-version{
+    margin-top:7px;
+    font-size:10px;
+  }
+
+  .jv-topwidgets{
+    top:10px;
+  }
+  .jv-topwidgets>div{
+    height:58px;
+  }
+
+  .jv-main{
+    padding-top:66px;
+  }
+
+  .jv-orbit-zone{
+    height:438px;
+  }
+
+  .jv-orbit{
+    top:-5px;
+    transform:translateX(-50%) scale(.74);
+  }
+
+  .voice-core{
+    top:157px;
+    transform:translateX(-50%) scale(.70);
+  }
+
+  .orbit-arrow{
+    top:194px;
+    transform:scale(.76);
+  }
+
+  .hud-ring{top:252px}
+  .ring-b{top:272px}
+  .ring-c{top:292px}
+  .jv-earth{top:266px}
+
+  .jv-summary{
+    height:calc(100vh - 514px);
+    min-height:180px;
+    max-height:225px;
+  }
+
+  .jv-summary h3{
+    margin-bottom:5px;
+  }
+
+  .rem{
+    padding:6px 9px;
+    margin:4px 0;
+  }
+
+  .jv-right{
+    top:76px;
+  }
+
+  .jv-robot-stage{
+    height:165px;
+  }
+
+  .system-globe{
+    width:74px;
+    height:74px;
+    margin:7px auto 9px;
+  }
+}
+
+/* Tablet: dos columnas de contenido, sin ocultar robot/estado */
+@media (min-width:761px) and (max-width:1240px){
+  .jv-main{
+    padding-top:82px;
+  }
+
+  .jv-orbit-zone{
+    height:470px;
+  }
+
+  .jv-orbit{
+    transform:translateX(-50%) scale(.82);
+    transform-origin:50% 0;
+  }
+
+  .voice-core{
+    top:180px;
+    transform:translateX(-50%) scale(.82);
+    transform-origin:50% 0;
+  }
+
+  .jv-summary{
+    position:relative;
+    z-index:35;
+  }
+
+  .jv-right{
+    grid-template-columns:minmax(0,1fr) minmax(0,1fr);
+  }
+
+  .jv-quote,.jv-status{
+    min-height:290px;
+  }
+
+  .jv-robot-stage{
+    height:170px;
+  }
+}
+
+/* Teléfono: prioridad a lectura y controles táctiles */
+@media (max-width:760px){
+  .jv-orbit-zone{
+    height:420px;
+  }
+
+  .voice-core{
+    top:182px;
+  }
+
+  .jv-summary{
+    position:relative;
+    z-index:35;
+  }
+
+  .jv-right{
+    grid-template-columns:1fr;
+  }
+
+  .jv-quote,.jv-status{
+    min-height:0;
+  }
+
+  .jv-robot-stage{
+    height:190px;
+  }
+}
