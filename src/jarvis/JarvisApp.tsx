@@ -1,5 +1,4 @@
 ﻿import jarvisRobot from './assets/jarvis-robot.png';
-import jarvisBg from './assets/jarvis-bg.png';
 import React from 'react';
 import {
   CalendarDays, Bell, Mail, MessageCircle, Phone, Globe2,
@@ -227,7 +226,7 @@ export default function JarvisApp() {
     </div>
 
     {/* ------------------------------ principal ----------------------------- */}
-    <main className="jv-main" style={{ '--jarvis-bg': `url(${jarvisBg})` } as React.CSSProperties}>
+    <main className="jv-main">
       <div className="jv-earth" aria-hidden="true" />
 
       <section className="jv-orbit-zone">
