@@ -992,3 +992,114 @@ button{font:inherit;color:inherit}
   .voice-core{top:198px;transform:translateX(-50%) scale(.92)}
   .jv-robot-stage{height:220px}
 }
+
+
+/* =========================================================
+   JARVIS DESKTOP FINE TUNE V4
+   Arco más cerrado + núcleo arriba + paneles inferiores arriba
+   ========================================================= */
+@media (min-width:1241px){
+  /* El hero termina antes para subir Agenda/Recordatorios */
+  .jv-orbit-zone{
+    height:438px;
+  }
+
+  /* Carrusel: ligeramente más abajo y arco visual más compacto */
+  .jv-orbit{
+    top:4px;
+    width:min(790px, calc(100% - 30px));
+    transform:translateX(-50%) scale(.90);
+    transform-origin:50% 0;
+  }
+
+  /* Núcleo: más integrado al arco */
+  .voice-core{
+    top:176px;
+    transform:translateX(-50%) scale(.88);
+  }
+
+  .orbit-arrow{
+    top:205px;
+    transform:scale(.88);
+  }
+
+  /* Horizonte más bajo/estrecho para dejar respirar los controles */
+  .jv-earth{
+    top:287px;
+    height:137px;
+  }
+
+  .hud-ring{top:300px}
+  .ring-b{top:321px}
+  .ring-c{top:342px}
+
+  /* Paneles inferiores suben sin invadir el núcleo */
+  .jv-summary{
+    height:calc(100vh - 500px);
+    min-height:190px;
+    max-height:240px;
+    margin-top:0;
+  }
+}
+
+/* Ajuste específico para laptop/PC de ~768px de alto */
+@media (min-width:1241px) and (max-height:800px){
+  .jv-main{
+    padding-top:62px;
+  }
+
+  .jv-orbit-zone{
+    height:421px;
+  }
+
+  .jv-orbit{
+    top:2px;
+    width:min(780px, calc(100% - 24px));
+    transform:translateX(-50%) scale(.87);
+  }
+
+  .voice-core{
+    top:165px;
+    transform:translateX(-50%) scale(.84);
+  }
+
+  .orbit-arrow{
+    top:195px;
+    transform:scale(.84);
+  }
+
+  .jv-earth{
+    top:273px;
+    height:132px;
+  }
+
+  .hud-ring{top:286px}
+  .ring-b{top:306px}
+  .ring-c{top:326px}
+
+  .jv-summary{
+    height:calc(100vh - 483px);
+    min-height:190px;
+    max-height:220px;
+  }
+}
+
+/* Tablet: arco compacto pero legible */
+@media (min-width:761px) and (max-width:1240px){
+  .jv-orbit{
+    width:min(760px, calc(100% - 20px));
+  }
+  .voice-core{
+    top:172px;
+  }
+}
+
+/* Móvil: mantener carrusel táctil y núcleo separado */
+@media (max-width:760px){
+  .jv-orbit{
+    width:700px;
+  }
+  .voice-core{
+    top:188px;
+  }
+}
