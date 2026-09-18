@@ -489,6 +489,26 @@ button{font:inherit;color:inherit}
   opacity:.98;
 }
 
+/* Imagen HUD completa: mostrarla íntegra dentro del panel */
+.jv-quote .jv-robot-stage{
+  background:#00101c!important;
+}
+.jv-quote .jv-robot-stage::before,
+.jv-quote .jv-robot-stage::after{
+  display:none!important;
+}
+.jv-quote .jv-armor-image{
+  width:100%!important;
+  height:100%!important;
+  object-fit:contain!important;
+  object-position:center center!important;
+  transform:none!important;
+  mix-blend-mode:normal!important;
+  -webkit-mask-image:none!important;
+  mask-image:none!important;
+  filter:none!important;
+}
+
 /* Panel derecho: el robot ocupa todo el rectángulo */
 .jv-quote{
   position:relative;
