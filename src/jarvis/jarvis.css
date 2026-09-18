@@ -489,6 +489,36 @@ button{font:inherit;color:inherit}
   opacity:.98;
 }
 
+/* Panel derecho: el robot ocupa todo el rectángulo */
+.jv-quote{
+  position:relative;
+  padding:0!important;
+  overflow:hidden!important;
+  min-height:0;
+}
+.jv-quote blockquote,
+.jv-quote .jv-sign,
+.jv-quote .jv-modes{
+  display:none!important;
+}
+.jv-quote .jv-robot-stage{
+  position:absolute!important;
+  inset:0!important;
+  width:100%!important;
+  height:100%!important;
+  margin:0!important;
+  border-radius:17px;
+}
+.jv-quote .jv-armor-image{
+  width:100%!important;
+  height:100%!important;
+  object-fit:contain!important;
+  object-position:center center!important;
+  transform:scale(1.28)!important;
+  -webkit-mask-image:linear-gradient(to bottom,transparent 0,#000 5%,#000 91%,transparent 100%);
+  mask-image:linear-gradient(to bottom,transparent 0,#000 5%,#000 91%,transparent 100%);
+}
+
 .jv-modes{display:grid;gap:11px;margin-top:14px;padding-left:6px}
 .jv-modes b{
   display:flex;align-items:center;gap:10px;
