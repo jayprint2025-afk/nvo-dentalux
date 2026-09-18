@@ -1890,3 +1890,25 @@ button{font:inherit;color:inherit}
     transform:translateX(-50%) scale(.48)!important;
   }
 }
+
+/* =========================================================
+   CELULAR V5 — corrección fina del núcleo
+   Punto medio entre V3 (derecha) y V4 (izquierda).
+   SOLO celular. No modifica arco, tarjetas, tablet ni escritorio.
+   ========================================================= */
+@media (max-width:760px){
+  .voice-core{
+    left:calc(50% - 15px)!important;
+    top:228px!important;
+    transform:translateX(-50%) scale(.50)!important;
+    transform-origin:50% 0!important;
+  }
+}
+
+@media (max-width:390px){
+  .voice-core{
+    left:calc(50% - 14px)!important;
+    top:222px!important;
+    transform:translateX(-50%) scale(.48)!important;
+  }
+}
