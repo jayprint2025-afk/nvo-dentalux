@@ -1810,3 +1810,62 @@ button{font:inherit;color:inherit}
   .module-card:nth-child(6){left:calc(50% + 122px)!important;top:90px!important}
   .orbit-arrow{top:238px!important}
 }
+
+/* =========================================================
+   CELULAR V3 — arco más abierto + tarjetas mayores + núcleo centrado
+   SOLO <=760px. Tablet y escritorio permanecen intactos.
+   ========================================================= */
+@media (max-width:760px){
+  /* Baja únicamente el núcleo hasta el centro óptico del anillo de jarvis-bg. */
+  .voice-core{
+    top:228px!important;
+    transform:translateX(-50%) scale(.50)!important;
+    transform-origin:50% 0!important;
+  }
+
+  /* Arco un poco más alto/abierto para rodear el anillo sin perder ninguna tarjeta. */
+  .jv-orbit{
+    top:68px!important;
+    height:230px!important;
+    overflow:visible!important;
+  }
+
+  .module-card,
+  .module-card:nth-child(1),.module-card:nth-child(2),.module-card:nth-child(3),
+  .module-card:nth-child(4),.module-card:nth-child(5),.module-card:nth-child(6){
+    width:76px!important;
+    height:92px!important;
+    padding:6px 4px!important;
+    border-radius:13px!important;
+  }
+  .module-card .mc-icon{width:20px!important;height:20px!important;left:5px!important;top:5px!important}
+  .module-card .mc-icon svg{width:12px!important;height:12px!important}
+  .module-card b{margin-top:15px!important;font-size:8.8px!important}
+  .module-card small{font-size:5.2px!important;line-height:1.15!important;min-height:15px!important}
+  .module-card em{font-size:5.2px!important;padding:2px 5px!important}
+
+  /* Seis posiciones: extremos bajos, centro alto; separación visual mayor. */
+  .module-card:nth-child(1){left:calc(50% - 178px)!important;top:112px!important}
+  .module-card:nth-child(2){left:calc(50% - 132px)!important;top:54px!important}
+  .module-card:nth-child(3){left:calc(50% - 78px)!important;top:12px!important}
+  .module-card:nth-child(4){left:calc(50% + 2px)!important;top:12px!important}
+  .module-card:nth-child(5){left:calc(50% + 56px)!important;top:54px!important}
+  .module-card:nth-child(6){left:calc(50% + 102px)!important;top:112px!important}
+
+  .orbit-arrow{top:292px!important;width:36px!important;height:44px!important}
+}
+
+@media (max-width:390px){
+  .voice-core{top:222px!important;transform:translateX(-50%) scale(.48)!important}
+  .jv-orbit{top:66px!important}
+  .module-card,
+  .module-card:nth-child(1),.module-card:nth-child(2),.module-card:nth-child(3),
+  .module-card:nth-child(4),.module-card:nth-child(5),.module-card:nth-child(6){width:72px!important;height:88px!important}
+  .module-card:nth-child(1){left:calc(50% - 174px)!important;top:108px!important}
+  .module-card:nth-child(2){left:calc(50% - 128px)!important;top:52px!important}
+  .module-card:nth-child(3){left:calc(50% - 74px)!important;top:12px!important}
+  .module-card:nth-child(4){left:calc(50% + 2px)!important;top:12px!important}
+  .module-card:nth-child(5){left:calc(50% + 56px)!important;top:52px!important}
+  .module-card:nth-child(6){left:calc(50% + 102px)!important;top:108px!important}
+  .orbit-arrow{top:284px!important}
+}
