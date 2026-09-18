@@ -1,4 +1,4 @@
-﻿import jarvisRobot from './assets/jarvis-robot.png';
+import jarvisRobot from './assets/jarvis-robot.png';
 import React from 'react';
 import {
   CalendarDays, Bell, Mail, MessageCircle, Phone, Globe2,
@@ -408,7 +408,7 @@ export default function JarvisApp() {
           <span>Voz<b>100%</b></span>
           <span>Servicios<b>{health?.central_connected ? '100%' : '--'}</b></span>
         </div>
-        <small>“La tecnologÃ­a al servicio de tus metas.”</small>
+        <small>“La tecnología al servicio de tus metas.”</small>
       </section>
     </aside>
 
