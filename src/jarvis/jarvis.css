@@ -633,6 +633,76 @@ button{font:inherit;color:inherit}
   .jv-main{transition:none!important}
 }
 
+/* Respuesta visual sincronizada con los sonidos de interfaz */
+.jv-stark::after{
+  content:"";
+  position:fixed;
+  inset:0;
+  z-index:120;
+  pointer-events:none;
+  opacity:0;
+  mix-blend-mode:screen;
+}
+.jv-stark.jv-fx-open::after{
+  background:radial-gradient(circle at 50% 43%,transparent 0 7%,rgba(104,235,255,.58) 8%,rgba(0,155,255,.16) 10%,transparent 18%);
+  animation:jvUiOpen .62s ease-out;
+}
+.jv-stark.jv-fx-slide::after{
+  background:linear-gradient(105deg,transparent 32%,rgba(92,229,255,.08) 43%,rgba(207,253,255,.62) 50%,rgba(0,158,255,.12) 57%,transparent 68%);
+  animation:jvUiSlide .48s ease-out;
+}
+.jv-stark.jv-fx-close::after{
+  background:radial-gradient(ellipse at 50% 45%,transparent 20%,rgba(0,95,175,.12) 52%,rgba(0,8,20,.7) 100%);
+  animation:jvUiClose .48s ease-out;
+}
+.jv-stark.jv-fx-mic::after{
+  background:radial-gradient(circle at 50% 47%,rgba(220,254,255,.7) 0 1%,rgba(47,220,255,.42) 2%,transparent 5%,transparent 10%,rgba(27,191,255,.28) 11%,transparent 18%);
+  animation:jvMicBurst .7s ease-out;
+}
+.jv-stark.jv-fx-hover .module-card:hover{
+  filter:brightness(1.18) drop-shadow(0 0 13px rgba(84,226,255,.68));
+}
+.jv-stark.jv-fx-open .module-card.selected{
+  animation:jvCardLock .62s ease-out!important;
+}
+.jv-stark.jv-fx-slide .jv-orbit{
+  animation:jvDeckFlash .48s ease-out;
+}
+.orbit-arrow:active,
+.orb:active,
+.jv-float header button:active{
+  filter:brightness(1.5) drop-shadow(0 0 12px #5cecff);
+}
+
+@keyframes jvUiOpen{
+  0%{opacity:0;transform:scale(.72)}
+  28%{opacity:1}
+  100%{opacity:0;transform:scale(1.45)}
+}
+@keyframes jvUiSlide{
+  0%{opacity:0;transform:translateX(-35%)}
+  35%{opacity:.8}
+  100%{opacity:0;transform:translateX(35%)}
+}
+@keyframes jvUiClose{
+  0%{opacity:.75;transform:scale(1)}
+  100%{opacity:0;transform:scale(.92)}
+}
+@keyframes jvMicBurst{
+  0%{opacity:0;transform:scale(.45)}
+  25%{opacity:1}
+  100%{opacity:0;transform:scale(1.8)}
+}
+@keyframes jvCardLock{
+  0%{filter:brightness(1)}
+  32%{filter:brightness(1.65) drop-shadow(0 0 20px rgba(101,239,255,.9))}
+  100%{filter:brightness(1)}
+}
+@keyframes jvDeckFlash{
+  0%,100%{filter:brightness(1)}
+  45%{filter:brightness(1.3) drop-shadow(0 0 18px rgba(54,214,255,.45))}
+}
+
 /* Panel derecho: el robot ocupa todo el rectángulo */
 .jv-quote{
   position:relative;
