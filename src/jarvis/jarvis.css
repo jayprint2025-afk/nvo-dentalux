@@ -746,24 +746,14 @@ button{font:inherit;color:inherit}
 
 @media (min-width:1241px) and (max-height:760px){
   .jv-main{
-    padding-top:42px;
-    background-size:100% auto!important;
+    padding-top:48px;
+    background-size:cover!important;
     background-position:center center!important;
   }
-  .jv-orbit-zone{height:390px}
-  .jv-orbit{transform:translateX(-50%) scale(.84);transform-origin:50% 0}
-  .voice-core{top:216px;transform:translateX(-50%) scale(.82);transform-origin:50% 0}
-  .orbit-arrow{top:218px;transform:scale(.84)}
-  .orbit-arrow.left{left:calc(50% - 132px)}
-  .orbit-arrow.right{right:calc(50% - 132px)}
+  .jv-orbit-zone{height:398px}
+  .jv-orbit{transform:translateX(-50%) scale(.92);transform-origin:50% 0}
+  .voice-core{top:166px;transform:translateX(-50%) scale(.90);transform-origin:50% 0}
+  .orbit-arrow{top:226px}
   .jv-summary,
-  .jv-summary article{height:190px;min-height:190px;max-height:190px}
-  .jv-right{display:grid;grid-template-rows:330px minmax(0,1fr);gap:10px}
-  .jv-quote,.jv-status{min-height:0;overflow:hidden}
-  .jv-quote{height:330px}
-  .jv-robot-stage{height:160px}
-  .jv-status{height:auto}
-  .system-globe{width:62px;height:62px;margin:4px auto 6px}
-  .meters{padding:6px 4px}
-  .jv-status>small{padding-top:7px;font-size:10px}
+  .jv-summary article{height:188px;min-height:188px;max-height:188px}
 }
