@@ -1231,3 +1231,62 @@ button{font:inherit;color:inherit}
   .orbit-arrow.right{right:calc(50% - 132px) !important}
   .jv-summary article{min-height:180px !important;padding:10px !important}
 }
+
+/* =========================================================
+   JARVIS — BACKGROUND ASSET OVERRIDE
+   Usa jarvis-bg.png importado desde JarvisApp.tsx como --jarvis-bg.
+   Se aplica SOLO al área central y queda detrás de toda la interfaz.
+   ========================================================= */
+
+.jv-main{
+  isolation:isolate;
+  background-image:
+    linear-gradient(rgba(1,9,18,.10), rgba(1,9,18,.16)),
+    var(--jarvis-bg);
+  background-repeat:no-repeat,no-repeat;
+  background-position:center center,center center;
+  background-size:100% 100%,cover;
+}
+
+/* El contenido de JARVIS permanece por encima del fondo */
+.jv-main > *{
+  position:relative;
+  z-index:2;
+}
+
+/* La imagen nueva ya contiene la Tierra y los dos juegos de anillos.
+   Ocultamos las versiones CSS/earth antiguas para no duplicarlas. */
+.jv-main .jv-earth,
+.jv-main .jv-horizon,
+.jv-main .hud-ring{
+  display:none !important;
+}
+
+/* Quitamos la retícula SVG del arco para conservar el fondo original
+   de jarvis-bg.png sin taparlo. */
+.jv-main .jv-orbit-zone::before{
+  display:none !important;
+}
+
+/* El fondo nuevo ya aporta la profundidad visual central. */
+@media (min-width:1241px){
+  .jv-main{
+    background-position:center center,center center;
+    background-size:100% 100%,cover;
+  }
+}
+
+@media (max-width:1240px){
+  .jv-main{
+    background-size:auto 100%,cover;
+    background-position:center top,center top;
+  }
+}
+
+@media (max-width:760px){
+  .jv-main{
+    background-size:auto 100%,cover;
+    background-position:center top,center top;
+  }
+}
+
