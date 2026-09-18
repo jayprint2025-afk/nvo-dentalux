@@ -1739,3 +1739,74 @@ button{font:inherit;color:inherit}
   .module-card:nth-child(4){right:calc(50% - 170px)!important;top:46px!important}
   .orbit-arrow{top:292px!important}
 }
+
+/* =========================================================
+   CELULAR V2 — 6 TARJETAS EN ARCO + MIC AL CENTRO DEL ANILLO
+   Ajuste exclusivo <=760px basado en captura móvil.
+   ========================================================= */
+@media (max-width:760px){
+  /* Centro del núcleo sobre el punto luminoso central del anillo de fondo. */
+  .voice-core{
+    top:170px!important;
+    transform:translateX(-50%) scale(.50)!important;
+    transform-origin:50% 0!important;
+  }
+
+  /* Carrusel completo: las seis tarjetas permanecen visibles y abrazan el arco. */
+  .jv-orbit{
+    left:50%!important;
+    top:74px!important;
+    width:100%!important;
+    height:205px!important;
+    transform:translateX(-50%)!important;
+    overflow:visible!important;
+  }
+  .module-card,
+  .module-card:nth-child(1),.module-card:nth-child(2),.module-card:nth-child(3),
+  .module-card:nth-child(4),.module-card:nth-child(5),.module-card:nth-child(6){
+    display:flex!important;
+    width:68px!important;
+    height:82px!important;
+    margin:0!important;
+    padding:5px 3px!important;
+    border-width:1px!important;
+    border-radius:11px!important;
+    transform:none!important;
+    opacity:.88!important;
+    filter:none!important;
+  }
+  .module-card .mc-icon{
+    width:18px!important;height:18px!important;left:4px!important;top:4px!important;border-radius:6px!important;
+  }
+  .module-card .mc-icon svg{width:11px!important;height:11px!important}
+  .module-card b{margin-top:13px!important;font-size:8px!important;line-height:1.05!important;white-space:nowrap!important}
+  .module-card small{font-size:4.8px!important;line-height:1.12!important;min-height:13px!important}
+  .module-card em{font-size:4.8px!important;padding:1px 4px!important;white-space:nowrap!important}
+
+  /* Arco simétrico alrededor del centro del anillo. */
+  .module-card:nth-child(1){left:calc(50% - 200px)!important;top:94px!important}
+  .module-card:nth-child(2){left:calc(50% - 136px)!important;top:45px!important}
+  .module-card:nth-child(3){left:calc(50% - 68px)!important;top:14px!important}
+  .module-card:nth-child(4){left:50%!important;top:14px!important}
+  .module-card:nth-child(5){left:calc(50% + 68px)!important;top:45px!important}
+  .module-card:nth-child(6){left:calc(50% + 132px)!important;top:94px!important}
+
+  /* Flechas a los costados del anillo. */
+  .orbit-arrow{top:244px!important;width:34px!important;height:42px!important}
+  .orbit-arrow.left{left:14px!important}.orbit-arrow.right{right:14px!important}
+}
+
+@media (max-width:390px){
+  .voice-core{top:166px!important;transform:translateX(-50%) scale(.48)!important}
+  .jv-orbit{top:72px!important}
+  .module-card,
+  .module-card:nth-child(1),.module-card:nth-child(2),.module-card:nth-child(3),
+  .module-card:nth-child(4),.module-card:nth-child(5),.module-card:nth-child(6){width:62px!important;height:76px!important}
+  .module-card:nth-child(1){left:calc(50% - 184px)!important;top:90px!important}
+  .module-card:nth-child(2){left:calc(50% - 124px)!important;top:43px!important}
+  .module-card:nth-child(3){left:calc(50% - 62px)!important;top:14px!important}
+  .module-card:nth-child(4){left:50%!important;top:14px!important}
+  .module-card:nth-child(5){left:calc(50% + 62px)!important;top:43px!important}
+  .module-card:nth-child(6){left:calc(50% + 122px)!important;top:90px!important}
+  .orbit-arrow{top:238px!important}
+}
