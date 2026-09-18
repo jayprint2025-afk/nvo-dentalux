@@ -1385,3 +1385,63 @@ button{font:inherit;color:inherit}
   .jv-summary{height:150px!important;min-height:150px!important;max-height:150px!important;gap:10px!important;margin-top:0!important;z-index:42!important}.jv-summary article{height:150px!important;min-height:0!important;padding:8px 10px!important;border-radius:14px!important;overflow:hidden!important}.jv-summary h3{font-size:13px!important;margin-bottom:4px!important}.jv-summary h3 svg{width:17px!important;height:17px!important}.jv-summary h3 a{font-size:9px!important}.rem{min-height:34px!important;height:34px!important;padding:4px 7px!important;margin:3px 0!important}.rem .dot{width:23px!important;height:23px!important}.rem b{font-size:10.5px!important}.rem small{font-size:8px!important}.rem .chev{width:15px!important}
 }
 @media (min-width:1241px) and (max-height:720px){.jv-main{padding-top:38px!important}.jv-orbit-zone{height:400px!important}.jv-orbit{top:0!important}.voice-core{top:190px!important}.orbit-arrow{top:234px!important}.jv-summary{height:142px!important;min-height:142px!important;max-height:142px!important}.jv-summary article{height:142px!important}}
+
+/* =========================================================
+   JARVIS REFERENCE MATCH V10 — final geometry / 3D cards / voice core
+   18 Sep 2026
+   ========================================================= */
+@media (min-width:1241px){
+  .jv-main{
+    padding:34px 18px 8px!important;
+    background-image:linear-gradient(rgba(1,8,16,.03),rgba(1,8,16,.06)),url('./assets/jarvis-bg.png')!important;
+    background-position:center top,center top!important;
+    background-size:100% 100%,100% 100%!important;
+    overflow:hidden!important;
+  }
+  .jv-orbit-zone{height:438px!important;overflow:visible!important}
+  .jv-orbit{top:0!important;width:900px!important;height:280px!important;perspective:950px!important;transform:translateX(-50%)!important;transform-style:preserve-3d!important}
+
+  .module-card{
+    top:30px!important;width:142px!important;height:174px!important;padding:15px 9px 11px!important;
+    border-radius:21px!important;border-width:2px!important;
+    transform-style:preserve-3d!important;backface-visibility:hidden!important;
+    background:linear-gradient(145deg,rgba(255,255,255,.20) 0%,rgba(255,255,255,.04) 15%,transparent 34%),radial-gradient(ellipse at 50% -8%,rgba(85,225,255,.36),transparent 50%),linear-gradient(158deg,rgba(9,57,84,.98),rgba(2,21,35,.985) 58%,rgba(1,9,17,.995))!important;
+    box-shadow:0 0 2px rgba(255,255,255,.95),0 0 10px rgba(101,231,255,.92),0 0 30px rgba(0,169,255,.64),0 22px 34px rgba(0,0,0,.70),inset 0 1px 0 rgba(255,255,255,.70),inset 0 -16px 30px rgba(0,0,0,.22),inset 0 0 32px rgba(0,193,255,.20)!important;
+  }
+  .module-card:nth-child(1){transform:translateX(-414px) translateY(70px) translateZ(-55px) rotateY(24deg) rotateZ(-11deg)!important}
+  .module-card:nth-child(2){transform:translateX(-276px) translateY(30px) translateZ(-24px) rotateY(15deg) rotateZ(-7deg)!important}
+  .module-card:nth-child(3){transform:translateX(-138px) translateY(2px) translateZ(8px) rotateY(6deg) rotateZ(-2deg)!important}
+  .module-card:nth-child(4){transform:translateX(0px) translateY(2px) translateZ(8px) rotateY(-6deg) rotateZ(2deg)!important}
+  .module-card:nth-child(5){transform:translateX(138px) translateY(30px) translateZ(-24px) rotateY(-15deg) rotateZ(7deg)!important}
+  .module-card:nth-child(6){transform:translateX(276px) translateY(70px) translateZ(-55px) rotateY(-24deg) rotateZ(11deg)!important}
+  .module-card:hover,.module-card.selected{z-index:35!important;filter:brightness(1.08)!important}
+  .module-card:nth-child(1):hover,.module-card:nth-child(1).selected{transform:translateX(-414px) translateY(62px) translateZ(15px) rotateY(18deg) rotateZ(-8deg) scale(1.04)!important}
+  .module-card:nth-child(2):hover,.module-card:nth-child(2).selected{transform:translateX(-276px) translateY(22px) translateZ(18px) rotateY(11deg) rotateZ(-5deg) scale(1.04)!important}
+  .module-card:nth-child(3):hover,.module-card:nth-child(3).selected{transform:translateX(-138px) translateY(-6px) translateZ(24px) rotateY(4deg) rotateZ(-1deg) scale(1.04)!important}
+  .module-card:nth-child(4):hover,.module-card:nth-child(4).selected{transform:translateX(0px) translateY(-6px) translateZ(24px) rotateY(-4deg) rotateZ(1deg) scale(1.04)!important}
+  .module-card:nth-child(5):hover,.module-card:nth-child(5).selected{transform:translateX(138px) translateY(22px) translateZ(18px) rotateY(-11deg) rotateZ(5deg) scale(1.04)!important}
+  .module-card:nth-child(6):hover,.module-card:nth-child(6).selected{transform:translateX(276px) translateY(62px) translateZ(15px) rotateY(-18deg) rotateZ(8deg) scale(1.04)!important}
+  .module-card::before{inset:3px!important;border-radius:17px!important;background:linear-gradient(135deg,rgba(255,255,255,.30),rgba(255,255,255,.06) 18%,transparent 43%),linear-gradient(0deg,rgba(0,195,255,.16),transparent 45%)!important}
+  .module-card::after{inset:8px!important;border-radius:13px!important;border-color:rgba(196,250,255,.22)!important}
+  .module-card svg{width:34px!important;height:34px!important}.module-card b{font-size:15.5px!important}.module-card small{font-size:9.5px!important;line-height:1.25!important;min-height:26px!important}.module-card em{font-size:8.5px!important;padding:3px 9px!important}
+
+  .voice-core{top:226px!important;width:560px!important;z-index:40!important;transform:translateX(-50%)!important}
+  .orb{width:154px!important;height:154px!important;isolation:isolate!important}
+  .orb::before{width:194px!important;height:194px!important;border:2px solid rgba(186,249,255,.85)!important;box-shadow:0 0 5px #fff,0 0 16px #72efff,0 0 42px rgba(0,160,255,.82),inset 0 0 30px rgba(0,183,255,.30)!important}
+  .orb-halo{width:224px!important;height:224px!important;filter:blur(11px)!important;background:radial-gradient(circle,rgba(54,220,255,.52),rgba(0,133,255,.18) 50%,transparent 72%)!important}
+  .orb-arc{width:184px!important;height:184px!important;border-width:2px!important;box-shadow:0 0 8px #dffcff,0 0 22px rgba(0,198,255,.86)!important}
+  .orb-ring{width:158px!important;height:158px!important;border:7px solid #55e8ff!important;box-shadow:0 0 4px #fff,0 0 15px #76efff,0 0 42px rgba(0,165,255,.98),inset 0 0 27px rgba(0,211,255,.88)!important}
+  .orb-disc{width:136px!important;height:136px!important;background:radial-gradient(circle at 50% 38%,#0d6387 0,#063854 38%,#021927 68%,#01080e 100%)!important;box-shadow:inset 0 0 40px rgba(0,199,255,.66),inset 0 12px 25px rgba(0,0,0,.72),0 0 17px rgba(0,190,255,.48)!important}
+  .orb-mic{width:58px!important;height:58px!important;color:#a1f4ff!important;filter:drop-shadow(0 0 5px #fff) drop-shadow(0 0 18px #20d0ff)!important}
+  .voice-core h2{margin-top:10px!important;font-size:15px!important}.voice-core p{font-size:9px!important;margin-top:1px!important}.jv-wave{height:23px!important;margin-top:1px!important}.tags{margin-top:1px!important}.tags i{font-size:7.5px!important;padding:2px 7px!important}
+
+  .orbit-arrow{top:270px!important;width:48px!important;height:58px!important;z-index:50!important;border-radius:50%!important}
+  .orbit-arrow.left{left:calc(50% - 145px)!important}.orbit-arrow.right{right:calc(50% - 145px)!important}.orbit-arrow svg{width:26px!important;height:26px!important}
+
+  .jv-summary{height:calc(100vh - 500px)!important;min-height:152px!important;max-height:196px!important;gap:12px!important;margin-top:0!important;position:relative!important;z-index:45!important}
+  .jv-summary article{height:100%!important;min-height:0!important;padding:9px 11px!important;border-radius:16px!important;overflow:hidden!important;background:linear-gradient(145deg,rgba(6,39,59,.88),rgba(1,12,21,.93))!important;backdrop-filter:blur(5px)!important;box-shadow:0 0 7px rgba(120,239,255,.28),0 0 24px rgba(0,145,255,.25),inset 0 1px 0 rgba(196,247,255,.12),inset 0 0 34px rgba(0,170,255,.09)!important}
+  .jv-summary h3{font-size:13px!important;margin-bottom:4px!important}.jv-summary h3 svg{width:18px!important;height:18px!important}.jv-summary h3 a{font-size:9px!important}.rem{min-height:34px!important;height:34px!important;padding:4px 7px!important;margin:3px 0!important}.rem .dot{width:23px!important;height:23px!important}.rem b{font-size:10.5px!important}.rem small{font-size:8px!important}
+}
+@media (min-width:1241px) and (max-height:720px){
+  .jv-main{padding-top:28px!important}.jv-orbit-zone{height:430px!important}.voice-core{top:216px!important}.orbit-arrow{top:260px!important}.jv-summary{height:150px!important;min-height:150px!important;max-height:150px!important}
+}
