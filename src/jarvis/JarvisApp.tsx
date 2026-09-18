@@ -66,6 +66,7 @@ export default function JarvisApp() {
   const stageRef = React.useRef<HTMLDivElement | null>(null);
   const audioRef = React.useRef<AudioContext | null>(null);
   const lastHoverSound = React.useRef(0);
+  const carouselSwipe = React.useRef({ x: 0, y: 0, active: false, moved: false, pointerId: -1 });
 
   const flashUi = React.useCallback((kind: 'open' | 'slide' | 'close' | 'mic' | 'hover') => {
     const stage = stageRef.current;
@@ -204,6 +205,29 @@ export default function JarvisApp() {
     setCarousel(v => (v + direction + modules.length) % modules.length);
   };
 
+  // Swipe real: deslizar horizontalmente equivale a pulsar una flecha.
+  const onCarouselPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    carouselSwipe.current = { x: e.clientX, y: e.clientY, active: true, moved: false, pointerId: e.pointerId };
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch {}
+  };
+  const onCarouselPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const s = carouselSwipe.current;
+    if (!s.active || s.pointerId !== e.pointerId) return;
+    const dx = e.clientX - s.x, dy = e.clientY - s.y;
+    if (Math.abs(dx) > 8 && Math.abs(dx) > Math.abs(dy)) { s.moved = true; e.preventDefault(); }
+  };
+  const finishCarouselSwipe = (e: React.PointerEvent<HTMLDivElement>) => {
+    const s = carouselSwipe.current;
+    if (!s.active || s.pointerId !== e.pointerId) return;
+    const dx = e.clientX - s.x, dy = e.clientY - s.y;
+    const shouldRotate = Math.abs(dx) >= 24 && Math.abs(dx) > Math.abs(dy);
+    s.active = false;
+    try { e.currentTarget.releasePointerCapture(e.pointerId); } catch {}
+    if (shouldRotate) slideCarousel(dx < 0 ? 1 : -1);
+    window.setTimeout(() => { carouselSwipe.current.moved = false; }, 100);
+  };
+
   const hoverCard = () => {
     const now = performance.now();
     if (now - lastHoverSound.current < 180) return;
@@ -330,14 +354,18 @@ export default function JarvisApp() {
         <button className="orbit-arrow left" aria-label="Anterior"
           onClick={() => slideCarousel(-1)}><ChevronLeft /></button>
 
-        <div className="jv-orbit">
+        <div className="jv-orbit"
+          onPointerDown={onCarouselPointerDown}
+          onPointerMove={onCarouselPointerMove}
+          onPointerUp={finishCarouselSwipe}
+          onPointerCancel={finishCarouselSwipe}>
           {rotated.map((m, i) => {
             const I = m.icon, slot = i - 2.5, b = badge(m.id);
             return <button key={m.id}
               className={`module-card ${m.accent} ${selected === m.id ? 'selected' : ''}`}
               style={{ '--slot': slot, '--lift': Math.abs(slot) } as React.CSSProperties}
               onPointerEnter={hoverCard}
-              onClick={() => activate(m.id)}>
+              onClick={() => { if (!carouselSwipe.current.moved) activate(m.id); }}>
               <span className="mc-icon"><I /></span>
               <b>{m.label}</b><small>{m.sub}</small>
               {b && <em>{b}</em>}
