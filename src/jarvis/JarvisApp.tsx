@@ -242,7 +242,8 @@ export default function JarvisApp() {
               className={`module-card ${m.accent} ${selected === m.id ? 'selected' : ''}`}
               style={{ '--slot': slot, '--lift': Math.abs(slot) } as React.CSSProperties}
               onClick={() => activate(m.id)}>
-              <I /><b>{m.label}</b><small>{m.sub}</small>
+              <span className="mc-icon"><I /></span>
+              <b>{m.label}</b><small>{m.sub}</small>
               {b && <em>{b}</em>}
             </button>;
           })}
@@ -347,4 +348,3 @@ export default function JarvisApp() {
     {open.length > 0 && <button className="jv-reset" onClick={resetPanels}><Sparkles /> Reorganizar paneles</button>}
   </div>;
 }
-
