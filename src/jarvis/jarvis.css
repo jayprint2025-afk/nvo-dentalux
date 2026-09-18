@@ -1869,3 +1869,24 @@ button{font:inherit;color:inherit}
   .module-card:nth-child(6){left:calc(50% + 102px)!important;top:108px!important}
   .orbit-arrow{top:284px!important}
 }
+
+/* =========================================================
+   CELULAR V4 FINAL — MICRÓFONO AL CENTRO ÓPTICO DEL ANILLO
+   SOLO <=760px. No modifica tarjetas, arco, tablet ni escritorio.
+   ========================================================= */
+@media (max-width:760px){
+  .voice-core{
+    left:calc(50% - 45px)!important;
+    top:211px!important;
+    transform:translateX(-50%) scale(.50)!important;
+    transform-origin:50% 0!important;
+  }
+}
+
+@media (max-width:390px){
+  .voice-core{
+    left:calc(50% - 42px)!important;
+    top:205px!important;
+    transform:translateX(-50%) scale(.48)!important;
+  }
+}
