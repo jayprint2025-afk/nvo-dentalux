@@ -2039,3 +2039,46 @@ button{font:inherit;color:inherit}
   }
 }
 
+/* =========================================================
+   V10 — AJUSTE FINAL DEL BLOQUE INFERIOR (SOLO CELULAR)
+   CONGELADOS: fondo, micrófono, arco y tarjetas.
+   ========================================================= */
+@media (max-width:760px){
+  /* Sólo la información que vive debajo del núcleo */
+  .voice-core h2,
+  .voice-core p,
+  .voice-core .jv-wave,
+  .voice-core .tags{
+    left:36px!important;
+    width:max-content;
+    max-width:92vw;
+  }
+
+  .voice-core h2,
+  .voice-core p{
+    margin-left:auto!important;
+    margin-right:auto!important;
+    text-align:center!important;
+  }
+
+  .voice-core .jv-wave{
+    margin-left:auto!important;
+    margin-right:auto!important;
+  }
+
+  .voice-core .tags{
+    margin-left:auto!important;
+    margin-right:auto!important;
+    justify-content:center!important;
+  }
+}
+
+@media (max-width:390px){
+  .voice-core h2,
+  .voice-core p,
+  .voice-core .jv-wave,
+  .voice-core .tags{
+    left:35px!important;
+  }
+}
+
