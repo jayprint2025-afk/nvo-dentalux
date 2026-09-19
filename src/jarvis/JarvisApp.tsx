@@ -176,6 +176,8 @@ export default function JarvisApp() {
   const stageRef = React.useRef<HTMLDivElement | null>(null);
   const audioRef = React.useRef<AudioContext | null>(null);
   const lastHoverSound = React.useRef(0);
+  const waVoiceContactsRef = React.useRef<WaContact[]>([]);
+  const waLastVoiceCommandRef = React.useRef({ text: '', at: 0 });
   const waSeenIncomingRef = React.useRef<Set<string>>(new Set());
   const waInitialLoadRef = React.useRef(true);
   const [waIncomingPulse, setWaIncomingPulse] = React.useState(false);
@@ -257,6 +259,91 @@ export default function JarvisApp() {
     };
   }, []);
 
+  React.useEffect(() => {
+    waVoiceContactsRef.current = waSavedContacts;
+  }, [waSavedContacts]);
+
+  const normalizeVoiceText = (value: string) =>
+    String(value || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9+\s]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+  const handleVoiceWhatsAppCommand = React.useCallback(async (spoken: string) => {
+    const raw = String(spoken || '').trim();
+    if (!raw) return false;
+
+    const normalized = normalizeVoiceText(raw);
+    const patterns = [
+      /^(?:jarvis\s+)?(?:manda|mandale|envia|enviale)\s+(?:un\s+)?mensaje\s+a\s+(.+?)\s+(?:y\s+)?(?:dile|diciendo|que\s+diga|con\s+el\s+mensaje)\s+(.+)$/i,
+      /^(?:jarvis\s+)?(?:manda|mandale|envia|enviale)\s+a\s+(.+?)\s+(?:y\s+)?(?:dile|diciendo|que)\s+(.+)$/i,
+      /^(?:jarvis\s+)?dile\s+a\s+(.+?)\s+que\s+(.+)$/i,
+    ];
+
+    let match: RegExpMatchArray | null = null;
+    for (const pattern of patterns) {
+      match = normalized.match(pattern);
+      if (match) break;
+    }
+    if (!match) return false;
+
+    // Recuperamos el mensaje desde la frase ORIGINAL para conservar mayúsculas, acentos y puntuación.
+    const targetNormalized = normalizeVoiceText(match[1]);
+    const markerCandidates = [' dile ', ' diciendo ', ' que diga ', ' con el mensaje ', ' que '];
+    const rawLower = normalizeVoiceText(raw);
+    let message = match[2].trim();
+    for (const marker of markerCandidates) {
+      const idx = rawLower.indexOf(marker, rawLower.indexOf(targetNormalized));
+      if (idx >= 0) {
+        // La longitud puede variar por acentos; buscamos el marcador equivalente en el original.
+        const originalMatch = raw.match(/\s(?:y\s+)?(?:dile|diciendo|que\s+diga|con\s+el\s+mensaje|que)\s+(.+)$/i);
+        if (originalMatch?.[1]) message = originalMatch[1].trim();
+        break;
+      }
+    }
+
+    const nowMs = Date.now();
+    if (waLastVoiceCommandRef.current.text === normalized && nowMs - waLastVoiceCommandRef.current.at < 6000) return true;
+    waLastVoiceCommandRef.current = { text: normalized, at: nowMs };
+
+    const contacts = waVoiceContactsRef.current;
+    const exact = contacts.filter(c => normalizeVoiceText(String(c.name || '')) === targetNormalized);
+    const candidates = exact.length ? exact : contacts.filter(c => {
+      const n = normalizeVoiceText(String(c.name || ''));
+      return n.startsWith(targetNormalized) || targetNormalized.startsWith(n);
+    });
+
+    if (candidates.length === 0) {
+      setLastText(`JARVIS: No encontré el contacto “${match[1]}”.`);
+      return true;
+    }
+    if (candidates.length > 1) {
+      setLastText(`JARVIS: Encontré varios contactos para “${match[1]}”. Dime el nombre completo.`);
+      return true;
+    }
+
+    const contact = candidates[0];
+    try {
+      await jarvisWhatsAppApi('/api/whatsapp/jarvis/send-message', {
+        method: 'POST',
+        body: JSON.stringify({ phone: contact.phone, message }),
+      });
+      setWaChat(String(contact.phone));
+      setSelected('whatsapp');
+      setLastText(`JARVIS: Mensaje enviado a ${contact.name}: “${message}”`);
+      playUiSound('wa-send');
+      window.dispatchEvent(new Event('jarvis:whatsapp-voice-sent'));
+      return true;
+    } catch (error: any) {
+      console.error('JARVIS voice WhatsApp:', error);
+      setLastText(`JARVIS: No pude enviar el mensaje a ${contact.name}.`);
+      return true;
+    }
+  }, [playUiSound]);
+
   const loadDashboard = React.useCallback(async () => {
     try {
       const data: any = await jarvisApi<any>('/api/jarvis/personal/dashboard');
@@ -281,7 +368,11 @@ export default function JarvisApp() {
       onStatus: setVoiceStatus,
       onTranscript: (t, w) => {
         setLastText(`${w === 'jarvis' ? 'JARVIS' : 'Tú'}: ${t}`);
-        if (w === 'jarvis') window.setTimeout(safeLoad, 500);
+        if (w === 'jarvis') {
+          window.setTimeout(safeLoad, 500);
+        } else {
+          void handleVoiceWhatsAppCommand(t);
+        }
       },
       onError: e => setLastText(`Error: ${e.message}`)
     });
@@ -295,7 +386,7 @@ export default function JarvisApp() {
       document.removeEventListener('visibilitychange', refresh);
       voiceRef.current?.stop();
     };
-  }, [loadDashboard]);
+  }, [loadDashboard, handleVoiceWhatsAppCommand]);
 
   const loadWhatsApp = React.useCallback(async (silent = false) => {
     if (!silent) setWaLoading(true);
@@ -347,10 +438,12 @@ export default function JarvisApp() {
     const refresh = () => void loadWhatsApp(true);
     window.addEventListener('focus', refresh);
     document.addEventListener('visibilitychange', refresh);
+    window.addEventListener('jarvis:whatsapp-voice-sent', refresh);
     return () => {
       window.clearInterval(timer);
       window.removeEventListener('focus', refresh);
       document.removeEventListener('visibilitychange', refresh);
+      window.removeEventListener('jarvis:whatsapp-voice-sent', refresh);
     };
   }, [loadWhatsApp]);
 
