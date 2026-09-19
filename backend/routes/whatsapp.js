@@ -1272,6 +1272,7 @@ async function ensureJarvisWaTables() {
     ON jarvis_whatsapp_threads(phone, phone_number_id, active, updated_at DESC)`);
   // Nombre guardado manualmente por JARVIS. ALTER es idempotente para instalaciones existentes.
   await qBypass(`ALTER TABLE jarvis_whatsapp_threads ADD COLUMN IF NOT EXISTS contact_name TEXT`);
+  await qBypass(`ALTER TABLE jarvis_whatsapp_threads ADD COLUMN IF NOT EXISTS hidden BOOLEAN NOT NULL DEFAULT FALSE`);
   await qBypass(`
     CREATE TABLE IF NOT EXISTS jarvis_whatsapp_messages (
       id BIGSERIAL PRIMARY KEY,
@@ -1320,7 +1321,7 @@ async function logJarvisWa({ thread, direction, message, status, waMessageId = n
     (tenant_id,thread_id,channel_id,direction,phone,message,status,wa_message_id)
     VALUES($1::uuid,$2,$3,$4,$5,$6,$7,$8)`,
     [thread.tenant_id, thread.id, JARVIS_WA_CHANNEL_ID, direction, thread.phone, String(message || ''), status || null, waMessageId]);
-  await qBypass(`UPDATE jarvis_whatsapp_threads SET updated_at=NOW() WHERE id=$1`, [thread.id]);
+  await qBypass(`UPDATE jarvis_whatsapp_threads SET hidden=FALSE, updated_at=NOW() WHERE id=$1`, [thread.id]);
 }
 
 // --- Idempotencia por wamid ---
@@ -3213,30 +3214,52 @@ router.post('/jarvis/push/unsubscribe', async (req, res) => {
   } catch (e) { res.status(e.statusCode || 500).json({ ok:false, error:String(e.message || e) }); }
 });
 
-// Guardar/actualizar un contacto exclusivo de JARVIS.
+// Guardar/actualizar contacto exclusivo de JARVIS.
+// IMPORTANTE: si el usuario escribe el mismo número con otro prefijo/formato,
+// primero buscamos por los últimos 10 dígitos para reutilizar el hilo real.
 router.post('/jarvis/contacts', async (req, res) => {
   try {
     const tenantId = requireTenantId(req);
     const name = String(req.body?.name || '').trim();
     const rawPhone = String(req.body?.phone || '').trim();
     if (!name || !rawPhone) return res.status(400).json({ ok:false, error:'Nombre y teléfono son obligatorios' });
-
     await ensureJarvisWaTables();
+
+    const digits = onlyDigits(rawPhone);
+    const local10 = digits.slice(-10);
+    let existing = null;
+    if (local10.length === 10) {
+      const rr = await qBypass(`
+        SELECT * FROM jarvis_whatsapp_threads
+         WHERE tenant_id=$1::uuid AND channel_id=$2
+           AND RIGHT(regexp_replace(phone, '[^0-9]', '', 'g'), 10)=$3
+         ORDER BY updated_at DESC, id DESC LIMIT 1`,
+        [tenantId, JARVIS_WA_CHANNEL_ID, local10]);
+      existing = rr.rows[0] || null;
+    }
+
+    if (existing) {
+      const rr = await qBypass(`UPDATE jarvis_whatsapp_threads
+        SET contact_name=$1, hidden=FALSE, active=TRUE, updated_at=NOW()
+        WHERE id=$2 AND tenant_id=$3::uuid
+        RETURNING id AS thread_id, phone, contact_name, active, hidden, updated_at`,
+        [name, existing.id, tenantId]);
+      const row = rr.rows[0];
+      return res.json({ ok:true, matched_existing:true, contact:{ ...row, id:row.thread_id, name:row.contact_name } });
+    }
+
     const phone = toE164(rawPhone);
     if (!phone) return res.status(400).json({ ok:false, error:'Número de teléfono inválido' });
-
     const { rows } = await qBypass(`
       INSERT INTO jarvis_whatsapp_threads
-        (tenant_id, channel_id, phone, contact_name, active, claimed_at, updated_at)
-      VALUES ($1::uuid,$2,$3,$4,TRUE,NOW(),NOW())
+        (tenant_id, channel_id, phone, contact_name, active, hidden, claimed_at, updated_at)
+      VALUES ($1::uuid,$2,$3,$4,TRUE,FALSE,NOW(),NOW())
       ON CONFLICT (tenant_id, channel_id, phone)
-      DO UPDATE SET contact_name=EXCLUDED.contact_name,
-                    active=TRUE,
-                    updated_at=NOW()
-      RETURNING id AS thread_id, phone, contact_name, active, updated_at
-    `, [tenantId, JARVIS_WA_CHANNEL_ID, phone, name]);
-
-    return res.json({ ok:true, contact:{ ...rows[0], id:rows[0].thread_id, name:rows[0].contact_name } });
+      DO UPDATE SET contact_name=EXCLUDED.contact_name, hidden=FALSE, active=TRUE, updated_at=NOW()
+      RETURNING id AS thread_id, phone, contact_name, active, hidden, updated_at`,
+      [tenantId, JARVIS_WA_CHANNEL_ID, phone, name]);
+    const row=rows[0];
+    return res.json({ ok:true, matched_existing:false, contact:{ ...row, id:row.thread_id, name:row.contact_name } });
   } catch (e) {
     console.error('JARVIS save contact error:', e.message);
     return res.status(e.statusCode || 500).json({ ok:false, error:String(e.message || e) });
@@ -3275,6 +3298,7 @@ router.get('/jarvis/contacts', async (req, res) => {
       ) lm ON TRUE
       WHERE t.tenant_id = $1::uuid
         AND t.channel_id = $2
+        AND COALESCE(t.hidden,FALSE)=FALSE
       ORDER BY COALESCE(lm.created_at, t.updated_at) DESC, t.id DESC
     `, [tenantId, JARVIS_WA_CHANNEL_ID]);
 
@@ -3282,6 +3306,7 @@ router.get('/jarvis/contacts', async (req, res) => {
     const contacts = rows.map(row => ({
       ...row,
       id: row.thread_id,
+      name: row.contact_name || row.phone,
       timestamp: row.last_message_at || row.updated_at,
       message: row.last_message || '',
       type: row.last_direction || null,
@@ -3296,6 +3321,33 @@ router.get('/jarvis/contacts', async (req, res) => {
   }
 });
 
+// Ocultar conversación (estilo WhatsApp). No borra el historial físico:
+// permite DESHACER y mantiene el hilo reclamado por JARVIS.
+router.post('/jarvis/conversations/delete', async (req, res) => {
+  try {
+    const tenantId=requireTenantId(req); await ensureJarvisWaTables();
+    const raw=String(req.body?.phone||'').trim(); const local10=onlyDigits(raw).slice(-10);
+    if(local10.length!==10) return res.status(400).json({ok:false,error:'phone required'});
+    const {rows}=await qBypass(`UPDATE jarvis_whatsapp_threads SET hidden=TRUE,updated_at=NOW()
+      WHERE tenant_id=$1::uuid AND channel_id=$2
+        AND RIGHT(regexp_replace(phone,'[^0-9]','','g'),10)=$3
+      RETURNING id,phone,contact_name`,[tenantId,JARVIS_WA_CHANNEL_ID,local10]);
+    res.json({ok:true,conversation:rows[0]||null});
+  } catch(e){ res.status(e.statusCode||500).json({ok:false,error:String(e.message||e)}); }
+});
+router.post('/jarvis/conversations/restore', async (req, res) => {
+  try {
+    const tenantId=requireTenantId(req); await ensureJarvisWaTables();
+    const raw=String(req.body?.phone||'').trim(); const local10=onlyDigits(raw).slice(-10);
+    if(local10.length!==10) return res.status(400).json({ok:false,error:'phone required'});
+    const {rows}=await qBypass(`UPDATE jarvis_whatsapp_threads SET hidden=FALSE,active=TRUE,updated_at=NOW()
+      WHERE tenant_id=$1::uuid AND channel_id=$2
+        AND RIGHT(regexp_replace(phone,'[^0-9]','','g'),10)=$3
+      RETURNING id,phone,contact_name`,[tenantId,JARVIS_WA_CHANNEL_ID,local10]);
+    res.json({ok:true,conversation:rows[0]||null});
+  } catch(e){ res.status(e.statusCode||500).json({ok:false,error:String(e.message||e)}); }
+});
+
 router.get('/jarvis/messages', async (req, res) => {
   try {
     const tenantId = requireTenantId(req);
@@ -3305,7 +3357,8 @@ router.get('/jarvis/messages', async (req, res) => {
       SELECT m.id, m.wa_message_id, m.direction AS type, m.phone, m.message, m.status,
              m.created_at AS timestamp, NULL::text AS contact_name, TRUE AS manual
         FROM jarvis_whatsapp_messages m
-       WHERE m.tenant_id=$1::uuid AND m.channel_id=$2
+        JOIN jarvis_whatsapp_threads t ON t.id=m.thread_id AND t.tenant_id=m.tenant_id
+       WHERE m.tenant_id=$1::uuid AND m.channel_id=$2 AND COALESCE(t.hidden,FALSE)=FALSE
        ORDER BY m.created_at ASC, m.id ASC
        LIMIT $3`, [tenantId, JARVIS_WA_CHANNEL_ID, limit]);
     res.json(rows);
