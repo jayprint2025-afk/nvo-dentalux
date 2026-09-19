@@ -1270,6 +1270,8 @@ async function ensureJarvisWaTables() {
     )`);
   await qBypass(`CREATE INDEX IF NOT EXISTS idx_jarvis_wa_threads_route
     ON jarvis_whatsapp_threads(phone, phone_number_id, active, updated_at DESC)`);
+  // Nombre guardado manualmente por JARVIS. ALTER es idempotente para instalaciones existentes.
+  await qBypass(`ALTER TABLE jarvis_whatsapp_threads ADD COLUMN IF NOT EXISTS contact_name TEXT`);
   await qBypass(`
     CREATE TABLE IF NOT EXISTS jarvis_whatsapp_messages (
       id BIGSERIAL PRIMARY KEY,
@@ -3211,6 +3213,36 @@ router.post('/jarvis/push/unsubscribe', async (req, res) => {
   } catch (e) { res.status(e.statusCode || 500).json({ ok:false, error:String(e.message || e) }); }
 });
 
+// Guardar/actualizar un contacto exclusivo de JARVIS.
+router.post('/jarvis/contacts', async (req, res) => {
+  try {
+    const tenantId = requireTenantId(req);
+    const name = String(req.body?.name || '').trim();
+    const rawPhone = String(req.body?.phone || '').trim();
+    if (!name || !rawPhone) return res.status(400).json({ ok:false, error:'Nombre y teléfono son obligatorios' });
+
+    await ensureJarvisWaTables();
+    const phone = toE164(rawPhone);
+    if (!phone) return res.status(400).json({ ok:false, error:'Número de teléfono inválido' });
+
+    const { rows } = await qBypass(`
+      INSERT INTO jarvis_whatsapp_threads
+        (tenant_id, channel_id, phone, contact_name, active, claimed_at, updated_at)
+      VALUES ($1::uuid,$2,$3,$4,TRUE,NOW(),NOW())
+      ON CONFLICT (tenant_id, channel_id, phone)
+      DO UPDATE SET contact_name=EXCLUDED.contact_name,
+                    active=TRUE,
+                    updated_at=NOW()
+      RETURNING id AS thread_id, phone, contact_name, active, updated_at
+    `, [tenantId, JARVIS_WA_CHANNEL_ID, phone, name]);
+
+    return res.json({ ok:true, contact:{ ...rows[0], id:rows[0].thread_id, name:rows[0].contact_name } });
+  } catch (e) {
+    console.error('JARVIS save contact error:', e.message);
+    return res.status(e.statusCode || 500).json({ ok:false, error:String(e.message || e) });
+  }
+});
+
 // Lista de conversaciones/contactos exclusivos de JARVIS.
 // El frontend usa este endpoint para construir el panel de hilos.
 router.get('/jarvis/contacts', async (req, res) => {
@@ -3230,7 +3262,7 @@ router.get('/jarvis/contacts', async (req, res) => {
         lm.direction AS last_direction,
         lm.status AS last_status,
         lm.created_at AS last_message_at,
-        NULL::text AS contact_name
+        t.contact_name AS contact_name
       FROM jarvis_whatsapp_threads t
       LEFT JOIN LATERAL (
         SELECT m.message, m.direction, m.status, m.created_at
