@@ -2972,3 +2972,44 @@ button{font:inherit;color:inherit}
 .jv-wa-directory-contact{width:100%;min-height:68px;display:grid;grid-template-columns:48px minmax(0,1fr) 18px;gap:11px;align-items:center;padding:9px 7px;border:0;border-bottom:1px solid rgba(103,221,239,.09);background:rgba(2,18,27,.30);color:#eafcff;text-align:left}
 .jv-wa-directory-contact:active{background:linear-gradient(90deg,rgba(23,190,218,.15),rgba(6,69,85,.05))}.jv-wa-directory-copy{display:grid;min-width:0}.jv-wa-directory-copy b{font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.jv-wa-directory-copy small{font-size:11px;color:#88a9b2;margin-top:3px}.jv-wa-directory-copy em{font-style:normal;font-size:9px;color:#55dff7;margin-top:3px}.jv-wa-directory-contact>svg{width:17px;color:#4e9eaf}
 .jv-wa-directory-screen>footer{display:flex;justify-content:space-between;align-items:center;padding:0 12px;border-top:1px solid rgba(70,207,234,.14);background:rgba(1,13,21,.92);font-size:8px;color:#538a99}
+
+/* =========================================================
+   JARVIS WhatsApp V7 — 5 conversaciones visibles + scroll táctil
+   Las filas conservan su tamaño y el resto aparece al deslizar.
+   ========================================================= */
+.jv-wa-mini-carousel{
+  --jv-wa-row-h:62px;
+  --jv-wa-row-gap:7px;
+  height:calc((var(--jv-wa-row-h) * 5) + (var(--jv-wa-row-gap) * 4) + 6px) !important;
+  max-height:calc((var(--jv-wa-row-h) * 5) + (var(--jv-wa-row-gap) * 4) + 6px) !important;
+  min-height:0 !important;
+  display:flex !important;
+  flex-direction:column !important;
+  gap:var(--jv-wa-row-gap) !important;
+  overflow-y:auto !important;
+  overflow-x:hidden !important;
+  touch-action:pan-y !important;
+  -webkit-overflow-scrolling:touch !important;
+  overscroll-behavior-y:contain !important;
+  scroll-snap-type:none !important;
+  scroll-behavior:auto !important;
+  scrollbar-width:none !important;
+  padding:2px 3px 4px 0 !important;
+}
+.jv-wa-mini-carousel::-webkit-scrollbar{
+  display:none !important;
+  width:0 !important;
+  height:0 !important;
+}
+.jv-wa-mini-swipe{
+  flex:0 0 var(--jv-wa-row-h) !important;
+  height:var(--jv-wa-row-h) !important;
+  min-height:var(--jv-wa-row-h) !important;
+  max-height:var(--jv-wa-row-h) !important;
+  scroll-snap-align:none !important;
+  touch-action:pan-y !important;
+}
+.jv-wa-mini-chat{
+  height:100% !important;
+  min-height:0 !important;
+}
