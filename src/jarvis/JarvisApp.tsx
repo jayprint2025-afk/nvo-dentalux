@@ -4,7 +4,7 @@ import {
   CalendarDays, Bell, Mail, MessageCircle, Phone, Globe2,
   Lock, X, Minus, GripHorizontal, ChevronLeft, ChevronRight,
   Plus, CheckCircle2, Clock3, Send, Search, PhoneCall, Sparkles,
-  FileText, BarChart3, Settings, Home, Sun, Menu
+  FileText, BarChart3, Settings, Home, Sun, Menu, Facebook
 } from 'lucide-react';
 import { jarvisApi } from './lib/jarvisApi';
 import { JarvisVoiceController } from './voice/JarvisVoiceController';
@@ -14,7 +14,7 @@ type Health = { ok: boolean; central_connected: boolean };
 type Reminder = { id: string | number; title: string; remind_at: string; notes?: string; priority?: string; status?: string };
 type EventItem = { id: string | number; title: string; start_at: string; end_at?: string; location?: string; notes?: string; category?: string; status?: string };
 type VoiceStatus = 'idle' | 'connecting' | 'listening' | 'speaking' | 'error';
-type ModuleId = 'agenda' | 'reminders' | 'correo' | 'whatsapp' | 'llamadas' | 'internet';
+type ModuleId = 'agenda' | 'reminders' | 'correo' | 'whatsapp' | 'llamadas' | 'internet' | 'facebook';
 type Pos = { x: number; y: number };
 
 /* Orden del arco, igual que en el diseÃ±o:
@@ -26,6 +26,7 @@ const modules: { id: ModuleId; label: string; sub: string; icon: any; accent: st
   { id: 'whatsapp',  label: 'WhatsApp',      sub: 'Chats y seguimiento',         icon: MessageCircle, accent: 'green'  },
   { id: 'llamadas',  label: 'Llamadas',      sub: 'Haz y recibe llamadas con IA', icon: Phone,        accent: 'violet' },
   { id: 'internet',  label: 'Internet',      sub: 'Busca, analiza y resume',     icon: Globe2,        accent: 'indigo' },
+  { id: 'facebook',  label: 'Facebook',      sub: 'Publicaciones y mensajes',      icon: Facebook,      accent: 'facebook' },
 ];
 
 /* MenÃº lateral, en el orden del diseÃ±o */
@@ -200,9 +201,10 @@ export default function JarvisApp() {
   };
   const resetPanels = () => { playUiSound('slide'); setOpen([]); setPositions({}); };
 
-  const slideCarousel = (direction: -1 | 1) => {
+  const slideCarousel = (direction: number) => {
+    if (!direction) return;
     playUiSound('slide');
-    setCarousel(v => (v + direction + modules.length) % modules.length);
+    setCarousel(v => (v + direction + modules.length * 10) % modules.length);
   };
 
   // Swipe real: deslizar horizontalmente equivale a pulsar una flecha.
@@ -221,10 +223,14 @@ export default function JarvisApp() {
     const s = carouselSwipe.current;
     if (!s.active || s.pointerId !== e.pointerId) return;
     const dx = e.clientX - s.x, dy = e.clientY - s.y;
-    const shouldRotate = Math.abs(dx) >= 24 && Math.abs(dx) > Math.abs(dy);
+    const shouldRotate = Math.abs(dx) >= 20 && Math.abs(dx) > Math.abs(dy);
     s.active = false;
     try { e.currentTarget.releasePointerCapture(e.pointerId); } catch {}
-    if (shouldRotate) slideCarousel(dx < 0 ? 1 : -1);
+    if (shouldRotate) {
+      // Ruleta rápida: un gesto largo puede avanzar 2, 3 o 4 módulos de una sola vez.
+      const steps = Math.min(4, Math.max(1, Math.round(Math.abs(dx) / 55)));
+      slideCarousel(dx < 0 ? steps : -steps);
+    }
     window.setTimeout(() => { carouselSwipe.current.moved = false; }, 100);
   };
 
@@ -270,6 +276,10 @@ export default function JarvisApp() {
       <button className="jv-action"><MessageCircle /> Conversaciones</button>
       <button className="jv-action secondary"><Send /> Nuevo mensaje</button>
     </>;
+    if (id === 'facebook') return <>
+      <div className="jv-panel-empty">Facebook listo para publicaciones, mensajes y seguimiento.</div>
+      <button className="jv-action"><Facebook /> Abrir Facebook</button>
+    </>;
     if (id === 'llamadas') return <>
       <div className="jv-call-ring"><PhoneCall /></div>
       <div className="jv-panel-empty">Módulo de llamadas listo.</div>
@@ -281,7 +291,8 @@ export default function JarvisApp() {
     </>;
   };
 
-  const rotated = modules.map((_, i) => modules[(i + carousel + modules.length) % modules.length]);
+  // Siempre hay exactamente 6 tarjetas visibles; la séptima queda fuera y entra al girar la ruleta.
+  const rotated = Array.from({ length: 6 }, (_, i) => modules[(i + carousel) % modules.length]);
 
   const badge = (id: ModuleId) => {
     if (id === 'agenda')    return `Hoy ${events.length}`;
