@@ -144,6 +144,9 @@ export default function JarvisApp() {
   const [waLoading, setWaLoading] = React.useState(false);
   const [waSending, setWaSending] = React.useState(false);
   const [waError, setWaError] = React.useState('');
+  const [waContactModal, setWaContactModal] = React.useState(false);
+  const [waContactName, setWaContactName] = React.useState('');
+  const [waContactPhone, setWaContactPhone] = React.useState('');
   const [now, setNow] = React.useState(() => new Date());
   const voiceRef = React.useRef<JarvisVoiceController | null>(null);
   const stageRef = React.useRef<HTMLDivElement | null>(null);
@@ -436,11 +439,24 @@ export default function JarvisApp() {
     }
   };
 
-  const addWhatsAppContact = async () => {
-    const name = window.prompt('Nombre del contacto:')?.trim();
-    if (!name) return;
-    const phone = window.prompt('Número de WhatsApp con lada (ej. +15202713253):')?.trim();
-    if (!phone) return;
+  const openWhatsAppContactModal = () => {
+    setWaContactName('');
+    setWaContactPhone('');
+    setWaError('');
+    setWaContactModal(true);
+    playUiSound('open');
+  };
+
+  const closeWhatsAppContactModal = () => {
+    setWaContactModal(false);
+    playUiSound('close');
+  };
+
+  const addWhatsAppContact = async (e?: React.FormEvent) => {
+    e?.preventDefault();
+    const name = waContactName.trim();
+    const phone = waContactPhone.trim();
+    if (!name || !phone || waSending) return;
     setWaSending(true);
     try {
       const result: any = await jarvisWhatsAppApi('/api/whatsapp/jarvis/contacts', {
@@ -451,8 +467,11 @@ export default function JarvisApp() {
       await loadWhatsApp(true);
       setWaChat(savedPhone);
       setWaError('');
+      setWaContactModal(false);
+      playUiSound('open');
     } catch (e: any) {
       setWaError(e?.message || 'No se pudo guardar el contacto');
+      playUiSound('close');
     } finally {
       setWaSending(false);
     }
@@ -531,7 +550,7 @@ export default function JarvisApp() {
         </button>)}
       </div>
       <button className="jv-action" onClick={()=>setFullscreenModule('whatsapp')}><Maximize2 /> Abrir WhatsApp completo</button>
-      <button className="jv-action secondary" onClick={()=>void addWhatsAppContact()}><Plus /> Agregar contacto</button>
+      <button className="jv-action secondary" onClick={openWhatsAppContactModal}><Plus /> Agregar contacto</button>
     </>;
     if (id === 'facebook') return <>
       <div className="jv-panel-empty">Facebook listo para publicaciones, mensajes y seguimiento.</div>
@@ -757,6 +776,25 @@ export default function JarvisApp() {
         </div>
       </section>;
     })()}
+
+    {waContactModal && <div className="jv-contact-backdrop" onPointerDown={e => { if (e.target === e.currentTarget) closeWhatsAppContactModal(); }}>
+      <form className="jv-contact-modal" onSubmit={e => void addWhatsAppContact(e)}>
+        <div className="jv-contact-scan" aria-hidden="true" />
+        <header>
+          <div className="jv-contact-emblem"><Plus /></div>
+          <div><small>JARVIS · WHATSAPP LINK</small><h3>Nuevo contacto</h3></div>
+          <button type="button" aria-label="Cerrar" onClick={closeWhatsAppContactModal}><X /></button>
+        </header>
+        <p>Registra un contacto en el canal seguro de WhatsApp.</p>
+        <label><span>IDENTIDAD</span><div><MessageCircle/><input autoFocus value={waContactName} onChange={e=>setWaContactName(e.target.value)} placeholder="Nombre del contacto" /></div></label>
+        <label><span>CANAL WHATSAPP</span><div><Phone/><input inputMode="tel" value={waContactPhone} onChange={e=>setWaContactPhone(e.target.value)} placeholder="+1 520 271 3253" /></div></label>
+        {waError && <div className="jv-contact-error">{waError}</div>}
+        <footer>
+          <button type="button" className="cancel" onClick={closeWhatsAppContactModal}>Cancelar</button>
+          <button type="submit" className="save" disabled={waSending || !waContactName.trim() || !waContactPhone.trim()}><CheckCircle2 />{waSending ? 'Guardando…' : 'Guardar contacto'}</button>
+        </footer>
+      </form>
+    </div>}
 
     {open.length > 0 && <button className="jv-reset" onClick={resetPanels}><Sparkles /> Reorganizar paneles</button>}
   </div>;
