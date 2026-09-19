@@ -388,6 +388,39 @@ export default function JarvisApp() {
     };
   }, [loadDashboard, handleVoiceWhatsAppCommand]);
 
+  const speakJarvisNotification = React.useCallback((contactName: string, message: string) => {
+    if (!('speechSynthesis' in window)) return;
+    const cleanName = String(contactName || 'un contacto').trim() || 'un contacto';
+    const cleanMessage = String(message || '').replace(/\s+/g, ' ').trim();
+    const spokenMessage = cleanMessage.length > 180 ? `${cleanMessage.slice(0, 177)}...` : cleanMessage;
+    const text = spokenMessage
+      ? `Señor, tiene un nuevo mensaje de ${cleanName}. Dice: ${spokenMessage}`
+      : `Señor, tiene un nuevo mensaje de ${cleanName}.`;
+
+    try {
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = 'es-MX';
+      utterance.rate = 0.96;
+      utterance.pitch = 0.82;
+      utterance.volume = 1;
+      const voices = window.speechSynthesis.getVoices();
+      const preferred = voices.find(v => /^es/i.test(v.lang) && /male|hombre|jorge|diego|raul/i.test(v.name))
+        || voices.find(v => /es[-_](MX|US)/i.test(v.lang))
+        || voices.find(v => /^es/i.test(v.lang));
+      if (preferred) utterance.voice = preferred;
+      utterance.onstart = () => {
+        setVoiceStatus('speaking');
+        setLastText(`JARVIS: Nuevo mensaje de ${cleanName}: ${cleanMessage}`);
+      };
+      utterance.onend = () => setVoiceStatus('idle');
+      utterance.onerror = () => setVoiceStatus('idle');
+      window.speechSynthesis.speak(utterance);
+    } catch (error) {
+      console.warn('JARVIS voice notification:', error);
+    }
+  }, []);
+
   const loadWhatsApp = React.useCallback(async (silent = false) => {
     if (!silent) setWaLoading(true);
     try {
@@ -407,7 +440,12 @@ export default function JarvisApp() {
         const fresh = incoming.filter(m => !waSeenIncomingRef.current.has(String(m.wa_message_id || m.id)));
         if (fresh.length) {
           fresh.forEach(m => waSeenIncomingRef.current.add(String(m.wa_message_id || m.id)));
+          const contacts: WaContact[] = Array.isArray(contactData) ? contactData : [];
+          const newest = [...fresh].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()).pop()!;
+          const saved = contacts.find(c => String(c.phone) === String(newest.phone));
+          const speakerName = saved?.name?.trim() || newest.contact_name?.trim() || newest.phone || 'un contacto';
           playUiSound('wa-receive');
+          speakJarvisNotification(speakerName, newest.message || '');
           setWaIncomingPulse(true);
           setWaUnreadByPhone(prev => {
             const next = { ...prev };
@@ -430,7 +468,7 @@ export default function JarvisApp() {
     } finally {
       if (!silent) setWaLoading(false);
     }
-  }, [playUiSound]);
+  }, [playUiSound, speakJarvisNotification]);
 
   React.useEffect(() => {
     void loadWhatsApp();
