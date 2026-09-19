@@ -124,6 +124,36 @@ async function jarvisWhatsAppApi(endpoint: string, options: RequestInit = {}) {
   try { return JSON.parse(text); } catch { return text; }
 }
 
+function urlBase64ToUint8Array(base64String: string) {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const raw = window.atob(base64);
+  return Uint8Array.from([...raw].map(ch => ch.charCodeAt(0)));
+}
+
+async function enableJarvisPush() {
+  if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) return false;
+  let permission = Notification.permission;
+  if (permission === 'default') permission = await Notification.requestPermission();
+  if (permission !== 'granted') return false;
+
+  const registration = await navigator.serviceWorker.register('/jarvis-sw.js', { scope: '/' });
+  await navigator.serviceWorker.ready;
+  let subscription = await registration.pushManager.getSubscription();
+  if (!subscription) {
+    const keyData: any = await jarvisWhatsAppApi('/api/whatsapp/jarvis/push/public-key');
+    subscription = await registration.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(String(keyData?.publicKey || '')),
+    });
+  }
+  await jarvisWhatsAppApi('/api/whatsapp/jarvis/push/subscribe', {
+    method: 'POST',
+    body: JSON.stringify({ subscription: subscription.toJSON() }),
+  });
+  return true;
+}
+
 export default function JarvisApp() {
   const [health, setHealth] = React.useState<Health | null>(null);
   const [items, setItems] = React.useState<Reminder[]>([]);
@@ -156,6 +186,37 @@ export default function JarvisApp() {
   const waInitialLoadRef = React.useRef(true);
   const [waIncomingPulse, setWaIncomingPulse] = React.useState(false);
   const [waUnreadByPhone, setWaUnreadByPhone] = React.useState<Record<string, number>>({});
+
+  // Notificaciones nativas: si ya hay permiso se re-suscribe al abrir;
+  // si aún no lo hay, se solicita en el primer toque real del usuario.
+  React.useEffect(() => {
+    let cancelled = false;
+    const activate = () => {
+      if (cancelled) return;
+      void enableJarvisPush().catch(err => console.warn('JARVIS Push:', err));
+    };
+    if ('Notification' in window && Notification.permission === 'granted') activate();
+    else window.addEventListener('pointerdown', activate, { once: true, passive: true });
+    return () => {
+      cancelled = true;
+      window.removeEventListener('pointerdown', activate);
+    };
+  }, []);
+
+  // Si la notificación abrió JARVIS, entra directo al WhatsApp y al teléfono indicado.
+  React.useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('jarvis') === 'whatsapp') {
+        const phone = params.get('phone') || '';
+        setSelected('whatsapp');
+        setOpen(prev => prev.includes('whatsapp') ? prev : [...prev, 'whatsapp']);
+        setFullscreenModule('whatsapp');
+        if (phone) setWaChat(phone);
+        window.history.replaceState({}, '', window.location.pathname + window.location.hash);
+      }
+    } catch {}
+  }, []);
   const carouselSwipe = React.useRef({ x: 0, y: 0, active: false, moved: false, pointerId: -1 });
 
   const flashUi = React.useCallback((kind: 'open' | 'slide' | 'close' | 'mic' | 'hover') => {
