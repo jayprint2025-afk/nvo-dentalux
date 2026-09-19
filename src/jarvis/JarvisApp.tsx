@@ -7,7 +7,7 @@ import {
   CalendarDays, Bell, Mail, MessageCircle, Phone, Globe2,
   Lock, X, Minus, GripHorizontal, ChevronLeft, ChevronRight, Maximize2, Minimize2,
   Plus, CheckCircle2, Clock3, Send, Search, PhoneCall, Sparkles,
-  FileText, BarChart3, Settings, Home, Sun, Menu, Facebook
+  FileText, BarChart3, Settings, Home, Sun, Menu, Facebook, Trash2, Undo2
 } from 'lucide-react';
 import { jarvisApi } from './lib/jarvisApi';
 import { JarvisVoiceController } from './voice/JarvisVoiceController';
@@ -580,7 +580,7 @@ export default function JarvisApp() {
           {!waLoading && !waFiltered.length && !waError && <div className="jv-panel-empty">No hay conversaciones de WhatsApp.</div>}
           {waFiltered.map(c => <div key={c.phone} className={`jv-wa-swipe-row ${waSwipePhone===c.phone?'revealed':''}`}
             onPointerDown={e=>waSwipeStart(c.phone,e)} onPointerUp={e=>waSwipeEnd(c.phone,e)}>
-            <button type="button" className="jv-wa-delete-action" onClick={()=>void deleteWhatsAppConversation(c.phone)}>Eliminar</button>
+            <button type="button" className="jv-wa-delete-action" aria-label={`Eliminar ${c.name}`} onClick={()=>void deleteWhatsAppConversation(c.phone)}><Trash2/><span>Eliminar</span></button>
             <button type="button" className={`jv-wa-contact ${waChat===c.phone?'active':''}`} onClick={()=>{
               if(waSwipePhone===c.phone){setWaSwipePhone('');return;} setWaChat(c.phone); setWaUnreadByPhone(prev=>({...prev,[c.phone]:0}));
             }}>
@@ -591,7 +591,7 @@ export default function JarvisApp() {
           </div>)}
           {waDeletedPhone && <div className="jv-wa-delete-confirm" role="status">
             <span>Conversación eliminada</span>
-            <button type="button" onClick={()=>void undoWhatsAppDelete()}>Deshacer</button>
+            <button type="button" className="jv-wa-undo-btn" onClick={()=>void undoWhatsAppDelete()}><Undo2/>Deshacer</button>
             <button type="button" onClick={()=>{setWaDeletedPhone('');playUiSound('slide');}}>No</button>
           </div>}
         </div>
@@ -651,7 +651,7 @@ export default function JarvisApp() {
         <div className="jv-wa-mini-carousel" aria-label="Conversaciones de WhatsApp">
           {waFiltered.map(c => <div key={c.phone} className={`jv-wa-mini-swipe ${waSwipePhone===c.phone?'revealed':''}`}
             onPointerDown={e=>waSwipeStart(c.phone,e)} onPointerUp={e=>waSwipeEnd(c.phone,e)}>
-            <button type="button" className="jv-wa-mini-delete" onClick={()=>void deleteWhatsAppConversation(c.phone)}>Eliminar</button>
+            <button type="button" className="jv-wa-mini-delete" aria-label={`Eliminar ${c.name}`} onClick={()=>void deleteWhatsAppConversation(c.phone)}><Trash2/><span>Eliminar</span></button>
             <button type="button" className="jv-wa-mini-chat" onClick={()=>{
               if(waSwipePhone===c.phone){setWaSwipePhone('');return;}
               setWaChat(c.phone); setWaUnreadByPhone(prev => ({ ...prev, [c.phone]: 0 })); setFullscreenModule('whatsapp');
@@ -663,7 +663,7 @@ export default function JarvisApp() {
         </div>
         {waDeletedPhone && <div className="jv-wa-delete-confirm jv-wa-delete-confirm-mini" role="status">
           <span>Conversación eliminada</span>
-          <button type="button" onClick={()=>void undoWhatsAppDelete()}>Deshacer</button>
+          <button type="button" className="jv-wa-undo-btn" onClick={()=>void undoWhatsAppDelete()}><Undo2/>Deshacer</button>
           <button type="button" onClick={()=>{setWaDeletedPhone('');playUiSound('slide');}}>No</button>
         </div>}
       </div>
