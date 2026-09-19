@@ -2942,3 +2942,72 @@ button{font:inherit;color:inherit}
   .jv-wa-mini-chat{min-height:62px;grid-template-columns:46px minmax(0,1fr) auto;padding:7px 9px !important}
   .jv-wa-mini-delete,.jv-wa-delete-action{width:92px !important}
 }
+
+/* =========================================================
+   JARVIS WhatsApp V5 — directorio + scroll cinético móvil
+   ========================================================= */
+/* Scroll natural: sigue el dedo y conserva inercia al soltar. */
+.jv-wa-mini-carousel,
+.jv-wa-list,
+.jv-wa-directory-list{
+  overflow-y:auto!important;
+  overflow-x:hidden!important;
+  touch-action:pan-y pinch-zoom!important;
+  -webkit-overflow-scrolling:touch!important;
+  overscroll-behavior-y:contain;
+  scroll-snap-type:none!important;
+  scroll-behavior:auto!important;
+  scrollbar-width:none!important;
+}
+.jv-wa-mini-carousel::-webkit-scrollbar,
+.jv-wa-list::-webkit-scrollbar,
+.jv-wa-directory-list::-webkit-scrollbar{display:none!important;width:0!important;height:0!important}
+.jv-wa-mini-swipe{scroll-snap-align:none!important}
+
+/* Reemplaza el botón grande de "Abrir WhatsApp completo". */
+.jv-wa-mini-tools{display:grid;grid-template-columns:minmax(0,1fr) 54px;gap:10px;margin-top:10px;align-items:stretch}
+.jv-wa-contacts-launch,.jv-wa-add-contact-icon{
+  border:1px solid rgba(79,225,248,.42);color:#dffbff;cursor:pointer;
+  background:linear-gradient(145deg,rgba(5,43,58,.9),rgba(2,18,29,.96));
+  box-shadow:inset 0 0 22px rgba(42,213,255,.05),0 0 18px rgba(0,183,255,.06);
+}
+.jv-wa-contacts-launch{height:58px;border-radius:15px;padding:0 13px;display:grid;grid-template-columns:30px 1fr 18px;gap:10px;align-items:center;text-align:left}
+.jv-wa-contacts-launch>svg:first-child{width:25px;color:#71efff;filter:drop-shadow(0 0 7px rgba(74,224,255,.65))}
+.jv-wa-contacts-launch>svg:last-child{width:17px;color:#58b9cc}
+.jv-wa-contacts-launch span{display:grid;min-width:0}.jv-wa-contacts-launch b{font-size:14px;letter-spacing:.04em}.jv-wa-contacts-launch small{font-size:9px;color:#7faebb;margin-top:2px;letter-spacing:.04em}
+.jv-wa-add-contact-icon{height:58px;border-radius:15px;display:grid;place-items:center}.jv-wa-add-contact-icon svg{width:23px;color:#70efff;filter:drop-shadow(0 0 6px rgba(65,221,255,.55))}
+.jv-wa-contacts-launch:active,.jv-wa-add-contact-icon:active{transform:scale(.975);filter:brightness(1.3)}
+
+/* Directorio a pantalla completa. */
+.jv-wa-directory-screen{
+  position:fixed;inset:0;z-index:620;display:grid;grid-template-rows:72px auto minmax(0,1fr) 34px;
+  color:#eafcff;background:
+    linear-gradient(180deg,rgba(1,15,24,.88),rgba(1,10,18,.95)),
+    var(--jarvis-module-bg,linear-gradient(160deg,#041d2a,#01080e));
+  background-size:cover;background-position:center;overflow:hidden;
+  animation:jvDirectoryIn .28s cubic-bezier(.2,.85,.2,1);
+}
+.jv-wa-directory-screen::before{content:"";position:absolute;inset:0;pointer-events:none;background:radial-gradient(circle at 50% 26%,rgba(0,221,255,.11),transparent 36%),linear-gradient(90deg,transparent 49.8%,rgba(74,225,255,.06) 50%,transparent 50.2%)}
+.jv-wa-directory-head,.jv-wa-directory-search,.jv-wa-directory-list,.jv-wa-directory-screen>footer{position:relative;z-index:1}
+.jv-wa-directory-head{display:flex;align-items:center;justify-content:space-between;padding:10px 16px;border-bottom:1px solid rgba(82,222,247,.25);background:rgba(2,18,29,.82);backdrop-filter:blur(14px)}
+.jv-wa-directory-title{display:flex;align-items:center;gap:11px}.jv-wa-directory-title>div{display:grid}.jv-wa-directory-title small{font-size:8px;letter-spacing:.22em;color:#55dff7}.jv-wa-directory-title b{font-size:20px;letter-spacing:.04em;margin-top:2px}
+.jv-wa-directory-emblem{width:42px;height:42px;border-radius:50%;display:grid;place-items:center;border:1px solid rgba(91,233,255,.7);background:radial-gradient(circle,rgba(24,187,222,.18),rgba(1,34,50,.8));box-shadow:0 0 18px rgba(0,205,255,.2)}
+.jv-wa-directory-emblem svg{width:22px;color:#8af4ff;filter:drop-shadow(0 0 6px #26dfff)}
+.jv-wa-directory-head>button{width:42px;height:42px;border-radius:13px;border:1px solid rgba(89,216,241,.28);background:rgba(3,28,42,.8);color:#8deeff;display:grid;place-items:center}.jv-wa-directory-head>button svg{width:20px}
+.jv-wa-directory-search{margin:13px 14px 8px;height:52px;display:grid;grid-template-columns:24px 1fr 42px;gap:8px;align-items:center;padding:0 7px 0 14px;border:1px solid rgba(70,214,241,.32);border-radius:16px;background:rgba(4,29,42,.82);box-shadow:inset 0 0 24px rgba(0,185,225,.05)}
+.jv-wa-directory-search>svg{width:20px;color:#77eaff}.jv-wa-directory-search input{width:100%;border:0;outline:0;background:transparent;color:#effdff;font:inherit;font-size:15px}.jv-wa-directory-search input::placeholder{color:#668994}
+.jv-wa-directory-search button{height:38px;border-radius:11px;border:1px solid rgba(82,222,247,.3);background:rgba(7,52,67,.78);color:#76efff;display:grid;place-items:center}.jv-wa-directory-search button svg{width:19px}
+.jv-wa-directory-list{padding:4px 12px 18px;min-height:0}
+.jv-wa-directory-contact{width:100%;min-height:70px;display:grid;grid-template-columns:48px minmax(0,1fr) 18px;gap:11px;align-items:center;padding:10px 8px;border:0;border-bottom:1px solid rgba(103,221,239,.09);background:transparent;color:#eafcff;text-align:left}
+.jv-wa-directory-contact:active{background:linear-gradient(90deg,rgba(23,190,218,.12),rgba(6,69,85,.04));transform:scale(.992)}
+.jv-wa-directory-contact>.jv-wa-avatar{width:46px;height:46px}.jv-wa-directory-contact>svg{width:17px;color:#4e9eaf}
+.jv-wa-directory-copy{display:grid;min-width:0}.jv-wa-directory-copy b{font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.jv-wa-directory-copy small{font-size:11px;color:#88a9b2;margin-top:3px}.jv-wa-directory-copy em{font-style:normal;font-size:9px;color:#55dff7;margin-top:3px;letter-spacing:.03em}
+.jv-wa-directory-screen>footer{display:flex;justify-content:space-between;align-items:center;padding:0 15px;border-top:1px solid rgba(70,207,234,.14);background:rgba(1,13,21,.9);font-size:8px;color:#538a99;letter-spacing:.08em}
+@keyframes jvDirectoryIn{from{opacity:0;transform:scale(.985)}to{opacity:1;transform:none}}
+
+@media(max-width:760px){
+  .jv-wa-mini-carousel{max-height:270px!important}
+  .jv-wa-directory-screen{grid-template-rows:68px auto minmax(0,1fr) 30px}
+  .jv-wa-directory-head{padding:8px 12px}.jv-wa-directory-search{margin:10px 10px 6px}.jv-wa-directory-list{padding:3px 8px 14px}
+  .jv-wa-directory-contact{min-height:68px;padding:9px 7px}
+}
