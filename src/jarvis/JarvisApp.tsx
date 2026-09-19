@@ -10,6 +10,7 @@ import {
   FileText, BarChart3, Settings, Home, Sun, Menu, Facebook
 } from 'lucide-react';
 import { jarvisApi } from './lib/jarvisApi';
+import { api } from '../services/api';
 import { JarvisVoiceController } from './voice/JarvisVoiceController';
 import './jarvis.css';
 
@@ -19,6 +20,28 @@ type EventItem = { id: string | number; title: string; start_at: string; end_at?
 type VoiceStatus = 'idle' | 'connecting' | 'listening' | 'speaking' | 'error';
 type ModuleId = 'agenda' | 'reminders' | 'correo' | 'whatsapp' | 'llamadas' | 'internet' | 'facebook';
 type Pos = { x: number; y: number };
+
+type WaMessage = {
+  id: string | number;
+  wa_message_id?: string | null;
+  type: 'incoming' | 'outgoing' | string;
+  phone: string;
+  message: string;
+  status?: string | null;
+  timestamp: string;
+  contact_name?: string | null;
+  manual?: boolean;
+};
+
+type WaConversation = {
+  phone: string;
+  name: string;
+  avatar: string;
+  preview: string;
+  timestamp: string;
+  unread: number;
+  messages: WaMessage[];
+};
 
 /* Orden del arco, igual que en el diseÃ±o:
    Correo · Agenda · Recordatorios · WhatsApp · Llamadas · Internet */
@@ -67,8 +90,12 @@ export default function JarvisApp() {
   const [menuOpen, setMenuOpen] = React.useState(false);
   const [fullscreenModule, setFullscreenModule] = React.useState<ModuleId | null>(null);
   const [waQuery, setWaQuery] = React.useState('');
-  const [waChat, setWaChat] = React.useState('yaneth');
+  const [waChat, setWaChat] = React.useState('');
   const [waDraft, setWaDraft] = React.useState('');
+  const [waMessages, setWaMessages] = React.useState<WaMessage[]>([]);
+  const [waLoading, setWaLoading] = React.useState(false);
+  const [waSending, setWaSending] = React.useState(false);
+  const [waError, setWaError] = React.useState('');
   const [now, setNow] = React.useState(() => new Date());
   const voiceRef = React.useRef<JarvisVoiceController | null>(null);
   const stageRef = React.useRef<HTMLDivElement | null>(null);
@@ -182,6 +209,34 @@ export default function JarvisApp() {
     };
   }, [loadDashboard]);
 
+  const loadWhatsApp = React.useCallback(async (silent = false) => {
+    if (!silent) setWaLoading(true);
+    try {
+      const data = await api('/api/whatsapp/messages?limit=1000');
+      const rows = Array.isArray(data) ? data : [];
+      setWaMessages(rows);
+      setWaError('');
+    } catch (e: any) {
+      console.error('JARVIS WhatsApp:', e);
+      setWaError(e?.message || 'No se pudo cargar WhatsApp');
+    } finally {
+      if (!silent) setWaLoading(false);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    void loadWhatsApp();
+    const timer = window.setInterval(() => void loadWhatsApp(true), 4000);
+    const refresh = () => void loadWhatsApp(true);
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', refresh);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener('focus', refresh);
+      document.removeEventListener('visibilitychange', refresh);
+    };
+  }, [loadWhatsApp]);
+
   const toggleVoice = async () => {
     playUiSound('mic');
     if (voiceStatus === 'idle' || voiceStatus === 'error') { try { await voiceRef.current?.start(); } catch {} }
@@ -260,49 +315,113 @@ export default function JarvisApp() {
     window.addEventListener('pointerup', up);
   };
 
-  const waContacts = [
-    { id:'iglesia', name:'Iglesia CDA 🔥🕊️🙏📖✝️', avatar:'IC', preview:'Abigail Martinez: Dios les bendiga...', time:'4:53 p. m.', unread:1 },
-    { id:'yaneth', name:'Yaneth Caballero', avatar:'YC', preview:'Videollamada', time:'12:18 p. m.' },
-    { id:'condesa', name:'DENTALUX CONDESA 🦷💙✨', avatar:'DC', preview:'Yaneth: Ok', time:'9:33 a. m.' },
-    { id:'jhon', name:'Jhon', avatar:'J', preview:'https://www.facebook.com/share/v/1...', time:'Ayer' },
-    { id:'dany', name:'Dany Wong', avatar:'DW', preview:'Pongo la mía ya siendo de aquí espero...', time:'Ayer' },
-  ];
-  const waFiltered = waContacts.filter(c => (c.name + ' ' + c.preview).toLowerCase().includes(waQuery.toLowerCase()));
-  const waCurrent = waContacts.find(c => c.id === waChat) || waContacts[1];
+  const waContacts = React.useMemo<WaConversation[]>(() => {
+    const groups = new Map<string, WaMessage[]>();
+    for (const msg of waMessages) {
+      const phone = String(msg.phone || '').trim();
+      if (!phone) continue;
+      const arr = groups.get(phone) || [];
+      arr.push(msg);
+      groups.set(phone, arr);
+    }
+
+    return Array.from(groups.entries()).map(([phone, messages]) => {
+      messages.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+      const last = messages[messages.length - 1];
+      const named = [...messages].reverse().find(m => m.contact_name)?.contact_name?.trim();
+      const name = named || phone;
+      const initials = named
+        ? named.split(/\s+/).slice(0, 2).map(x => x[0]?.toUpperCase()).join('')
+        : phone.slice(-2);
+      return {
+        phone,
+        name,
+        avatar: initials || 'WA',
+        preview: last?.message || '',
+        timestamp: last?.timestamp || '',
+        unread: 0,
+        messages,
+      };
+    }).sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+  }, [waMessages]);
+
+  React.useEffect(() => {
+    if (!waChat && waContacts.length) setWaChat(waContacts[0].phone);
+    if (waChat && waContacts.length && !waContacts.some(c => c.phone === waChat)) setWaChat(waContacts[0].phone);
+  }, [waContacts, waChat]);
+
+  const waFiltered = waContacts.filter(c =>
+    (c.name + ' ' + c.phone + ' ' + c.preview).toLowerCase().includes(waQuery.toLowerCase())
+  );
+  const waCurrent = waContacts.find(c => c.phone === waChat) || waContacts[0] || null;
+
+  const waTime = (v?: string) => {
+    if (!v) return '';
+    try { return new Date(v).toLocaleTimeString('es-MX', { hour: 'numeric', minute: '2-digit' }); }
+    catch { return ''; }
+  };
+
+  const sendWhatsAppMessage = async () => {
+    const message = waDraft.trim();
+    if (!message || !waCurrent || waSending) return;
+    setWaSending(true);
+    try {
+      await api('/api/whatsapp/send-message', {
+        method: 'POST',
+        body: JSON.stringify({ phone: waCurrent.phone, message }),
+      });
+      setWaDraft('');
+      await loadWhatsApp(true);
+    } catch (e: any) {
+      console.error('JARVIS WhatsApp send:', e);
+      setWaError(e?.message || 'No se pudo enviar el mensaje');
+    } finally {
+      setWaSending(false);
+    }
+  };
 
   const renderWhatsAppFull = () => (
     <div className="jv-wa-app">
       <section className="jv-wa-sidebar">
-        <div className="jv-wa-brand"><b>WhatsApp</b><span>JARVIS</span></div>
-        <label className="jv-wa-search"><Search/><input value={waQuery} onChange={e=>setWaQuery(e.target.value)} placeholder="Buscar contacto o conversación" /></label>
+        <div className="jv-wa-brand"><b>WhatsApp</b><span>JARVIS · EN VIVO</span></div>
+        <label className="jv-wa-search"><Search/><input value={waQuery} onChange={e=>setWaQuery(e.target.value)} placeholder="Buscar contacto, teléfono o conversación" /></label>
         <div className="jv-wa-list">
-          {waFiltered.map(c => <button key={c.id} className={`jv-wa-contact ${waChat===c.id?'active':''}`} onClick={()=>setWaChat(c.id)}>
+          {waLoading && !waContacts.length && <div className="jv-panel-empty">Cargando conversaciones…</div>}
+          {waError && !waContacts.length && <div className="jv-panel-empty">{waError}</div>}
+          {!waLoading && !waFiltered.length && !waError && <div className="jv-panel-empty">No hay conversaciones de WhatsApp.</div>}
+          {waFiltered.map(c => <button key={c.phone} className={`jv-wa-contact ${waChat===c.phone?'active':''}`} onClick={()=>setWaChat(c.phone)}>
             <span className="jv-wa-avatar">{c.avatar}</span>
             <span className="jv-wa-contact-copy"><b>{c.name}</b><small>{c.preview}</small></span>
-            <span className="jv-wa-meta"><small>{c.time}</small>{c.unread ? <em>{c.unread}</em> : null}</span>
+            <span className="jv-wa-meta"><small>{waTime(c.timestamp)}</small>{c.unread ? <em>{c.unread}</em> : null}</span>
           </button>)}
         </div>
       </section>
+
       <section className="jv-wa-chat">
-        <header className="jv-wa-chat-head">
-          <span className="jv-wa-avatar">{waCurrent.avatar}</span>
-          <div><b>{waCurrent.name}</b><small>en línea</small></div>
-          <span className="jv-wa-head-actions"><button><Phone/></button><button><Search/></button></span>
-        </header>
-        <div className="jv-wa-messages">
-          <div className="jv-wa-day">Hoy</div>
-          <div className="jv-wa-msg incoming">No, que no podías tener celular <small>1:03 p. m.</small></div>
-          <div className="jv-wa-photo-demo"><span>FOTO</span><small>1:03 p. m. ✓✓</small></div>
-          <div className="jv-wa-msg outgoing">Ando en el cuarto feio <small>1:04 p. m. ✓✓</small></div>
-          <div className="jv-wa-msg outgoing">Acomodando las tarimas que llegaron <small>1:04 p. m. ✓✓</small></div>
-          <div className="jv-wa-msg outgoing">Ahora sii <small>1:04 p. m. ✓✓</small></div>
-          <div className="jv-wa-msg incoming">Ah OK OK y ahí sí puedes <small>1:04 p. m.</small></div>
-        </div>
-        <form className="jv-wa-compose" onSubmit={e=>{e.preventDefault(); setWaDraft('');}}>
-          <button type="button">＋</button>
-          <input value={waDraft} onChange={e=>setWaDraft(e.target.value)} placeholder="Mensaje" />
-          <button type="submit"><Send/></button>
-        </form>
+        {waCurrent ? <>
+          <header className="jv-wa-chat-head">
+            <span className="jv-wa-avatar">{waCurrent.avatar}</span>
+            <div><b>{waCurrent.name}</b><small>{waCurrent.phone}</small></div>
+            <span className="jv-wa-head-actions">
+              <button type="button" title="Actualizar" onClick={()=>void loadWhatsApp()}><Sparkles/></button>
+              <button type="button"><Search/></button>
+            </span>
+          </header>
+          <div className="jv-wa-messages">
+            <div className="jv-wa-day">Conversación real · CliniqOne</div>
+            {waCurrent.messages.map(msg =>
+              <div key={String(msg.id)} className={`jv-wa-msg ${msg.type === 'outgoing' ? 'outgoing' : 'incoming'}`}>
+                {msg.message || '[mensaje sin texto]'}
+                <small>{waTime(msg.timestamp)}{msg.type === 'outgoing' ? ` · ${msg.status || 'enviado'}` : ''}</small>
+              </div>
+            )}
+          </div>
+          <form className="jv-wa-compose" onSubmit={e=>{e.preventDefault(); void sendWhatsAppMessage();}}>
+            <button type="button" title="Adjuntos">＋</button>
+            <input value={waDraft} onChange={e=>setWaDraft(e.target.value)} placeholder="Mensaje" disabled={waSending} />
+            <button type="submit" disabled={waSending || !waDraft.trim()} title="Enviar"><Send/></button>
+          </form>
+        </> : <div className="jv-panel-empty">Selecciona una conversación.</div>}
       </section>
     </div>
   );
@@ -327,13 +446,14 @@ export default function JarvisApp() {
     </>;
     if (id === 'whatsapp') return <>
       <div className="jv-wa-mini">
-        <label><Search/><input value={waQuery} onChange={e=>setWaQuery(e.target.value)} placeholder="Buscar chat" /></label>
-        {waFiltered.slice(0,3).map(c => <button key={c.id} onClick={()=>{setWaChat(c.id); setFullscreenModule('whatsapp');}}>
+        <label><Search/><input value={waQuery} onChange={e=>setWaQuery(e.target.value)} placeholder="Buscar chat real" /></label>
+        {waLoading && !waContacts.length && <div className="jv-panel-empty">Cargando WhatsApp…</div>}
+        {waFiltered.slice(0,3).map(c => <button key={c.phone} onClick={()=>{setWaChat(c.phone); setFullscreenModule('whatsapp');}}>
           <span className="jv-wa-avatar">{c.avatar}</span><span><b>{c.name}</b><small>{c.preview}</small></span>
         </button>)}
       </div>
       <button className="jv-action" onClick={()=>setFullscreenModule('whatsapp')}><Maximize2 /> Abrir WhatsApp completo</button>
-      <button className="jv-action secondary"><Send /> Nuevo mensaje</button>
+      <button className="jv-action secondary" onClick={()=>setFullscreenModule('whatsapp')}><Send /> Nuevo mensaje</button>
     </>;
     if (id === 'facebook') return <>
       <div className="jv-panel-empty">Facebook listo para publicaciones, mensajes y seguimiento.</div>
@@ -357,9 +477,9 @@ export default function JarvisApp() {
     if (id === 'agenda')    return `Hoy ${events.length}`;
     if (id === 'reminders') return `${items.length} activos`;
     if (id === 'internet')  return 'En línea';
-    // Placeholders visuales hasta conectar correo/WhatsApp
+    // Correo sigue visual hasta conectar; WhatsApp ya usa datos reales.
     if (id === 'correo')    return '5 nuevos';
-    if (id === 'whatsapp')  return '12 mensajes';
+    if (id === 'whatsapp')  return waLoading && !waContacts.length ? 'Cargando…' : `${waContacts.length} chats`;
     return null;
   };
 
