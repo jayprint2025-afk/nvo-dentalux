@@ -1,6 +1,7 @@
 import jarvisRobot from './assets/jarvis-robot.png';
 import jarvisMobile from './assets/jarvis-mobile.png';
 import jarvisEarthMobile from './assets/jarvis-earth-mobile.png';
+import jarvisModuleBg from './assets/jarvis-module-bg.png';
 import React from 'react';
 import {
   CalendarDays, Bell, Mail, MessageCircle, Phone, Globe2,
@@ -551,7 +552,7 @@ export default function JarvisApp() {
           <div><FI/><b>{fm.label}</b><small>JARVIS · vista completa</small></div>
           <button title="Restaurar" onClick={()=>setFullscreenModule(null)}><Minimize2/></button>
         </header>
-        <div className="jv-module-fullscreen-body">
+        <div className="jv-module-fullscreen-body" style={{ '--jarvis-module-bg': `url(${jarvisModuleBg})` } as React.CSSProperties}>
           {fullscreenModule === 'whatsapp'
             ? renderWhatsAppFull()
             : <div className="jv-module-coming"><FI/><h2>{fm.label}</h2><p>Interfaz completa pendiente de definir.</p></div>}
