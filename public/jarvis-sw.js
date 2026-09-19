@@ -15,6 +15,7 @@ self.addEventListener('push', event => {
     silent: false,
     vibrate: [250, 100, 250, 100, 350],
     timestamp: Date.now(),
+    actions: [{ action: 'open', title: 'Abrir mensaje' }],
     data: { url, phone, channel: data.channel || 'JARVIS-WA-001' }
   };
 
