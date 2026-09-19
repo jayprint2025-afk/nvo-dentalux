@@ -1240,6 +1240,20 @@ async function ensureJarvisWaTables() {
     )`);
   await qBypass(`CREATE INDEX IF NOT EXISTS idx_jarvis_wa_messages_thread
     ON jarvis_whatsapp_messages(thread_id, created_at, id)`);
+  await qBypass(`
+    CREATE TABLE IF NOT EXISTS jarvis_whatsapp_contacts (
+      id BIGSERIAL PRIMARY KEY,
+      tenant_id UUID NOT NULL,
+      channel_id TEXT NOT NULL DEFAULT 'JARVIS-WA-001',
+      phone TEXT NOT NULL,
+      name TEXT NOT NULL,
+      avatar_url TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (tenant_id, channel_id, phone)
+    )`);
+  await qBypass(`CREATE INDEX IF NOT EXISTS idx_jarvis_wa_contacts_tenant
+    ON jarvis_whatsapp_contacts(tenant_id, channel_id, name)`);
 }
 
 async function claimJarvisWaThread({ tenantId, phone, phoneNumberId = null }) {
@@ -3121,6 +3135,44 @@ if (!appt && CROSS_SUC_FALLBACK) {
 });
 
 // ===================== JARVIS WhatsApp API =====================
+router.get('/jarvis/contacts', async (req, res) => {
+  try {
+    const tenantId = requireTenantId(req);
+    await ensureJarvisWaTables();
+    const { rows } = await qBypass(`
+      SELECT id, phone, name, avatar_url, created_at, updated_at
+        FROM jarvis_whatsapp_contacts
+       WHERE tenant_id=$1::uuid AND channel_id=$2
+       ORDER BY name ASC, updated_at DESC`, [tenantId, JARVIS_WA_CHANNEL_ID]);
+    res.json(rows);
+  } catch (e) {
+    res.status(e.statusCode || 500).json({ ok:false, error:String(e.message || e) });
+  }
+});
+
+router.post('/jarvis/contacts', async (req, res) => {
+  try {
+    const tenantId = requireTenantId(req);
+    await ensureJarvisWaTables();
+    const phone = toE164(req.body?.phone || '');
+    const name = String(req.body?.name || '').trim();
+    const avatarUrl = String(req.body?.avatar_url || '').trim() || null;
+    if (!phone || !name) return res.status(400).json({ ok:false, error:'name and phone are required' });
+    const { rows } = await qBypass(`
+      INSERT INTO jarvis_whatsapp_contacts(tenant_id, channel_id, phone, name, avatar_url, updated_at)
+      VALUES($1::uuid,$2,$3,$4,$5,NOW())
+      ON CONFLICT (tenant_id, channel_id, phone)
+      DO UPDATE SET name=EXCLUDED.name,
+                    avatar_url=COALESCE(EXCLUDED.avatar_url, jarvis_whatsapp_contacts.avatar_url),
+                    updated_at=NOW()
+      RETURNING id, phone, name, avatar_url, created_at, updated_at`,
+      [tenantId, JARVIS_WA_CHANNEL_ID, phone, name, avatarUrl]);
+    res.json({ ok:true, contact:rows[0] });
+  } catch (e) {
+    res.status(e.statusCode || 500).json({ ok:false, error:String(e.message || e) });
+  }
+});
+
 router.get('/jarvis/messages', async (req, res) => {
   try {
     const tenantId = requireTenantId(req);
@@ -3128,8 +3180,10 @@ router.get('/jarvis/messages', async (req, res) => {
     const limit = Math.max(1, Math.min(Number(req.query.limit || 1000), 2000));
     const { rows } = await qBypass(`
       SELECT m.id, m.wa_message_id, m.direction AS type, m.phone, m.message, m.status,
-             m.created_at AS timestamp, NULL::text AS contact_name, TRUE AS manual
+             m.created_at AS timestamp, c.name AS contact_name, TRUE AS manual
         FROM jarvis_whatsapp_messages m
+        LEFT JOIN jarvis_whatsapp_contacts c
+          ON c.tenant_id=m.tenant_id AND c.channel_id=m.channel_id AND c.phone=m.phone
        WHERE m.tenant_id=$1::uuid AND m.channel_id=$2
        ORDER BY m.created_at ASC, m.id ASC
        LIMIT $3`, [tenantId, JARVIS_WA_CHANNEL_ID, limit]);
