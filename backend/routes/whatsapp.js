@@ -3211,6 +3211,59 @@ router.post('/jarvis/push/unsubscribe', async (req, res) => {
   } catch (e) { res.status(e.statusCode || 500).json({ ok:false, error:String(e.message || e) }); }
 });
 
+// Lista de conversaciones/contactos exclusivos de JARVIS.
+// El frontend usa este endpoint para construir el panel de hilos.
+router.get('/jarvis/contacts', async (req, res) => {
+  try {
+    const tenantId = requireTenantId(req);
+    await ensureJarvisWaTables();
+
+    const { rows } = await qBypass(`
+      SELECT
+        t.id AS thread_id,
+        t.phone,
+        t.phone_number_id,
+        t.active,
+        t.claimed_at,
+        t.updated_at,
+        lm.message AS last_message,
+        lm.direction AS last_direction,
+        lm.status AS last_status,
+        lm.created_at AS last_message_at,
+        NULL::text AS contact_name
+      FROM jarvis_whatsapp_threads t
+      LEFT JOIN LATERAL (
+        SELECT m.message, m.direction, m.status, m.created_at
+          FROM jarvis_whatsapp_messages m
+         WHERE m.thread_id = t.id
+           AND m.tenant_id = t.tenant_id
+           AND m.channel_id = $2
+         ORDER BY m.created_at DESC, m.id DESC
+         LIMIT 1
+      ) lm ON TRUE
+      WHERE t.tenant_id = $1::uuid
+        AND t.channel_id = $2
+      ORDER BY COALESCE(lm.created_at, t.updated_at) DESC, t.id DESC
+    `, [tenantId, JARVIS_WA_CHANNEL_ID]);
+
+    // Mantener aliases simples para compatibilidad con distintas versiones del frontend.
+    const contacts = rows.map(row => ({
+      ...row,
+      id: row.thread_id,
+      timestamp: row.last_message_at || row.updated_at,
+      message: row.last_message || '',
+      type: row.last_direction || null,
+      channel_id: JARVIS_WA_CHANNEL_ID
+    }));
+
+    res.set('Content-Type', 'application/json; charset=utf-8');
+    res.json(contacts);
+  } catch (e) {
+    console.error('JARVIS contacts error:', e.message);
+    res.status(e.statusCode || 500).json({ ok:false, error:String(e.message || e) });
+  }
+});
+
 router.get('/jarvis/messages', async (req, res) => {
   try {
     const tenantId = requireTenantId(req);
