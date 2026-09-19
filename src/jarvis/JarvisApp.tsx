@@ -648,10 +648,24 @@ export default function JarvisApp() {
       <div className="jv-wa-mini">
         <label><Search/><input value={waQuery} onChange={e=>setWaQuery(e.target.value)} placeholder="Buscar chat real" /></label>
         {waLoading && !waContacts.length && <div className="jv-panel-empty">Cargando WhatsApp…</div>}
-        {waFiltered.slice(0,3).map(c => <button key={c.phone} onClick={()=>{ setWaChat(c.phone); setWaUnreadByPhone(prev => ({ ...prev, [c.phone]: 0 })); setFullscreenModule('whatsapp'); }}>
-          <span className="jv-wa-avatar">{c.avatar}</span><span><b>{c.name}</b><small>{c.preview}</small></span>
-          {c.unread > 0 && <em className="jv-wa-mini-unread">{c.unread > 99 ? '99+' : c.unread}</em>}
-        </button>)}
+        <div className="jv-wa-mini-carousel" aria-label="Conversaciones de WhatsApp">
+          {waFiltered.map(c => <div key={c.phone} className={`jv-wa-mini-swipe ${waSwipePhone===c.phone?'revealed':''}`}
+            onPointerDown={e=>waSwipeStart(c.phone,e)} onPointerUp={e=>waSwipeEnd(c.phone,e)}>
+            <button type="button" className="jv-wa-mini-delete" onClick={()=>void deleteWhatsAppConversation(c.phone)}>Eliminar</button>
+            <button type="button" className="jv-wa-mini-chat" onClick={()=>{
+              if(waSwipePhone===c.phone){setWaSwipePhone('');return;}
+              setWaChat(c.phone); setWaUnreadByPhone(prev => ({ ...prev, [c.phone]: 0 })); setFullscreenModule('whatsapp');
+            }}>
+              <span className="jv-wa-avatar">{c.avatar}</span><span><b>{c.name}</b><small>{c.preview}</small></span>
+              {c.unread > 0 && <em className="jv-wa-mini-unread">{c.unread > 99 ? '99+' : c.unread}</em>}
+            </button>
+          </div>)}
+        </div>
+        {waDeletedPhone && <div className="jv-wa-delete-confirm jv-wa-delete-confirm-mini" role="status">
+          <span>Conversación eliminada</span>
+          <button type="button" onClick={()=>void undoWhatsAppDelete()}>Deshacer</button>
+          <button type="button" onClick={()=>{setWaDeletedPhone('');playUiSound('slide');}}>No</button>
+        </div>}
       </div>
       <button className="jv-action" onClick={()=>setFullscreenModule('whatsapp')}><Maximize2 /> Abrir WhatsApp completo</button>
       <button className="jv-action secondary" onClick={openWhatsAppContactModal}><Plus /> Agregar contacto</button>
