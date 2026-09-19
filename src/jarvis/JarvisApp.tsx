@@ -1,4 +1,6 @@
 import jarvisRobot from './assets/jarvis-robot.png';
+import jarvisMobile from './assets/jarvis-mobile.png';
+import jarvisEarthMobile from './assets/jarvis-earth-mobile.png';
 import React from 'react';
 import {
   CalendarDays, Bell, Mail, MessageCircle, Phone, Globe2,
@@ -438,12 +440,15 @@ export default function JarvisApp() {
         <blockquote>“Un gran asistente convierte tus ideas en resultados.”</blockquote>
         <div className="jv-sign">— JARVIS</div>
         <div className="jv-robot-stage" aria-hidden="true">
-          <img
-            className="jv-armor-image"
-            src={jarvisRobot}
-            alt=""
-            draggable={false}
-          />
+          <picture className="jv-robot-picture">
+            <source media="(max-width: 760px)" srcSet={jarvisMobile} />
+            <img
+              className="jv-armor-image"
+              src={jarvisRobot}
+              alt=""
+              draggable={false}
+            />
+          </picture>
         </div>
         <div className="jv-modes"><b>ANALYZE</b><b>ORGANIZE</b><b>EXECUTE</b><b>SIMPLIFY</b></div>
       </section>
@@ -451,6 +456,7 @@ export default function JarvisApp() {
         <h4>Estado del sistema</h4>
         <strong><i /> Todo en línea</strong>
         <div className="system-globe" aria-hidden="true"><span /><span /></div>
+        <img className="jv-mobile-earth" src={jarvisEarthMobile} alt="" draggable={false} />
         <div className="meters">
           <span>IA<b>100%</b></span>
           <span>Voz<b>100%</b></span>
