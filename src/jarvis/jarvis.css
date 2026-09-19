@@ -2082,3 +2082,250 @@ button{font:inherit;color:inherit}
   }
 }
 
+/* =========================================================
+   V11 — JARVIS COMPLETO DENTRO DEL RECUADRO (SOLO CELULAR)
+   No modifica fondo, núcleo, carrusel ni Estado del sistema.
+   ========================================================= */
+@media (max-width:760px){
+  .jv-right .jv-quote{
+    overflow:hidden!important;
+  }
+
+  .jv-right .jv-quote .jv-robot-stage{
+    width:100%!important;
+    height:100%!important;
+    overflow:hidden!important;
+    display:flex!important;
+    align-items:center!important;
+    justify-content:center!important;
+  }
+
+  .jv-right .jv-quote .jv-armor-image{
+    width:100%!important;
+    height:100%!important;
+    max-width:100%!important;
+    max-height:100%!important;
+    object-fit:contain!important;
+    object-position:center center!important;
+    transform:none!important;
+  }
+}
+
+/* =========================================================
+   V12 — COMPOSICIÓN CELULAR SEGÚN REFERENCIA
+   SOLO <=760px. Escritorio/tablet conservan su composición.
+   Requiere:
+   assets/jarvis-mobile.png
+   assets/jarvis-earth-mobile.png
+   ========================================================= */
+
+.jv-mobile-earth{display:none}
+.jv-robot-picture{display:contents}
+
+@media (max-width:760px){
+
+  /* Núcleo superior: se conserva el fondo y el centro ya aprobado. */
+  .jv-main{
+    padding-bottom:0!important;
+  }
+
+  /* En la referencia, Agenda y Recordatorios vuelven como dos barras
+     compactas debajo del núcleo. */
+  .jv-summary{
+    display:grid!important;
+    grid-template-columns:1fr 1fr!important;
+    gap:7px!important;
+    margin:4px 8px 6px!important;
+    height:auto!important;
+  }
+
+  .jv-summary article{
+    display:flex!important;
+    min-width:0!important;
+    width:100%!important;
+    height:48px!important;
+    min-height:48px!important;
+    padding:0 10px!important;
+    border-radius:8px!important;
+    overflow:hidden!important;
+    align-items:center!important;
+  }
+
+  .jv-summary h3{
+    display:flex!important;
+    align-items:center!important;
+    gap:6px!important;
+    width:100%!important;
+    margin:0!important;
+    font-size:10px!important;
+    white-space:nowrap!important;
+  }
+
+  .jv-summary h3 svg{
+    width:15px!important;
+    height:15px!important;
+    flex:none!important;
+  }
+
+  .jv-summary h3 a{
+    margin-left:auto!important;
+    font-size:0!important;
+  }
+
+  .jv-summary h3 a::after{
+    content:'›'!important;
+    font-size:17px!important;
+  }
+
+  .jv-summary .rem,
+  .jv-summary .empty{
+    display:none!important;
+  }
+
+  /* Debajo: JARVIS ancho completo y luego Estado del sistema ancho completo. */
+  .jv-right{
+    display:flex!important;
+    flex-direction:column!important;
+    gap:6px!important;
+    margin:0 8px 10px!important;
+    width:auto!important;
+  }
+
+  .jv-right .jv-quote,
+  .jv-right .jv-status{
+    width:100%!important;
+    max-width:none!important;
+    border-radius:9px!important;
+  }
+
+  /* Panel JARVIS como la referencia: imagen nueva completa. */
+  .jv-right .jv-quote{
+    height:170px!important;
+    min-height:170px!important;
+    padding:0!important;
+    overflow:hidden!important;
+  }
+
+  .jv-right .jv-quote blockquote,
+  .jv-right .jv-quote .jv-sign,
+  .jv-right .jv-quote .jv-modes{
+    display:none!important;
+  }
+
+  .jv-right .jv-quote .jv-robot-stage{
+    position:absolute!important;
+    inset:0!important;
+    width:100%!important;
+    height:100%!important;
+    display:block!important;
+    overflow:hidden!important;
+  }
+
+  .jv-right .jv-quote .jv-robot-picture{
+    display:block!important;
+    width:100%!important;
+    height:100%!important;
+  }
+
+  .jv-right .jv-quote .jv-armor-image{
+    display:block!important;
+    width:100%!important;
+    height:100%!important;
+    object-fit:cover!important;
+    object-position:center center!important;
+    transform:none!important;
+  }
+
+  /* Estado del sistema como tarjeta horizontal grande. */
+  .jv-right .jv-status{
+    position:relative!important;
+    height:220px!important;
+    min-height:220px!important;
+    padding:12px 12px 10px!important;
+    overflow:hidden!important;
+    display:block!important;
+  }
+
+  .jv-status h4{
+    margin:0 0 5px!important;
+    font-size:13px!important;
+    text-align:left!important;
+  }
+
+  .jv-status strong{
+    display:flex!important;
+    justify-content:flex-start!important;
+    align-items:center!important;
+    gap:5px!important;
+    font-size:11px!important;
+    margin:0!important;
+  }
+
+  /* Oculta el globo CSS antiguo sólo en celular. */
+  .jv-status .system-globe{
+    display:none!important;
+  }
+
+  /* Nueva imagen de la Tierra a la derecha. */
+  .jv-mobile-earth{
+    display:block!important;
+    position:absolute!important;
+    right:13px!important;
+    top:57px!important;
+    width:44%!important;
+    height:128px!important;
+    object-fit:contain!important;
+    object-position:center!important;
+    pointer-events:none!important;
+  }
+
+  /* Métricas en columna izquierda, como la referencia. */
+  .jv-status .meters{
+    position:absolute!important;
+    left:12px!important;
+    top:72px!important;
+    width:42%!important;
+    height:auto!important;
+    padding:0!important;
+    border:0!important;
+    background:transparent!important;
+    display:grid!important;
+    grid-template-columns:1fr!important;
+    gap:8px!important;
+  }
+
+  .jv-status .meters span{
+    display:grid!important;
+    grid-template-columns:1fr auto!important;
+    align-items:center!important;
+    gap:8px!important;
+    min-height:25px!important;
+    padding:4px 7px!important;
+    font-size:8px!important;
+  }
+
+  .jv-status .meters span b{
+    font-size:10px!important;
+  }
+
+  .jv-status>small{
+    position:absolute!important;
+    left:12px!important;
+    bottom:10px!important;
+    padding:0!important;
+    font-size:7px!important;
+    text-align:left!important;
+  }
+}
+
+@media (max-width:390px){
+  .jv-right .jv-quote{
+    height:160px!important;
+    min-height:160px!important;
+  }
+  .jv-right .jv-status{
+    height:210px!important;
+    min-height:210px!important;
+  }
+}
+
