@@ -2692,3 +2692,113 @@ button{font:inherit;color:inherit}
     max-width: none;
   }
 }
+
+
+/* =========================================================
+   FIX — PANEL MINIMIZADO SIN PARPADEO
+   Conserva el barrido luminoso; elimina el pulso continuo
+   que competía con él y parecía una falla visual.
+   ========================================================= */
+
+.jv-float.focused {
+  animation: none !important;
+  box-shadow:
+    0 0 6px rgba(190,250,255,.58),
+    0 0 20px rgba(0,205,255,.28),
+    0 0 44px rgba(0,130,255,.15),
+    inset 0 0 28px rgba(0,190,255,.065) !important;
+}
+
+/* La raya de escaneo sigue corriendo suavemente, sin cambios bruscos. */
+.jv-float::after {
+  animation: jarvisPanelScanSmooth 6.5s linear infinite !important;
+  will-change: transform, opacity;
+}
+
+@keyframes jarvisPanelScanSmooth {
+  0%   { transform: translate3d(0,-110px,0); opacity: 0; }
+  8%   { opacity: .48; }
+  88%  { opacity: .48; }
+  100% { transform: translate3d(0,680px,0); opacity: 0; }
+}
+
+/* El aviso de mensaje nuevo sigue teniendo un pulso corto,
+   pero más suave y sin destellos tipo error. */
+.jv-float.green.jv-wa-incoming,
+.module-card.green.jv-wa-incoming {
+  animation: jvWaIncomingSoft 1.05s ease-in-out 2 !important;
+}
+
+@keyframes jvWaIncomingSoft {
+  0%, 100% {
+    filter: brightness(1);
+  }
+  50% {
+    filter: brightness(1.08);
+    box-shadow:
+      0 0 10px rgba(150,255,235,.55),
+      0 0 28px rgba(0,235,190,.32),
+      inset 0 0 22px rgba(0,220,200,.09);
+  }
+}
+
+@media (max-width:760px) {
+  .jv-float.focused {
+    animation: none !important;
+  }
+
+  .jv-float::after {
+    animation-duration: 6.5s !important;
+  }
+}
+
+
+/* =========================================================
+   JARVIS · WHATSAPP — CONTADOR DE NO LEÍDOS
+   Sin banner grande dentro del chat.
+   ========================================================= */
+
+.jv-wa-notification {
+  display: none !important;
+}
+
+.jv-wa-header-unread,
+.jv-wa-mini-unread {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  border: 1px solid rgba(96,255,220,.78);
+  border-radius: 999px;
+  background: rgba(0,215,170,.22);
+  color: #c8fff1;
+  font-style: normal;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+  box-shadow:
+    0 0 10px rgba(0,255,205,.42),
+    inset 0 0 9px rgba(130,255,235,.12);
+  animation: jvUnreadPop .26s ease-out;
+}
+
+.jv-wa-header-unread {
+  margin-left: 8px;
+}
+
+.jv-wa-mini button {
+  position: relative;
+}
+
+.jv-wa-mini-unread {
+  flex: 0 0 auto;
+  margin-left: auto;
+  background: rgba(0,235,180,.25);
+}
+
+@keyframes jvUnreadPop {
+  from { opacity: 0; transform: scale(.68); }
+  to   { opacity: 1; transform: scale(1); }
+}
