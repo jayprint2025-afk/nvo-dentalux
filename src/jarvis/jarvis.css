@@ -2802,3 +2802,15 @@ button{font:inherit;color:inherit}
   from { opacity: 0; transform: scale(.68); }
   to   { opacity: 1; transform: scale(1); }
 }
+
+
+/* JARVIS WhatsApp · swipe eliminar + deshacer */
+.jv-wa-swipe-row{position:relative;overflow:hidden;touch-action:pan-y;background:rgba(255,55,70,.12)}
+.jv-wa-swipe-row .jv-wa-contact{position:relative;z-index:2;transition:transform .2s cubic-bezier(.2,.8,.2,1);background:#0d171d}
+.jv-wa-swipe-row.revealed .jv-wa-contact{transform:translateX(-84px)}
+.jv-wa-delete-action{position:absolute;z-index:1;right:0;top:0;bottom:0;width:84px;border:0;background:rgba(225,48,65,.94);color:#fff;font-weight:800;letter-spacing:.02em}
+.jv-wa-delete-confirm{position:sticky;z-index:12;bottom:8px;margin:8px 10px;padding:9px 10px;border:1px solid rgba(93,239,255,.25);border-radius:12px;background:rgba(5,18,25,.96);box-shadow:0 8px 28px #0009,0 0 18px rgba(0,220,255,.12);display:flex;align-items:center;gap:8px;font-size:11px}
+.jv-wa-delete-confirm span{flex:1;opacity:.82}
+.jv-wa-delete-confirm button{border:1px solid rgba(89,235,255,.28);border-radius:9px;background:rgba(16,63,72,.58);color:#bffaff;padding:6px 9px;font-size:10px;font-weight:800}
+.jv-wa-delete-confirm button:last-child{color:#9fb1b6;background:transparent}
+@media(max-width:760px){.jv-wa-swipe-row.revealed .jv-wa-contact{transform:translateX(-88px)}.jv-wa-delete-action{width:88px}}
