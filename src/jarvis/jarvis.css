@@ -2569,3 +2569,40 @@ button{font:inherit;color:inherit}
   .jv-float.focused{box-shadow:0 0 4px rgba(170,245,255,.65),0 0 17px rgba(0,205,255,.30),inset 0 0 22px rgba(0,190,255,.07)}
 }
 
+
+
+/* =========================================================
+   MODAL JARVIS — alta de contacto WhatsApp
+   Sustituye el prompt nativo del navegador por HUD integrado.
+   ========================================================= */
+.jv-contact-backdrop{position:fixed;inset:0;z-index:500;display:grid;place-items:center;padding:18px;background:radial-gradient(circle at 50% 42%,rgba(0,151,220,.16),rgba(0,5,12,.82) 58%,rgba(0,3,8,.94));backdrop-filter:blur(8px);animation:jvContactBackdrop .22s ease-out}
+.jv-contact-modal{position:relative;width:min(520px,94vw);overflow:hidden;padding:22px;border:1px solid rgba(96,231,255,.72);border-radius:22px;background:linear-gradient(155deg,rgba(5,35,55,.98),rgba(1,12,22,.99) 58%,rgba(0,7,14,.99));box-shadow:0 0 2px #dffcff,0 0 24px rgba(0,202,255,.36),0 0 80px rgba(0,101,255,.22),inset 0 0 45px rgba(0,180,255,.08);color:#eafcff;animation:jvContactIn .34s cubic-bezier(.2,.9,.2,1)}
+.jv-contact-modal::before{content:"";position:absolute;inset:7px;pointer-events:none;border:1px solid rgba(100,226,255,.13);border-radius:17px}
+.jv-contact-scan{position:absolute;left:0;right:0;top:-20%;height:34%;pointer-events:none;background:linear-gradient(180deg,transparent,rgba(111,236,255,.12),rgba(205,252,255,.28),rgba(65,211,255,.08),transparent);mix-blend-mode:screen;animation:jvContactScan 3.8s linear infinite}
+.jv-contact-modal header{position:relative;display:flex;align-items:center;gap:13px;padding-bottom:16px;border-bottom:1px solid rgba(74,205,241,.2)}
+.jv-contact-emblem{width:44px;height:44px;display:grid;place-items:center;flex:none;border:1px solid #63eaff;border-radius:50%;background:radial-gradient(circle,rgba(36,211,255,.2),rgba(0,50,80,.28));box-shadow:0 0 18px rgba(0,205,255,.45),inset 0 0 16px rgba(0,205,255,.2)}
+.jv-contact-emblem svg{width:22px;color:#9af4ff;filter:drop-shadow(0 0 6px #35dfff)}
+.jv-contact-modal header small{display:block;color:#58cce9;font-size:9px;letter-spacing:.25em}
+.jv-contact-modal h3{margin:3px 0 0;font-size:22px;font-weight:450;letter-spacing:.04em}
+.jv-contact-modal header>button{margin-left:auto;width:38px;height:38px;display:grid;place-items:center;border:1px solid rgba(88,218,248,.3);border-radius:11px;background:rgba(2,26,40,.7);cursor:pointer;color:#8cecff}
+.jv-contact-modal header>button svg{width:18px}
+.jv-contact-modal>p{position:relative;margin:15px 0 18px;color:#8ebfd0;font-size:12.5px}
+.jv-contact-modal label{position:relative;display:block;margin:13px 0}
+.jv-contact-modal label>span{display:block;margin:0 0 6px 4px;color:#57dff7;font-size:9px;letter-spacing:.2em}
+.jv-contact-modal label>div{display:flex;align-items:center;gap:10px;height:52px;padding:0 14px;border:1px solid rgba(68,201,238,.38);border-radius:13px;background:rgba(2,20,32,.84);box-shadow:inset 0 0 20px rgba(0,171,225,.05);transition:.2s}
+.jv-contact-modal label>div:focus-within{border-color:#70ecff;box-shadow:0 0 18px rgba(0,199,255,.22),inset 0 0 22px rgba(0,182,255,.08)}
+.jv-contact-modal label svg{width:19px;color:#53dff7;flex:none}
+.jv-contact-modal input{width:100%;border:0;outline:0;background:transparent;color:#f1fdff;font:inherit;font-size:15px}
+.jv-contact-modal input::placeholder{color:#557f91}
+.jv-contact-error{position:relative;margin:8px 0;padding:9px 11px;border:1px solid rgba(255,93,116,.45);border-radius:10px;background:rgba(120,15,34,.18);color:#ff9bad;font-size:12px}
+.jv-contact-modal footer{position:relative;display:flex;justify-content:flex-end;gap:10px;margin-top:19px;padding-top:15px;border-top:1px solid rgba(74,205,241,.16)}
+.jv-contact-modal footer button{height:42px;padding:0 17px;border-radius:11px;cursor:pointer;transition:.18s}
+.jv-contact-modal .cancel{border:1px solid rgba(91,192,219,.3);background:rgba(4,28,43,.7);color:#a9d6e5}
+.jv-contact-modal .save{display:flex;align-items:center;gap:8px;border:1px solid #5beaff;background:linear-gradient(135deg,rgba(8,111,145,.9),rgba(4,58,91,.95));color:#eaffff;box-shadow:0 0 18px rgba(0,204,255,.28),inset 0 0 15px rgba(78,230,255,.12)}
+.jv-contact-modal .save svg{width:17px}
+.jv-contact-modal .save:disabled{opacity:.42;cursor:not-allowed;box-shadow:none}
+.jv-contact-modal footer button:not(:disabled):active{transform:scale(.97);filter:brightness(1.35)}
+@keyframes jvContactBackdrop{from{opacity:0}to{opacity:1}}
+@keyframes jvContactIn{from{opacity:0;transform:translateY(18px) scale(.94)}to{opacity:1;transform:none}}
+@keyframes jvContactScan{from{transform:translateY(-120%)}to{transform:translateY(430%)}}
+@media(max-width:760px){.jv-contact-backdrop{padding:12px;align-items:center}.jv-contact-modal{width:100%;max-width:430px;padding:17px;border-radius:18px}.jv-contact-modal h3{font-size:19px}.jv-contact-modal>p{margin:12px 0 14px}.jv-contact-modal label>div{height:48px}.jv-contact-modal footer{display:grid;grid-template-columns:.8fr 1.2fr}.jv-contact-modal footer button{padding:0 10px;font-size:12px}}
