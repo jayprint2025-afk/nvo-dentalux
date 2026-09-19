@@ -32,6 +32,14 @@ type WaMessage = {
   manual?: boolean;
 };
 
+type WaContact = {
+  id?: string | number;
+  phone: string;
+  name: string;
+  avatar_url?: string | null;
+  updated_at?: string;
+};
+
 type WaConversation = {
   phone: string;
   name: string;
@@ -132,6 +140,7 @@ export default function JarvisApp() {
   const [waChat, setWaChat] = React.useState('');
   const [waDraft, setWaDraft] = React.useState('');
   const [waMessages, setWaMessages] = React.useState<WaMessage[]>([]);
+  const [waSavedContacts, setWaSavedContacts] = React.useState<WaContact[]>([]);
   const [waLoading, setWaLoading] = React.useState(false);
   const [waSending, setWaSending] = React.useState(false);
   const [waError, setWaError] = React.useState('');
@@ -251,9 +260,12 @@ export default function JarvisApp() {
   const loadWhatsApp = React.useCallback(async (silent = false) => {
     if (!silent) setWaLoading(true);
     try {
-      const data = await jarvisWhatsAppApi('/api/whatsapp/jarvis/messages?limit=1000');
-      const rows = Array.isArray(data) ? data : [];
-      setWaMessages(rows);
+      const [messageData, contactData] = await Promise.all([
+        jarvisWhatsAppApi('/api/whatsapp/jarvis/messages?limit=1000'),
+        jarvisWhatsAppApi('/api/whatsapp/jarvis/contacts'),
+      ]);
+      setWaMessages(Array.isArray(messageData) ? messageData : []);
+      setWaSavedContacts(Array.isArray(contactData) ? contactData : []);
       setWaError('');
     } catch (e: any) {
       console.error('JARVIS WhatsApp:', e);
@@ -364,25 +376,30 @@ export default function JarvisApp() {
       groups.set(phone, arr);
     }
 
-    return Array.from(groups.entries()).map(([phone, messages]) => {
+    const saved = new Map(waSavedContacts.map(c => [String(c.phone), c]));
+    const phones = new Set([...groups.keys(), ...saved.keys()]);
+
+    return Array.from(phones).map(phone => {
+      const messages = groups.get(phone) || [];
       messages.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
       const last = messages[messages.length - 1];
-      const named = [...messages].reverse().find(m => m.contact_name)?.contact_name?.trim();
-      const name = named || phone;
-      const initials = named
-        ? named.split(/\s+/).slice(0, 2).map(x => x[0]?.toUpperCase()).join('')
+      const contact = saved.get(phone);
+      const messageName = [...messages].reverse().find(m => m.contact_name)?.contact_name?.trim();
+      const name = contact?.name?.trim() || messageName || phone;
+      const initials = name !== phone
+        ? name.split(/\s+/).slice(0, 2).map(x => x[0]?.toUpperCase()).join('')
         : phone.slice(-2);
       return {
         phone,
         name,
         avatar: initials || 'WA',
-        preview: last?.message || '',
-        timestamp: last?.timestamp || '',
+        preview: last?.message || 'Contacto guardado',
+        timestamp: last?.timestamp || contact?.updated_at || '',
         unread: 0,
         messages,
       };
-    }).sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-  }, [waMessages]);
+    }).sort((a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime());
+  }, [waMessages, waSavedContacts]);
 
   React.useEffect(() => {
     if (!waChat && waContacts.length) setWaChat(waContacts[0].phone);
@@ -419,22 +436,23 @@ export default function JarvisApp() {
     }
   };
 
-  const newWhatsAppConversation = async () => {
-    const phone = window.prompt('Número de WhatsApp del contacto (con lada):')?.trim();
+  const addWhatsAppContact = async () => {
+    const name = window.prompt('Nombre del contacto:')?.trim();
+    if (!name) return;
+    const phone = window.prompt('Número de WhatsApp con lada (ej. +15202713253):')?.trim();
     if (!phone) return;
-    const message = window.prompt('Primer mensaje de JARVIS:')?.trim();
-    if (!message) return;
     setWaSending(true);
     try {
-      const result: any = await jarvisWhatsAppApi('/api/whatsapp/jarvis/send-message', {
+      const result: any = await jarvisWhatsAppApi('/api/whatsapp/jarvis/contacts', {
         method: 'POST',
-        body: JSON.stringify({ phone, message }),
+        body: JSON.stringify({ name, phone }),
       });
-      setWaChat(String(result?.phone || phone));
+      const savedPhone = String(result?.contact?.phone || phone);
       await loadWhatsApp(true);
+      setWaChat(savedPhone);
       setWaError('');
     } catch (e: any) {
-      setWaError(e?.message || 'No se pudo iniciar la conversación');
+      setWaError(e?.message || 'No se pudo guardar el contacto');
     } finally {
       setWaSending(false);
     }
@@ -513,7 +531,7 @@ export default function JarvisApp() {
         </button>)}
       </div>
       <button className="jv-action" onClick={()=>setFullscreenModule('whatsapp')}><Maximize2 /> Abrir WhatsApp completo</button>
-      <button className="jv-action secondary" onClick={()=>void newWhatsAppConversation()}><Send /> Nuevo mensaje</button>
+      <button className="jv-action secondary" onClick={()=>void addWhatsAppContact()}><Plus /> Agregar contacto</button>
     </>;
     if (id === 'facebook') return <>
       <div className="jv-panel-empty">Facebook listo para publicaciones, mensajes y seguimiento.</div>
