@@ -36,6 +36,7 @@ type WaContact = {
   id?: string | number;
   phone: string;
   name: string;
+  contact_name?: string | null;
   avatar_url?: string | null;
   updated_at?: string;
 };
@@ -165,6 +166,9 @@ export default function JarvisApp() {
   const [waContactModal, setWaContactModal] = React.useState(false);
   const [waContactName, setWaContactName] = React.useState('');
   const [waContactPhone, setWaContactPhone] = React.useState('');
+  const [waSwipePhone, setWaSwipePhone] = React.useState('');
+  const [waDeletedPhone, setWaDeletedPhone] = React.useState('');
+  const waDeleteGesture = React.useRef({ phone:'', x:0, y:0, active:false });
   const [now, setNow] = React.useState(() => new Date());
   const voiceRef = React.useRef<JarvisVoiceController | null>(null);
   const stageRef = React.useRef<HTMLDivElement | null>(null);
@@ -436,7 +440,7 @@ export default function JarvisApp() {
       groups.set(phone, arr);
     }
 
-    const saved = new Map(waSavedContacts.map(c => [String(c.phone), c]));
+    const saved = new Map(waSavedContacts.map(c => [String(c.phone), { ...c, name: String(c.name || c.contact_name || c.phone) }]));
     const phones = new Set([...groups.keys(), ...saved.keys()]);
 
     return Array.from(phones).map(phone => {
@@ -536,6 +540,35 @@ export default function JarvisApp() {
     }
   };
 
+  const waSwipeStart = (phone: string, e: React.PointerEvent<HTMLDivElement>) => {
+    waDeleteGesture.current = { phone, x:e.clientX, y:e.clientY, active:true };
+  };
+  const waSwipeEnd = (phone: string, e: React.PointerEvent<HTMLDivElement>) => {
+    const g=waDeleteGesture.current; waDeleteGesture.current.active=false;
+    if(g.phone!==phone) return;
+    const dx=e.clientX-g.x, dy=e.clientY-g.y;
+    if(Math.abs(dx)>55 && Math.abs(dx)>Math.abs(dy)*1.25){
+      setWaSwipePhone(dx<0 ? phone : '');
+      playUiSound('slide');
+    }
+  };
+  const deleteWhatsAppConversation = async (phone:string) => {
+    try {
+      await jarvisWhatsAppApi('/api/whatsapp/jarvis/conversations/delete',{method:'POST',body:JSON.stringify({phone})});
+      setWaDeletedPhone(phone); setWaSwipePhone('');
+      if(waChat===phone) setWaChat('');
+      playUiSound('close');
+      await loadWhatsApp(true);
+    } catch(e:any){ setWaError(e?.message||'No se pudo eliminar la conversación'); }
+  };
+  const undoWhatsAppDelete = async () => {
+    const phone=waDeletedPhone; if(!phone) return;
+    try {
+      await jarvisWhatsAppApi('/api/whatsapp/jarvis/conversations/restore',{method:'POST',body:JSON.stringify({phone})});
+      setWaDeletedPhone(''); playUiSound('open'); await loadWhatsApp(true); setWaChat(phone);
+    } catch(e:any){ setWaError(e?.message||'No se pudo deshacer'); }
+  };
+
   const renderWhatsAppFull = () => (
     <div className="jv-wa-app">
       <section className="jv-wa-sidebar">
@@ -545,11 +578,22 @@ export default function JarvisApp() {
           {waLoading && !waContacts.length && <div className="jv-panel-empty">Cargando conversaciones…</div>}
           {waError && !waContacts.length && <div className="jv-panel-empty">{waError}</div>}
           {!waLoading && !waFiltered.length && !waError && <div className="jv-panel-empty">No hay conversaciones de WhatsApp.</div>}
-          {waFiltered.map(c => <button key={c.phone} className={`jv-wa-contact ${waChat===c.phone?'active':''}`} onClick={()=>{ setWaChat(c.phone); setWaUnreadByPhone(prev => ({ ...prev, [c.phone]: 0 })); }}>
-            <span className="jv-wa-avatar">{c.avatar}</span>
-            <span className="jv-wa-contact-copy"><b>{c.name}</b><small>{c.preview}</small></span>
-            <span className="jv-wa-meta"><small>{waTime(c.timestamp)}</small>{c.unread ? <em>{c.unread}</em> : null}</span>
-          </button>)}
+          {waFiltered.map(c => <div key={c.phone} className={`jv-wa-swipe-row ${waSwipePhone===c.phone?'revealed':''}`}
+            onPointerDown={e=>waSwipeStart(c.phone,e)} onPointerUp={e=>waSwipeEnd(c.phone,e)}>
+            <button type="button" className="jv-wa-delete-action" onClick={()=>void deleteWhatsAppConversation(c.phone)}>Eliminar</button>
+            <button type="button" className={`jv-wa-contact ${waChat===c.phone?'active':''}`} onClick={()=>{
+              if(waSwipePhone===c.phone){setWaSwipePhone('');return;} setWaChat(c.phone); setWaUnreadByPhone(prev=>({...prev,[c.phone]:0}));
+            }}>
+              <span className="jv-wa-avatar">{c.avatar}</span>
+              <span className="jv-wa-contact-copy"><b>{c.name}</b><small>{c.preview}</small></span>
+              <span className="jv-wa-meta"><small>{waTime(c.timestamp)}</small>{c.unread ? <em>{c.unread}</em> : null}</span>
+            </button>
+          </div>)}
+          {waDeletedPhone && <div className="jv-wa-delete-confirm" role="status">
+            <span>Conversación eliminada</span>
+            <button type="button" onClick={()=>void undoWhatsAppDelete()}>Deshacer</button>
+            <button type="button" onClick={()=>{setWaDeletedPhone('');playUiSound('slide');}}>No</button>
+          </div>}
         </div>
       </section>
 
