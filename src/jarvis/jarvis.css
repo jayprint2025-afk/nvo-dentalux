@@ -1959,4 +1959,45 @@ button{font:inherit;color:inherit}
     top:222px!important;
   }
 }
-\n\n/* =========================================================\n   CELULAR V8 — texto centrado + ruleta touch rápida (7 módulos / 6 visibles)\n   SOLO <=760px. No altera tablet ni escritorio.\n   ========================================================= */\n@media (max-width:760px){\n  /* El núcleo queda donde fue aprobado; sólo el bloque de texto se centra debajo. */\n  .voice-core h2,\n  .voice-core p,\n  .voice-core .jv-wave,\n  .voice-core .tags{\n    position:relative!important;\n    left:15px!important;\n  }\n\n  /* Gesto horizontal capturado por toda la zona del arco. */\n  .jv-orbit{\n    touch-action:none!important;\n    overscroll-behavior:contain!important;\n  }\n  .module-card{\n    touch-action:none!important;\n    transition:left .20s cubic-bezier(.2,.8,.2,1), top .20s cubic-bezier(.2,.8,.2,1),\n               opacity .16s ease, transform .20s ease, box-shadow .20s ease!important;\n    animation:jvRouletteIn .20s ease both;\n  }\n  @keyframes jvRouletteIn{\n    from{opacity:.18;filter:blur(2px);transform:scale(.90)}\n    to{opacity:1;filter:blur(0);transform:scale(1)}\n  }\n  .module-card.facebook{\n    border-color:rgba(80,145,255,.88)!important;\n    box-shadow:0 0 18px rgba(65,125,255,.42), inset 0 0 18px rgba(45,105,255,.12)!important;\n  }\n}\n@media (max-width:390px){\n  .voice-core h2,\n  .voice-core p,\n  .voice-core .jv-wave,\n  .voice-core .tags{left:14px!important}\n}\n
+
+
+/* =========================================================
+   CELULAR V8 — texto centrado + ruleta touch rápida (7 módulos / 6 visibles)
+   SOLO <=760px. No altera tablet ni escritorio.
+   ========================================================= */
+@media (max-width:760px){
+  /* El núcleo queda donde fue aprobado; sólo el bloque de texto se centra debajo. */
+  .voice-core h2,
+  .voice-core p,
+  .voice-core .jv-wave,
+  .voice-core .tags{
+    position:relative!important;
+    left:15px!important;
+  }
+
+  /* Gesto horizontal capturado por toda la zona del arco. */
+  .jv-orbit{
+    touch-action:none!important;
+    overscroll-behavior:contain!important;
+  }
+  .module-card{
+    touch-action:none!important;
+    transition:left .20s cubic-bezier(.2,.8,.2,1), top .20s cubic-bezier(.2,.8,.2,1),
+               opacity .16s ease, transform .20s ease, box-shadow .20s ease!important;
+    animation:jvRouletteIn .20s ease both;
+  }
+  @keyframes jvRouletteIn{
+    from{opacity:.18;filter:blur(2px);transform:scale(.90)}
+    to{opacity:1;filter:blur(0);transform:scale(1)}
+  }
+  .module-card.facebook{
+    border-color:rgba(80,145,255,.88)!important;
+    box-shadow:0 0 18px rgba(65,125,255,.42), inset 0 0 18px rgba(45,105,255,.12)!important;
+  }
+}
+@media (max-width:390px){
+  .voice-core h2,
+  .voice-core p,
+  .voice-core .jv-wave,
+  .voice-core .tags{left:14px!important}
+}
