@@ -7,7 +7,7 @@ import {
   CalendarDays, Bell, Mail, MessageCircle, Phone, Globe2,
   Lock, X, Minus, GripHorizontal, ChevronLeft, ChevronRight, Maximize2, Minimize2,
   Plus, CheckCircle2, Clock3, Send, Search, PhoneCall, Sparkles,
-  FileText, BarChart3, Settings, Home, Sun, Menu, Facebook, Trash2, Undo2, ContactRound, UserPlus
+  FileText, BarChart3, Settings, Home, Sun, Menu, Facebook, Trash2, Undo2, Contact, UserPlus
 } from 'lucide-react';
 import { jarvisApi } from './lib/jarvisApi';
 import { JarvisVoiceController } from './voice/JarvisVoiceController';
@@ -675,7 +675,7 @@ export default function JarvisApp() {
       </div>
       <div className="jv-wa-mini-tools">
         <button className="jv-wa-contacts-launch" onClick={()=>{setWaContactsQuery('');setWaContactsOpen(true);playUiSound('open');}}>
-          <ContactRound /><span><b>Contactos</b><small>{waContacts.length} disponibles</small></span><ChevronRight />
+          <Contact /><span><b>Contactos</b><small>{waContacts.length} disponibles</small></span><ChevronRight />
         </button>
         <button className="jv-wa-add-contact-icon" title="Agregar contacto" aria-label="Agregar contacto" onClick={openWhatsAppContactModal}><UserPlus /></button>
       </div>
@@ -911,7 +911,7 @@ export default function JarvisApp() {
 
     {waContactsOpen && <section className="jv-wa-directory-screen" style={{ '--jarvis-module-bg': `url(${jarvisModuleBg})` } as React.CSSProperties} aria-label="Libreta de contactos JARVIS">
       <header className="jv-wa-directory-head">
-        <div className="jv-wa-directory-title"><span className="jv-wa-directory-emblem"><ContactRound/></span><div><small>JARVIS · DIRECTORIO SEGURO</small><b>Contactos</b></div></div>
+        <div className="jv-wa-directory-title"><span className="jv-wa-directory-emblem"><Contact/></span><div><small>JARVIS · DIRECTORIO SEGURO</small><b>Contactos</b></div></div>
         <button type="button" aria-label="Cerrar contactos" onClick={()=>{setWaContactsOpen(false);playUiSound('close');}}><X/></button>
       </header>
       <div className="jv-wa-directory-search"><Search/><input autoFocus value={waContactsQuery} onChange={e=>setWaContactsQuery(e.target.value)} placeholder="Buscar nombre o número"/><button type="button" title="Nuevo contacto" onClick={()=>{setWaContactsOpen(false);openWhatsAppContactModal();}}><UserPlus/></button></div>
