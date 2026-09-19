@@ -1205,6 +1205,77 @@ async function logAiMessage(conversationId, role, content, meta = {}) {
 }
 
 
+// ===================== JARVIS WhatsApp aislado =====================
+// Canal lógico independiente. Usa el mismo transporte de Meta, pero sus hilos
+// y mensajes NO se guardan en whatsapp_messages ni pasan a la recepcionista V5.
+const JARVIS_WA_CHANNEL_ID = 'JARVIS-WA-001';
+
+async function ensureJarvisWaTables() {
+  await qBypass(`
+    CREATE TABLE IF NOT EXISTS jarvis_whatsapp_threads (
+      id BIGSERIAL PRIMARY KEY,
+      tenant_id UUID NOT NULL,
+      channel_id TEXT NOT NULL DEFAULT 'JARVIS-WA-001',
+      phone TEXT NOT NULL,
+      phone_number_id TEXT,
+      active BOOLEAN NOT NULL DEFAULT TRUE,
+      claimed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (tenant_id, channel_id, phone)
+    )`);
+  await qBypass(`CREATE INDEX IF NOT EXISTS idx_jarvis_wa_threads_route
+    ON jarvis_whatsapp_threads(phone, phone_number_id, active, updated_at DESC)`);
+  await qBypass(`
+    CREATE TABLE IF NOT EXISTS jarvis_whatsapp_messages (
+      id BIGSERIAL PRIMARY KEY,
+      tenant_id UUID NOT NULL,
+      thread_id BIGINT NOT NULL REFERENCES jarvis_whatsapp_threads(id) ON DELETE CASCADE,
+      channel_id TEXT NOT NULL DEFAULT 'JARVIS-WA-001',
+      direction TEXT NOT NULL,
+      phone TEXT NOT NULL,
+      message TEXT NOT NULL DEFAULT '',
+      status TEXT,
+      wa_message_id TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+  await qBypass(`CREATE INDEX IF NOT EXISTS idx_jarvis_wa_messages_thread
+    ON jarvis_whatsapp_messages(thread_id, created_at, id)`);
+}
+
+async function claimJarvisWaThread({ tenantId, phone, phoneNumberId = null }) {
+  await ensureJarvisWaTables();
+  const p = toE164(phone);
+  const { rows } = await qBypass(`
+    INSERT INTO jarvis_whatsapp_threads(tenant_id, channel_id, phone, phone_number_id, active, claimed_at, updated_at)
+    VALUES($1::uuid,$2,$3,$4,TRUE,NOW(),NOW())
+    ON CONFLICT (tenant_id, channel_id, phone)
+    DO UPDATE SET phone_number_id=COALESCE(EXCLUDED.phone_number_id, jarvis_whatsapp_threads.phone_number_id),
+                  active=TRUE, claimed_at=NOW(), updated_at=NOW()
+    RETURNING *`, [tenantId, JARVIS_WA_CHANNEL_ID, p, phoneNumberId]);
+  return rows[0];
+}
+
+async function findActiveJarvisWaThread({ phone, phoneNumberId = null }) {
+  await ensureJarvisWaTables();
+  const p = toE164(phone);
+  const { rows } = await qBypass(`
+    SELECT * FROM jarvis_whatsapp_threads
+     WHERE phone=$1 AND active=TRUE
+       AND ($2::text IS NULL OR phone_number_id=$2 OR phone_number_id IS NULL)
+     ORDER BY (phone_number_id=$2) DESC NULLS LAST, updated_at DESC
+     LIMIT 1`, [p, phoneNumberId]);
+  return rows[0] || null;
+}
+
+async function logJarvisWa({ thread, direction, message, status, waMessageId = null }) {
+  await ensureJarvisWaTables();
+  await qBypass(`INSERT INTO jarvis_whatsapp_messages
+    (tenant_id,thread_id,channel_id,direction,phone,message,status,wa_message_id)
+    VALUES($1::uuid,$2,$3,$4,$5,$6,$7,$8)`,
+    [thread.tenant_id, thread.id, JARVIS_WA_CHANNEL_ID, direction, thread.phone, String(message || ''), status || null, waMessageId]);
+  await qBypass(`UPDATE jarvis_whatsapp_threads SET updated_at=NOW() WHERE id=$1`, [thread.id]);
+}
+
 // --- Idempotencia por wamid ---
 async function ensureProcessedTable() {
   await q(`
@@ -1824,6 +1895,27 @@ router.post('/webhook', async (req, res) => {
     
     console.log('📝 TEXT AFTER BUTTON MAPPING:', text);
 
+
+    // =========================================================
+    // JARVIS-WA-001 tiene prioridad sobre CliniqOne.
+    // Si JARVIS reclamó este teléfono, la respuesta termina aquí.
+    // =========================================================
+    const jarvisThread = await findActiveJarvisWaThread({ phone: from, phoneNumberId }).catch(err => {
+      console.error('JARVIS route lookup:', err.message);
+      return null;
+    });
+    if (jarvisThread) {
+      await logJarvisWa({
+        thread: jarvisThread,
+        direction: 'incoming',
+        message: text || `[${msg.type || 'message'}]`,
+        status: 'received',
+        waMessageId: wamid
+      }).catch(err => console.error('JARVIS incoming log:', err.message));
+      console.log('🧭 JARVIS WhatsApp route', { channel: JARVIS_WA_CHANNEL_ID, phone: from, tenantId: jarvisThread.tenant_id });
+      await markProcessed(wamid);
+      return res.sendStatus(200);
+    }
 
     // =========================================================
     // RECEPCIONISTA WHATSAPP SAAS
@@ -3026,6 +3118,70 @@ if (!appt && CROSS_SUC_FALLBACK) {
     });
     return res.sendStatus(200);
   }
+});
+
+// ===================== JARVIS WhatsApp API =====================
+router.get('/jarvis/messages', async (req, res) => {
+  try {
+    const tenantId = requireTenantId(req);
+    await ensureJarvisWaTables();
+    const limit = Math.max(1, Math.min(Number(req.query.limit || 1000), 2000));
+    const { rows } = await qBypass(`
+      SELECT m.id, m.wa_message_id, m.direction AS type, m.phone, m.message, m.status,
+             m.created_at AS timestamp, NULL::text AS contact_name, TRUE AS manual
+        FROM jarvis_whatsapp_messages m
+       WHERE m.tenant_id=$1::uuid AND m.channel_id=$2
+       ORDER BY m.created_at ASC, m.id ASC
+       LIMIT $3`, [tenantId, JARVIS_WA_CHANNEL_ID, limit]);
+    res.json(rows);
+  } catch (e) {
+    res.status(e.statusCode || 500).json({ ok:false, error:String(e.message || e) });
+  }
+});
+
+router.post('/jarvis/send-message', async (req, res) => {
+  try {
+    const tenantId = requireTenantId(req);
+    const { phone, message } = req.body || {};
+    if (!phone || !String(message || '').trim()) return res.status(400).json({ ok:false, error:'phone and message are required' });
+
+    // Conserva el mismo Phone Number ID / token del canal WhatsApp de este tenant.
+    const channel = await qBypass(`SELECT phone_number_id, external_id, config, metadata
+      FROM clinic_channels WHERE tenant_id=$1::uuid AND channel='whatsapp'
+      ORDER BY updated_at DESC NULLS LAST, id DESC LIMIT 1`, [tenantId]);
+    const cc = channel.rows[0] || {};
+    const cfg = cc.config && typeof cc.config === 'object' ? cc.config : {};
+    const meta = cc.metadata && typeof cc.metadata === 'object' ? cc.metadata : {};
+    const phoneNumberId = String(cc.phone_number_id || cc.external_id || cfg.phoneNumberId || cfg.phone_number_id || process.env.WHATSAPP_PHONE_NUMBER_ID || '').trim() || null;
+    const accessToken = String(cfg.accessToken || cfg.access_token || meta.accessToken || meta.access_token || process.env.WHATSAPP_ACCESS_TOKEN || '').trim();
+
+    const store = als.getStore();
+    if (store) {
+      store.tenantId = tenantId;
+      if (phoneNumberId) store.waPhoneNumberId = phoneNumberId;
+      if (accessToken) store.waAccessToken = accessToken;
+    }
+
+    const thread = await claimJarvisWaThread({ tenantId, phone, phoneNumberId });
+    const data = await sendWhatsAppText({ to: thread.phone, text: String(message).trim() });
+    const waMessageId = data?.messages?.[0]?.id || null;
+    await logJarvisWa({ thread, direction:'outgoing', message:String(message).trim(), status:'sent', waMessageId });
+    res.json({ ok:true, channel_id:JARVIS_WA_CHANNEL_ID, phone:thread.phone, data });
+  } catch (e) {
+    res.status(e.statusCode || 500).json({ ok:false, error:String(e.message || e) });
+  }
+});
+
+router.post('/jarvis/release', async (req, res) => {
+  try {
+    const tenantId = requireTenantId(req);
+    const phone = toE164(req.body?.phone || '');
+    if (!phone) return res.status(400).json({ ok:false, error:'phone is required' });
+    await ensureJarvisWaTables();
+    await qBypass(`UPDATE jarvis_whatsapp_threads SET active=FALSE, updated_at=NOW()
+      WHERE tenant_id=$1::uuid AND channel_id=$2 AND phone=$3`, [tenantId, JARVIS_WA_CHANNEL_ID, phone]);
+    res.json({ ok:true });
+  } catch (e) { res.status(e.statusCode || 500).json({ ok:false, error:String(e.message || e) }); }
 });
 
 // ===================== utilitarios =====================
