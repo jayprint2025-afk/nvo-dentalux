@@ -152,6 +152,10 @@ export default function JarvisApp() {
   const stageRef = React.useRef<HTMLDivElement | null>(null);
   const audioRef = React.useRef<AudioContext | null>(null);
   const lastHoverSound = React.useRef(0);
+  const waSeenIncomingRef = React.useRef<Set<string>>(new Set());
+  const waInitialLoadRef = React.useRef(true);
+  const [waIncomingPulse, setWaIncomingPulse] = React.useState(false);
+  const [waNotice, setWaNotice] = React.useState('');
   const carouselSwipe = React.useRef({ x: 0, y: 0, active: false, moved: false, pointerId: -1 });
 
   const flashUi = React.useCallback((kind: 'open' | 'slide' | 'close' | 'mic' | 'hover') => {
@@ -164,7 +168,7 @@ export default function JarvisApp() {
     window.setTimeout(() => stage.classList.remove(className), 650);
   }, []);
 
-  const playUiSound = React.useCallback((kind: 'open' | 'slide' | 'minimize' | 'close' | 'mic' | 'hover') => {
+  const playUiSound = React.useCallback((kind: 'open' | 'slide' | 'minimize' | 'close' | 'mic' | 'hover' | 'wa-send' | 'wa-receive') => {
     try {
       const AudioCtor = window.AudioContext;
       const ctx = audioRef.current || new AudioCtor();
@@ -196,6 +200,15 @@ export default function JarvisApp() {
       if (kind === 'close') { tone(360, 110, 0, .23, 'sine'); }
       if (kind === 'mic') { tone(240, 720, 0, .2, 'sine'); tone(480, 1280, .09, .26, 'triangle'); }
       if (kind === 'hover') { tone(880, 1040, 0, .07, 'sine'); }
+      // Sonidos propios de JARVIS para WhatsApp: salida corta / entrada doble.
+      if (kind === 'wa-send') {
+        tone(520, 920, 0, .10, 'sine');
+        tone(760, 1240, .045, .11, 'triangle');
+      }
+      if (kind === 'wa-receive') {
+        tone(880, 1320, 0, .11, 'sine');
+        tone(660, 1080, .13, .13, 'triangle');
+      }
       flashUi(kind === 'minimize' ? 'close' : kind);
     } catch { /* Audio no disponible: la interfaz sigue funcionando. */ }
   }, [flashUi]);
@@ -267,7 +280,28 @@ export default function JarvisApp() {
         jarvisWhatsAppApi('/api/whatsapp/jarvis/messages?limit=1000'),
         jarvisWhatsAppApi('/api/whatsapp/jarvis/contacts'),
       ]);
-      setWaMessages(Array.isArray(messageData) ? messageData : []);
+      const nextMessages: WaMessage[] = Array.isArray(messageData) ? messageData : [];
+      const incoming = nextMessages.filter(m => m.type === 'incoming');
+      const incomingKeys = incoming.map(m => String(m.wa_message_id || m.id));
+
+      if (waInitialLoadRef.current) {
+        // No sonar por todo el historial al abrir JARVIS.
+        waSeenIncomingRef.current = new Set(incomingKeys);
+        waInitialLoadRef.current = false;
+      } else {
+        const fresh = incoming.filter(m => !waSeenIncomingRef.current.has(String(m.wa_message_id || m.id)));
+        if (fresh.length) {
+          fresh.forEach(m => waSeenIncomingRef.current.add(String(m.wa_message_id || m.id)));
+          const newest = fresh[fresh.length - 1];
+          playUiSound('wa-receive');
+          setWaIncomingPulse(true);
+          setWaNotice(`Nuevo WhatsApp · ${newest.contact_name || newest.phone}`);
+          window.setTimeout(() => setWaIncomingPulse(false), 1800);
+          window.setTimeout(() => setWaNotice(''), 4200);
+        }
+      }
+
+      setWaMessages(nextMessages);
       setWaSavedContacts(Array.isArray(contactData) ? contactData : []);
       setWaError('');
     } catch (e: any) {
@@ -276,7 +310,7 @@ export default function JarvisApp() {
     } finally {
       if (!silent) setWaLoading(false);
     }
-  }, []);
+  }, [playUiSound]);
 
   React.useEffect(() => {
     void loadWhatsApp();
@@ -430,6 +464,7 @@ export default function JarvisApp() {
         body: JSON.stringify({ phone: waCurrent.phone, message }),
       });
       setWaDraft('');
+      playUiSound('wa-send');
       await loadWhatsApp(true);
     } catch (e: any) {
       console.error('JARVIS WhatsApp send:', e);
@@ -649,7 +684,7 @@ export default function JarvisApp() {
           {rotated.map((m, i) => {
             const I = m.icon, slot = i - 2.5, b = badge(m.id);
             return <button key={m.id}
-              className={`module-card ${m.accent} ${selected === m.id ? 'selected' : ''}`}
+              className={`module-card ${m.accent} ${selected === m.id ? 'selected' : ''} ${m.id === 'whatsapp' && waIncomingPulse ? 'jv-wa-incoming' : ''}`}
               style={{ '--slot': slot, '--lift': Math.abs(slot) } as React.CSSProperties}
               onPointerEnter={hoverCard}
               onClick={() => { if (!carouselSwipe.current.moved) activate(m.id); }}>
@@ -745,7 +780,7 @@ export default function JarvisApp() {
       {open.map((id, i) => {
         const m = modules.find(x => x.id === id)!; const I = m.icon; const pos = positions[id] || defaultPos(i);
         return <section key={id}
-          className={`jv-float ${m.accent} ${selected === id ? 'focused' : ''}`}
+          className={`jv-float ${m.accent} ${selected === id ? 'focused' : ''} ${id === 'whatsapp' && waIncomingPulse ? 'jv-wa-incoming' : ''}`}
           style={{ left: pos.x, top: pos.y, zIndex: selected === id ? 60 : 40 + i }}
           onPointerDown={e => { setSelected(id); beginDrag(id, e); }}>
           <header>
@@ -794,6 +829,11 @@ export default function JarvisApp() {
           <button type="submit" className="save" disabled={waSending || !waContactName.trim() || !waContactPhone.trim()}><CheckCircle2 />{waSending ? 'Guardando…' : 'Guardar contacto'}</button>
         </footer>
       </form>
+    </div>}
+
+    {waNotice && <div className="jv-wa-notification" role="status" aria-live="polite">
+      <MessageCircle />
+      <div><b>JARVIS · WhatsApp</b><span>{waNotice}</span></div>
     </div>}
 
     {open.length > 0 && <button className="jv-reset" onClick={resetPanels}><Sparkles /> Reorganizar paneles</button>}
