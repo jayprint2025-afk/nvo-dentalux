@@ -4,7 +4,7 @@ import jarvisEarthMobile from './assets/jarvis-earth-mobile.png';
 import React from 'react';
 import {
   CalendarDays, Bell, Mail, MessageCircle, Phone, Globe2,
-  Lock, X, Minus, GripHorizontal, ChevronLeft, ChevronRight,
+  Lock, X, Minus, GripHorizontal, ChevronLeft, ChevronRight, Maximize2, Minimize2,
   Plus, CheckCircle2, Clock3, Send, Search, PhoneCall, Sparkles,
   FileText, BarChart3, Settings, Home, Sun, Menu, Facebook
 } from 'lucide-react';
@@ -64,6 +64,10 @@ export default function JarvisApp() {
   const [positions, setPositions] = React.useState<Partial<Record<ModuleId, Pos>>>({});
   const [carousel, setCarousel] = React.useState(0);
   const [menuOpen, setMenuOpen] = React.useState(false);
+  const [fullscreenModule, setFullscreenModule] = React.useState<ModuleId | null>(null);
+  const [waQuery, setWaQuery] = React.useState('');
+  const [waChat, setWaChat] = React.useState('yaneth');
+  const [waDraft, setWaDraft] = React.useState('');
   const [now, setNow] = React.useState(() => new Date());
   const voiceRef = React.useRef<JarvisVoiceController | null>(null);
   const stageRef = React.useRef<HTMLDivElement | null>(null);
@@ -255,6 +259,53 @@ export default function JarvisApp() {
     window.addEventListener('pointerup', up);
   };
 
+  const waContacts = [
+    { id:'iglesia', name:'Iglesia CDA 🔥🕊️🙏📖✝️', avatar:'IC', preview:'Abigail Martinez: Dios les bendiga...', time:'4:53 p. m.', unread:1 },
+    { id:'yaneth', name:'Yaneth Caballero', avatar:'YC', preview:'Videollamada', time:'12:18 p. m.' },
+    { id:'condesa', name:'DENTALUX CONDESA 🦷💙✨', avatar:'DC', preview:'Yaneth: Ok', time:'9:33 a. m.' },
+    { id:'jhon', name:'Jhon', avatar:'J', preview:'https://www.facebook.com/share/v/1...', time:'Ayer' },
+    { id:'dany', name:'Dany Wong', avatar:'DW', preview:'Pongo la mía ya siendo de aquí espero...', time:'Ayer' },
+  ];
+  const waFiltered = waContacts.filter(c => (c.name + ' ' + c.preview).toLowerCase().includes(waQuery.toLowerCase()));
+  const waCurrent = waContacts.find(c => c.id === waChat) || waContacts[1];
+
+  const renderWhatsAppFull = () => (
+    <div className="jv-wa-app">
+      <section className="jv-wa-sidebar">
+        <div className="jv-wa-brand"><b>WhatsApp</b><span>JARVIS</span></div>
+        <label className="jv-wa-search"><Search/><input value={waQuery} onChange={e=>setWaQuery(e.target.value)} placeholder="Buscar contacto o conversación" /></label>
+        <div className="jv-wa-list">
+          {waFiltered.map(c => <button key={c.id} className={`jv-wa-contact ${waChat===c.id?'active':''}`} onClick={()=>setWaChat(c.id)}>
+            <span className="jv-wa-avatar">{c.avatar}</span>
+            <span className="jv-wa-contact-copy"><b>{c.name}</b><small>{c.preview}</small></span>
+            <span className="jv-wa-meta"><small>{c.time}</small>{c.unread ? <em>{c.unread}</em> : null}</span>
+          </button>)}
+        </div>
+      </section>
+      <section className="jv-wa-chat">
+        <header className="jv-wa-chat-head">
+          <span className="jv-wa-avatar">{waCurrent.avatar}</span>
+          <div><b>{waCurrent.name}</b><small>en línea</small></div>
+          <span className="jv-wa-head-actions"><button><Phone/></button><button><Search/></button></span>
+        </header>
+        <div className="jv-wa-messages">
+          <div className="jv-wa-day">Hoy</div>
+          <div className="jv-wa-msg incoming">No, que no podías tener celular <small>1:03 p. m.</small></div>
+          <div className="jv-wa-photo-demo"><span>FOTO</span><small>1:03 p. m. ✓✓</small></div>
+          <div className="jv-wa-msg outgoing">Ando en el cuarto feio <small>1:04 p. m. ✓✓</small></div>
+          <div className="jv-wa-msg outgoing">Acomodando las tarimas que llegaron <small>1:04 p. m. ✓✓</small></div>
+          <div className="jv-wa-msg outgoing">Ahora sii <small>1:04 p. m. ✓✓</small></div>
+          <div className="jv-wa-msg incoming">Ah OK OK y ahí sí puedes <small>1:04 p. m.</small></div>
+        </div>
+        <form className="jv-wa-compose" onSubmit={e=>{e.preventDefault(); setWaDraft('');}}>
+          <button type="button">＋</button>
+          <input value={waDraft} onChange={e=>setWaDraft(e.target.value)} placeholder="Mensaje" />
+          <button type="submit"><Send/></button>
+        </form>
+      </section>
+    </div>
+  );
+
   const renderPanel = (id: ModuleId) => {
     if (id === 'agenda') return <>
       {events.length
@@ -274,8 +325,13 @@ export default function JarvisApp() {
       <button className="jv-action secondary"><Send /> Redactar</button>
     </>;
     if (id === 'whatsapp') return <>
-      <div className="jv-panel-empty">Centro de WhatsApp listo para conversaciones y envíos.</div>
-      <button className="jv-action"><MessageCircle /> Conversaciones</button>
+      <div className="jv-wa-mini">
+        <label><Search/><input value={waQuery} onChange={e=>setWaQuery(e.target.value)} placeholder="Buscar chat" /></label>
+        {waFiltered.slice(0,3).map(c => <button key={c.id} onClick={()=>{setWaChat(c.id); setFullscreenModule('whatsapp');}}>
+          <span className="jv-wa-avatar">{c.avatar}</span><span><b>{c.name}</b><small>{c.preview}</small></span>
+        </button>)}
+      </div>
+      <button className="jv-action" onClick={()=>setFullscreenModule('whatsapp')}><Maximize2 /> Abrir WhatsApp completo</button>
       <button className="jv-action secondary"><Send /> Nuevo mensaje</button>
     </>;
     if (id === 'facebook') return <>
@@ -477,6 +533,7 @@ export default function JarvisApp() {
           <header>
             <div><I /><b>{m.label}</b></div>
             <span><GripHorizontal />
+              <button title="Maximizar" onClick={() => setFullscreenModule(id)}><Maximize2 /></button>
               <button title="Minimizar" onClick={() => closePanel(id, 'minimize')}><Minus /></button>
               <button title="Cerrar" onClick={() => closePanel(id, 'close')}><X /></button>
             </span>
@@ -485,6 +542,22 @@ export default function JarvisApp() {
         </section>;
       })}
     </div>
+
+    {fullscreenModule && (() => {
+      const fm = modules.find(x => x.id === fullscreenModule)!;
+      const FI = fm.icon;
+      return <section className={`jv-module-fullscreen ${fm.accent}`}>
+        <header className="jv-module-fullscreen-head">
+          <div><FI/><b>{fm.label}</b><small>JARVIS · vista completa</small></div>
+          <button title="Restaurar" onClick={()=>setFullscreenModule(null)}><Minimize2/></button>
+        </header>
+        <div className="jv-module-fullscreen-body">
+          {fullscreenModule === 'whatsapp'
+            ? renderWhatsAppFull()
+            : <div className="jv-module-coming"><FI/><h2>{fm.label}</h2><p>Interfaz completa pendiente de definir.</p></div>}
+        </div>
+      </section>;
+    })()}
 
     {open.length > 0 && <button className="jv-reset" onClick={resetPanels}><Sparkles /> Reorganizar paneles</button>}
   </div>;
