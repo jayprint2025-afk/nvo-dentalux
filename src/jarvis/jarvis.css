@@ -2451,3 +2451,39 @@ button{font:inherit;color:inherit}
   .jv-wa-msg{max-width:86%;font-size:12px}
   .jv-wa-photo-demo{width:78%}
 }
+
+
+/* =========================================================
+   JARVIS — FONDO UNIVERSAL EN INTERFACES DE MÓDULOS
+   Usa: src/jarvis/assets/jarvis-module-bg.png
+   ========================================================= */
+.jv-module-fullscreen-body{
+  position:relative;
+  isolation:isolate;
+  overflow:hidden;
+  background-image:
+    linear-gradient(180deg,rgba(1,13,20,.72),rgba(1,13,20,.55) 45%,rgba(1,13,20,.76)),
+    var(--jarvis-module-bg);
+  background-size:cover;
+  background-position:center center;
+  background-repeat:no-repeat;
+}
+.jv-module-fullscreen-body::before{
+  content:"";position:absolute;inset:0;z-index:-1;pointer-events:none;
+  background:radial-gradient(circle at 50% 45%,rgba(0,220,255,.04),rgba(0,15,25,.22) 72%);
+}
+.jv-module-fullscreen-body>*{position:relative;z-index:1}
+.jv-module-fullscreen-body .jv-wa-app{background:transparent}
+.jv-module-fullscreen-body .jv-wa-sidebar{background:rgba(10,23,29,.84);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
+.jv-module-fullscreen-body .jv-wa-chat{background:rgba(5,18,23,.40)}
+.jv-module-fullscreen-body .jv-wa-chat-head{background:rgba(24,34,41,.82);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
+.jv-module-fullscreen-body .jv-wa-messages{
+  background:linear-gradient(rgba(3,15,20,.48),rgba(3,15,20,.48));
+}
+.jv-module-fullscreen-body .jv-wa-compose{background:rgba(24,34,41,.86);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
+.jv-module-fullscreen-body .jv-module-coming{background:rgba(2,14,20,.28)}
+@media (max-width:760px){
+  .jv-module-fullscreen-body{background-size:cover;background-position:50% 50%}
+  .jv-module-fullscreen-body .jv-wa-chat{background:rgba(2,15,20,.30)}
+  .jv-module-fullscreen-body .jv-wa-messages{background:linear-gradient(rgba(1,12,17,.34),rgba(1,12,17,.34))}
+}
