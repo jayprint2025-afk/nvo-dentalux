@@ -2828,3 +2828,117 @@ button{font:inherit;color:inherit}
 .jv-wa-delete-confirm-mini{position:relative!important;bottom:auto!important;margin:7px 0 0!important;flex:none}
 .jv-wa-list{min-height:0;overflow-y:auto!important;overflow-x:hidden!important;touch-action:pan-y;-webkit-overflow-scrolling:touch;overscroll-behavior:contain}
 .jv-wa-swipe-row{touch-action:pan-y}
+
+/* =========================================================
+   JARVIS WhatsApp V4 — swipe elegante / acción invisible
+   hasta que el usuario desliza. Corrige layout del mini panel.
+   ========================================================= */
+.jv-wa-mini-carousel{
+  display:flex;
+  flex-direction:column;
+  gap:7px;
+  padding:2px 3px 4px 0;
+}
+.jv-wa-mini-swipe,
+.jv-wa-swipe-row{
+  position:relative;
+  overflow:hidden;
+  border-radius:13px;
+  background:transparent !important;
+  isolation:isolate;
+}
+
+/* La acción NO existe visualmente hasta revelar el gesto. */
+.jv-wa-mini-delete,
+.jv-wa-delete-action{
+  position:absolute !important;
+  z-index:1 !important;
+  right:0 !important;
+  top:0 !important;
+  bottom:0 !important;
+  width:92px !important;
+  display:flex !important;
+  flex-direction:column;
+  align-items:center !important;
+  justify-content:center !important;
+  gap:3px;
+  border:1px solid rgba(255,92,112,.28) !important;
+  border-radius:12px !important;
+  background:
+    linear-gradient(135deg,rgba(116,12,34,.96),rgba(39,5,18,.98)) !important;
+  color:#ff9cac !important;
+  font-size:10px !important;
+  font-weight:800 !important;
+  letter-spacing:.035em;
+  box-shadow:inset 0 0 18px rgba(255,43,82,.13),0 0 16px rgba(255,28,69,.10);
+  opacity:0 !important;
+  visibility:hidden;
+  pointer-events:none !important;
+  transform:translateX(18px) scale(.96);
+  transition:opacity .18s ease,transform .22s cubic-bezier(.2,.8,.2,1),visibility 0s linear .22s;
+}
+.jv-wa-mini-delete svg,
+.jv-wa-delete-action svg{width:18px;height:18px;filter:drop-shadow(0 0 6px rgba(255,88,111,.38))}
+.jv-wa-mini-swipe.revealed .jv-wa-mini-delete,
+.jv-wa-swipe-row.revealed .jv-wa-delete-action{
+  opacity:1 !important;
+  visibility:visible;
+  pointer-events:auto !important;
+  transform:translateX(0) scale(1);
+  transition-delay:0s;
+}
+
+/* Tarjeta del contacto: tecnológica, limpia y opaca para no mostrar Eliminar detrás. */
+.jv-wa-mini-chat{
+  position:relative !important;
+  z-index:2 !important;
+  width:100% !important;
+  min-height:66px;
+  display:grid !important;
+  grid-template-columns:48px minmax(0,1fr) auto;
+  align-items:center !important;
+  gap:11px !important;
+  padding:8px 10px !important;
+  border:1px solid rgba(76,225,244,.08) !important;
+  border-radius:13px !important;
+  background:linear-gradient(100deg,rgba(5,29,37,.985),rgba(4,22,30,.985)) !important;
+  color:#eafcff !important;
+  text-align:left !important;
+  box-shadow:inset 0 0 22px rgba(0,210,255,.025) !important;
+  transform:translateX(0);
+  transition:transform .24s cubic-bezier(.2,.8,.2,1),border-color .2s ease,box-shadow .2s ease !important;
+}
+.jv-wa-mini-chat:hover{border-color:rgba(83,231,248,.20) !important;box-shadow:inset 0 0 25px rgba(0,215,255,.04),0 0 12px rgba(0,210,255,.035) !important}
+.jv-wa-mini-chat>span:nth-child(2){display:grid;min-width:0;gap:3px}
+.jv-wa-mini-chat b{font-size:14px;line-height:1.15;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.jv-wa-mini-chat small{display:block;font-size:11px;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#a8bcc2;opacity:.72}
+.jv-wa-mini-swipe.revealed .jv-wa-mini-chat{transform:translateX(-98px) !important}
+
+/* Pantalla completa: misma lógica; jamás se ve rojo debajo sin gesto. */
+.jv-wa-swipe-row .jv-wa-contact{
+  z-index:2;
+  border-radius:12px;
+  background:linear-gradient(100deg,rgba(8,26,34,.995),rgba(7,22,29,.995)) !important;
+}
+.jv-wa-swipe-row.revealed .jv-wa-contact{transform:translateX(-98px) !important}
+
+/* Confirmación tipo HUD de JARVIS. */
+.jv-wa-delete-confirm{
+  border:1px solid rgba(74,231,248,.30) !important;
+  border-radius:13px !important;
+  background:linear-gradient(100deg,rgba(3,25,34,.98),rgba(4,16,24,.98)) !important;
+  color:#dffcff;
+  box-shadow:0 10px 30px rgba(0,0,0,.52),inset 0 0 22px rgba(0,220,255,.04),0 0 14px rgba(0,210,255,.08) !important;
+}
+.jv-wa-delete-confirm::before{
+  content:"";width:6px;height:6px;border-radius:50%;flex:0 0 auto;
+  background:#5ff3ff;box-shadow:0 0 10px rgba(95,243,255,.85);
+}
+.jv-wa-delete-confirm .jv-wa-undo-btn{display:inline-flex;align-items:center;gap:5px;color:#9cf7ff !important}
+.jv-wa-delete-confirm .jv-wa-undo-btn svg{width:13px;height:13px}
+
+@media(max-width:760px){
+  .jv-wa-mini-carousel{max-height:260px}
+  .jv-wa-mini-chat{min-height:62px;grid-template-columns:46px minmax(0,1fr) auto;padding:7px 9px !important}
+  .jv-wa-mini-delete,.jv-wa-delete-action{width:92px !important}
+}
