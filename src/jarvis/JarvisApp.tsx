@@ -583,7 +583,7 @@ export default function JarvisApp() {
         <div className="jv-wa-list">
           {waLoading && !waContacts.length && <div className="jv-panel-empty">Cargando conversaciones…</div>}
           {waError && !waContacts.length && <div className="jv-panel-empty">{waError}</div>}
-          {!waLoading && !waConversationList.length && !waError && <div className="jv-panel-empty">No hay conversaciones de WhatsApp.</div>}
+          {!waLoading && !waFiltered.length && !waError && <div className="jv-panel-empty">No hay conversaciones de WhatsApp.</div>}
           {waConversationList.map(c => <div key={c.phone} className={`jv-wa-swipe-row ${waSwipePhone===c.phone?'revealed':''}`}
             onPointerDown={e=>waSwipeStart(c.phone,e)} onPointerUp={e=>waSwipeEnd(c.phone,e)}>
             <button type="button" className="jv-wa-delete-action" aria-label={`Eliminar ${c.name}`} onClick={()=>void deleteWhatsAppConversation(c.phone)}><Trash2/><span>Eliminar</span></button>
@@ -674,7 +674,9 @@ export default function JarvisApp() {
         </div>}
       </div>
       <div className="jv-wa-mini-tools">
-        <button className="jv-wa-contacts-launch" onClick={()=>{setWaContactsQuery('');setWaContactsOpen(true);playUiSound('open');}}><ContactRound /><span><b>Contactos</b><small>{waContacts.length} disponibles</small></span><ChevronRight /></button>
+        <button className="jv-wa-contacts-launch" onClick={()=>{setWaContactsQuery('');setWaContactsOpen(true);playUiSound('open');}}>
+          <ContactRound /><span><b>Contactos</b><small>{waContacts.length} disponibles</small></span><ChevronRight />
+        </button>
         <button className="jv-wa-add-contact-icon" title="Agregar contacto" aria-label="Agregar contacto" onClick={openWhatsAppContactModal}><UserPlus /></button>
       </div>
     </>;
@@ -907,7 +909,7 @@ export default function JarvisApp() {
       </section>;
     })()}
 
-    {waContactsOpen && <section className="jv-wa-directory-screen" aria-label="Libreta de contactos JARVIS">
+    {waContactsOpen && <section className="jv-wa-directory-screen" style={{ '--jarvis-module-bg': `url(${jarvisModuleBg})` } as React.CSSProperties} aria-label="Libreta de contactos JARVIS">
       <header className="jv-wa-directory-head">
         <div className="jv-wa-directory-title"><span className="jv-wa-directory-emblem"><ContactRound/></span><div><small>JARVIS · DIRECTORIO SEGURO</small><b>Contactos</b></div></div>
         <button type="button" aria-label="Cerrar contactos" onClick={()=>{setWaContactsOpen(false);playUiSound('close');}}><X/></button>
