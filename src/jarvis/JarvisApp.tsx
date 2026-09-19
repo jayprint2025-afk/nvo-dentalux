@@ -155,7 +155,7 @@ export default function JarvisApp() {
   const waSeenIncomingRef = React.useRef<Set<string>>(new Set());
   const waInitialLoadRef = React.useRef(true);
   const [waIncomingPulse, setWaIncomingPulse] = React.useState(false);
-  const [waNotice, setWaNotice] = React.useState('');
+  const [waUnreadByPhone, setWaUnreadByPhone] = React.useState<Record<string, number>>({});
   const carouselSwipe = React.useRef({ x: 0, y: 0, active: false, moved: false, pointerId: -1 });
 
   const flashUi = React.useCallback((kind: 'open' | 'slide' | 'close' | 'mic' | 'hover') => {
@@ -292,12 +292,17 @@ export default function JarvisApp() {
         const fresh = incoming.filter(m => !waSeenIncomingRef.current.has(String(m.wa_message_id || m.id)));
         if (fresh.length) {
           fresh.forEach(m => waSeenIncomingRef.current.add(String(m.wa_message_id || m.id)));
-          const newest = fresh[fresh.length - 1];
           playUiSound('wa-receive');
           setWaIncomingPulse(true);
-          setWaNotice(`Nuevo WhatsApp · ${newest.contact_name || newest.phone}`);
+          setWaUnreadByPhone(prev => {
+            const next = { ...prev };
+            fresh.forEach(msg => {
+              const phone = String(msg.phone || '').trim();
+              if (phone) next[phone] = (next[phone] || 0) + 1;
+            });
+            return next;
+          });
           window.setTimeout(() => setWaIncomingPulse(false), 1800);
-          window.setTimeout(() => setWaNotice(''), 4200);
         }
       }
 
@@ -432,11 +437,11 @@ export default function JarvisApp() {
         avatar: initials || 'WA',
         preview: last?.message || 'Contacto guardado',
         timestamp: last?.timestamp || contact?.updated_at || '',
-        unread: 0,
+        unread: waUnreadByPhone[phone] || 0,
         messages,
       };
     }).sort((a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime());
-  }, [waMessages, waSavedContacts]);
+  }, [waMessages, waSavedContacts, waUnreadByPhone]);
 
   React.useEffect(() => {
     if (!waChat && waContacts.length) setWaChat(waContacts[0].phone);
@@ -447,6 +452,7 @@ export default function JarvisApp() {
     (c.name + ' ' + c.phone + ' ' + c.preview).toLowerCase().includes(waQuery.toLowerCase())
   );
   const waCurrent = waContacts.find(c => c.phone === waChat) || waContacts[0] || null;
+  const waUnreadTotal = React.useMemo(() => Object.values(waUnreadByPhone).reduce((sum, n) => sum + n, 0), [waUnreadByPhone]);
 
   const waTime = (v?: string) => {
     if (!v) return '';
@@ -521,7 +527,7 @@ export default function JarvisApp() {
           {waLoading && !waContacts.length && <div className="jv-panel-empty">Cargando conversaciones…</div>}
           {waError && !waContacts.length && <div className="jv-panel-empty">{waError}</div>}
           {!waLoading && !waFiltered.length && !waError && <div className="jv-panel-empty">No hay conversaciones de WhatsApp.</div>}
-          {waFiltered.map(c => <button key={c.phone} className={`jv-wa-contact ${waChat===c.phone?'active':''}`} onClick={()=>setWaChat(c.phone)}>
+          {waFiltered.map(c => <button key={c.phone} className={`jv-wa-contact ${waChat===c.phone?'active':''}`} onClick={()=>{ setWaChat(c.phone); setWaUnreadByPhone(prev => ({ ...prev, [c.phone]: 0 })); }}>
             <span className="jv-wa-avatar">{c.avatar}</span>
             <span className="jv-wa-contact-copy"><b>{c.name}</b><small>{c.preview}</small></span>
             <span className="jv-wa-meta"><small>{waTime(c.timestamp)}</small>{c.unread ? <em>{c.unread}</em> : null}</span>
@@ -580,8 +586,9 @@ export default function JarvisApp() {
       <div className="jv-wa-mini">
         <label><Search/><input value={waQuery} onChange={e=>setWaQuery(e.target.value)} placeholder="Buscar chat real" /></label>
         {waLoading && !waContacts.length && <div className="jv-panel-empty">Cargando WhatsApp…</div>}
-        {waFiltered.slice(0,3).map(c => <button key={c.phone} onClick={()=>{setWaChat(c.phone); setFullscreenModule('whatsapp');}}>
+        {waFiltered.slice(0,3).map(c => <button key={c.phone} onClick={()=>{ setWaChat(c.phone); setWaUnreadByPhone(prev => ({ ...prev, [c.phone]: 0 })); setFullscreenModule('whatsapp'); }}>
           <span className="jv-wa-avatar">{c.avatar}</span><span><b>{c.name}</b><small>{c.preview}</small></span>
+          {c.unread > 0 && <em className="jv-wa-mini-unread">{c.unread > 99 ? '99+' : c.unread}</em>}
         </button>)}
       </div>
       <button className="jv-action" onClick={()=>setFullscreenModule('whatsapp')}><Maximize2 /> Abrir WhatsApp completo</button>
@@ -784,7 +791,11 @@ export default function JarvisApp() {
           style={{ left: pos.x, top: pos.y, zIndex: selected === id ? 60 : 40 + i }}
           onPointerDown={e => { setSelected(id); beginDrag(id, e); }}>
           <header>
-            <div><I /><b>{m.label}</b></div>
+            <div><I /><b>{m.label}</b>{id === 'whatsapp' && waUnreadTotal > 0 &&
+              <em className="jv-wa-header-unread" title={`${waUnreadTotal} mensajes sin leer`}>
+                {waUnreadTotal > 99 ? '99+' : waUnreadTotal}
+              </em>}
+            </div>
             <span><GripHorizontal />
               <button title="Maximizar" onClick={() => setFullscreenModule(id)}><Maximize2 /></button>
               <button title="Minimizar" onClick={() => closePanel(id, 'minimize')}><Minus /></button>
@@ -829,11 +840,6 @@ export default function JarvisApp() {
           <button type="submit" className="save" disabled={waSending || !waContactName.trim() || !waContactPhone.trim()}><CheckCircle2 />{waSending ? 'Guardando…' : 'Guardar contacto'}</button>
         </footer>
       </form>
-    </div>}
-
-    {waNotice && <div className="jv-wa-notification" role="status" aria-live="polite">
-      <MessageCircle />
-      <div><b>JARVIS · WhatsApp</b><span>{waNotice}</span></div>
     </div>}
 
     {open.length > 0 && <button className="jv-reset" onClick={resetPanels}><Sparkles /> Reorganizar paneles</button>}
