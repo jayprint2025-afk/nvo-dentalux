@@ -10,7 +10,6 @@ import {
   FileText, BarChart3, Settings, Home, Sun, Menu, Facebook
 } from 'lucide-react';
 import { jarvisApi } from './lib/jarvisApi';
-import { api } from '../services/api';
 import { JarvisVoiceController } from './voice/JarvisVoiceController';
 import './jarvis.css';
 
@@ -76,6 +75,46 @@ function fmt(v: string) {
   catch { return v; }
 }
 function defaultPos(i: number): Pos { return { x: 390 + (i % 3) * 42, y: 190 + (i % 2) * 34 }; }
+
+const JARVIS_API_BASE = (import.meta.env.VITE_API_BASE || '').replace(/\/+$/, '');
+
+async function jarvisWhatsAppApi(endpoint: string, options: RequestInit = {}) {
+  const normalized = endpoint.startsWith('/api/')
+    ? endpoint
+    : `/api${endpoint.startsWith('/') ? endpoint : `/${endpoint}`}`;
+
+  let token = '';
+  let sucursal = 'sucursal_1';
+  try {
+    token = localStorage.getItem('dentalux_auth_token') || '';
+    sucursal = localStorage.getItem('sucursal_actual') || 'sucursal_1';
+  } catch {}
+
+  const response = await fetch(`${JARVIS_API_BASE}${normalized}`, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      'x-sucursal': sucursal,
+      ...(options.headers || {}),
+    },
+  });
+
+  if (response.status === 401) {
+    try { localStorage.removeItem('dentalux_auth_token'); } catch {}
+    window.dispatchEvent(new CustomEvent('dentalux:auth-expired'));
+  }
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => '');
+    throw new Error(`HTTP ${response.status}: ${errorText || response.statusText}`);
+  }
+
+  if (response.status === 204) return null;
+  const text = await response.text().catch(() => '');
+  if (!text) return null;
+  try { return JSON.parse(text); } catch { return text; }
+}
 
 export default function JarvisApp() {
   const [health, setHealth] = React.useState<Health | null>(null);
@@ -212,7 +251,7 @@ export default function JarvisApp() {
   const loadWhatsApp = React.useCallback(async (silent = false) => {
     if (!silent) setWaLoading(true);
     try {
-      const data = await api('/api/whatsapp/messages?limit=1000');
+      const data = await jarvisWhatsAppApi('/api/whatsapp/messages?limit=1000');
       const rows = Array.isArray(data) ? data : [];
       setWaMessages(rows);
       setWaError('');
@@ -366,7 +405,7 @@ export default function JarvisApp() {
     if (!message || !waCurrent || waSending) return;
     setWaSending(true);
     try {
-      await api('/api/whatsapp/send-message', {
+      await jarvisWhatsAppApi('/api/whatsapp/send-message', {
         method: 'POST',
         body: JSON.stringify({ phone: waCurrent.phone, message }),
       });
