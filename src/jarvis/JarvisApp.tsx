@@ -251,7 +251,7 @@ export default function JarvisApp() {
   const loadWhatsApp = React.useCallback(async (silent = false) => {
     if (!silent) setWaLoading(true);
     try {
-      const data = await jarvisWhatsAppApi('/api/whatsapp/messages?limit=1000');
+      const data = await jarvisWhatsAppApi('/api/whatsapp/jarvis/messages?limit=1000');
       const rows = Array.isArray(data) ? data : [];
       setWaMessages(rows);
       setWaError('');
@@ -405,7 +405,7 @@ export default function JarvisApp() {
     if (!message || !waCurrent || waSending) return;
     setWaSending(true);
     try {
-      await jarvisWhatsAppApi('/api/whatsapp/send-message', {
+      await jarvisWhatsAppApi('/api/whatsapp/jarvis/send-message', {
         method: 'POST',
         body: JSON.stringify({ phone: waCurrent.phone, message }),
       });
@@ -414,6 +414,27 @@ export default function JarvisApp() {
     } catch (e: any) {
       console.error('JARVIS WhatsApp send:', e);
       setWaError(e?.message || 'No se pudo enviar el mensaje');
+    } finally {
+      setWaSending(false);
+    }
+  };
+
+  const newWhatsAppConversation = async () => {
+    const phone = window.prompt('Número de WhatsApp del contacto (con lada):')?.trim();
+    if (!phone) return;
+    const message = window.prompt('Primer mensaje de JARVIS:')?.trim();
+    if (!message) return;
+    setWaSending(true);
+    try {
+      const result: any = await jarvisWhatsAppApi('/api/whatsapp/jarvis/send-message', {
+        method: 'POST',
+        body: JSON.stringify({ phone, message }),
+      });
+      setWaChat(String(result?.phone || phone));
+      await loadWhatsApp(true);
+      setWaError('');
+    } catch (e: any) {
+      setWaError(e?.message || 'No se pudo iniciar la conversación');
     } finally {
       setWaSending(false);
     }
@@ -447,7 +468,7 @@ export default function JarvisApp() {
             </span>
           </header>
           <div className="jv-wa-messages">
-            <div className="jv-wa-day">Conversación real · CliniqOne</div>
+            <div className="jv-wa-day">Canal privado · JARVIS-WA-001</div>
             {waCurrent.messages.map(msg =>
               <div key={String(msg.id)} className={`jv-wa-msg ${msg.type === 'outgoing' ? 'outgoing' : 'incoming'}`}>
                 {msg.message || '[mensaje sin texto]'}
@@ -492,7 +513,7 @@ export default function JarvisApp() {
         </button>)}
       </div>
       <button className="jv-action" onClick={()=>setFullscreenModule('whatsapp')}><Maximize2 /> Abrir WhatsApp completo</button>
-      <button className="jv-action secondary" onClick={()=>setFullscreenModule('whatsapp')}><Send /> Nuevo mensaje</button>
+      <button className="jv-action secondary" onClick={()=>void newWhatsAppConversation()}><Send /> Nuevo mensaje</button>
     </>;
     if (id === 'facebook') return <>
       <div className="jv-panel-empty">Facebook listo para publicaciones, mensajes y seguimiento.</div>
