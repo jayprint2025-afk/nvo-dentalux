@@ -2,6 +2,7 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
 const router = express.Router();
+const webpush = require('web-push');
 const { evaluateAndExecute } = require('../rules/engine'); // motor de reglas
 const { f1EventBus } = require('../modules/f1/event-bus');
 
@@ -1210,6 +1211,50 @@ async function logAiMessage(conversationId, role, content, meta = {}) {
 // y mensajes NO se guardan en whatsapp_messages ni pasan a la recepcionista V5.
 const JARVIS_WA_CHANNEL_ID = 'JARVIS-WA-001';
 
+// ===================== JARVIS Web Push =====================
+const JARVIS_VAPID_PUBLIC_KEY = String(process.env.JARVIS_VAPID_PUBLIC_KEY || '').trim();
+const JARVIS_VAPID_PRIVATE_KEY = String(process.env.JARVIS_VAPID_PRIVATE_KEY || '').trim();
+const JARVIS_VAPID_SUBJECT = String(process.env.JARVIS_VAPID_SUBJECT || 'mailto:admin@dentalux.mx').trim();
+if (JARVIS_VAPID_PUBLIC_KEY && JARVIS_VAPID_PRIVATE_KEY) {
+  webpush.setVapidDetails(JARVIS_VAPID_SUBJECT, JARVIS_VAPID_PUBLIC_KEY, JARVIS_VAPID_PRIVATE_KEY);
+}
+
+async function ensureJarvisPushTable() {
+  await qBypass(`CREATE TABLE IF NOT EXISTS jarvis_push_subscriptions (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id UUID NOT NULL,
+    endpoint TEXT NOT NULL,
+    subscription JSONB NOT NULL,
+    user_agent TEXT,
+    active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (tenant_id, endpoint)
+  )`);
+}
+
+async function sendJarvisPush(tenantId, payload) {
+  if (!JARVIS_VAPID_PUBLIC_KEY || !JARVIS_VAPID_PRIVATE_KEY) {
+    console.warn('JARVIS Push: faltan JARVIS_VAPID_PUBLIC_KEY / PRIVATE_KEY');
+    return;
+  }
+  await ensureJarvisPushTable();
+  const { rows } = await qBypass(`SELECT id, subscription FROM jarvis_push_subscriptions
+    WHERE tenant_id=$1::uuid AND active=TRUE`, [tenantId]);
+  await Promise.allSettled(rows.map(async row => {
+    try {
+      await webpush.sendNotification(row.subscription, JSON.stringify(payload), { TTL: 60 });
+    } catch (err) {
+      const code = Number(err?.statusCode || 0);
+      console.warn('JARVIS Push send:', code || err?.message);
+      if (code === 404 || code === 410) {
+        await qBypass(`UPDATE jarvis_push_subscriptions SET active=FALSE, updated_at=NOW() WHERE id=$1`, [row.id]).catch(()=>{});
+      }
+    }
+  }));
+}
+
+
 async function ensureJarvisWaTables() {
   await qBypass(`
     CREATE TABLE IF NOT EXISTS jarvis_whatsapp_threads (
@@ -1240,20 +1285,6 @@ async function ensureJarvisWaTables() {
     )`);
   await qBypass(`CREATE INDEX IF NOT EXISTS idx_jarvis_wa_messages_thread
     ON jarvis_whatsapp_messages(thread_id, created_at, id)`);
-  await qBypass(`
-    CREATE TABLE IF NOT EXISTS jarvis_whatsapp_contacts (
-      id BIGSERIAL PRIMARY KEY,
-      tenant_id UUID NOT NULL,
-      channel_id TEXT NOT NULL DEFAULT 'JARVIS-WA-001',
-      phone TEXT NOT NULL,
-      name TEXT NOT NULL,
-      avatar_url TEXT,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      UNIQUE (tenant_id, channel_id, phone)
-    )`);
-  await qBypass(`CREATE INDEX IF NOT EXISTS idx_jarvis_wa_contacts_tenant
-    ON jarvis_whatsapp_contacts(tenant_id, channel_id, name)`);
 }
 
 async function claimJarvisWaThread({ tenantId, phone, phoneNumberId = null }) {
@@ -1926,6 +1957,14 @@ router.post('/webhook', async (req, res) => {
         status: 'received',
         waMessageId: wamid
       }).catch(err => console.error('JARVIS incoming log:', err.message));
+      await sendJarvisPush(jarvisThread.tenant_id, {
+        title: 'JARVIS · WhatsApp',
+        body: text || 'Nuevo mensaje de WhatsApp',
+        phone: from,
+        channel: JARVIS_WA_CHANNEL_ID,
+        url: `/?jarvis=whatsapp&phone=${encodeURIComponent(from)}`,
+        tag: `jarvis-wa-${from}`
+      }).catch(err => console.error('JARVIS push:', err.message));
       console.log('🧭 JARVIS WhatsApp route', { channel: JARVIS_WA_CHANNEL_ID, phone: from, tenantId: jarvisThread.tenant_id });
       await markProcessed(wamid);
       return res.sendStatus(200);
@@ -3135,42 +3174,41 @@ if (!appt && CROSS_SUC_FALLBACK) {
 });
 
 // ===================== JARVIS WhatsApp API =====================
-router.get('/jarvis/contacts', async (req, res) => {
+router.get('/jarvis/push/public-key', (req, res) => {
   try {
-    const tenantId = requireTenantId(req);
-    await ensureJarvisWaTables();
-    const { rows } = await qBypass(`
-      SELECT id, phone, name, avatar_url, created_at, updated_at
-        FROM jarvis_whatsapp_contacts
-       WHERE tenant_id=$1::uuid AND channel_id=$2
-       ORDER BY name ASC, updated_at DESC`, [tenantId, JARVIS_WA_CHANNEL_ID]);
-    res.json(rows);
-  } catch (e) {
-    res.status(e.statusCode || 500).json({ ok:false, error:String(e.message || e) });
-  }
+    requireTenantId(req);
+    if (!JARVIS_VAPID_PUBLIC_KEY) return res.status(503).json({ ok:false, error:'JARVIS push no configurado' });
+    res.json({ ok:true, publicKey:JARVIS_VAPID_PUBLIC_KEY });
+  } catch (e) { res.status(e.statusCode || 500).json({ ok:false, error:String(e.message || e) }); }
 });
 
-router.post('/jarvis/contacts', async (req, res) => {
+router.post('/jarvis/push/subscribe', async (req, res) => {
   try {
     const tenantId = requireTenantId(req);
-    await ensureJarvisWaTables();
-    const phone = toE164(req.body?.phone || '');
-    const name = String(req.body?.name || '').trim();
-    const avatarUrl = String(req.body?.avatar_url || '').trim() || null;
-    if (!phone || !name) return res.status(400).json({ ok:false, error:'name and phone are required' });
-    const { rows } = await qBypass(`
-      INSERT INTO jarvis_whatsapp_contacts(tenant_id, channel_id, phone, name, avatar_url, updated_at)
-      VALUES($1::uuid,$2,$3,$4,$5,NOW())
-      ON CONFLICT (tenant_id, channel_id, phone)
-      DO UPDATE SET name=EXCLUDED.name,
-                    avatar_url=COALESCE(EXCLUDED.avatar_url, jarvis_whatsapp_contacts.avatar_url),
-                    updated_at=NOW()
-      RETURNING id, phone, name, avatar_url, created_at, updated_at`,
-      [tenantId, JARVIS_WA_CHANNEL_ID, phone, name, avatarUrl]);
-    res.json({ ok:true, contact:rows[0] });
-  } catch (e) {
-    res.status(e.statusCode || 500).json({ ok:false, error:String(e.message || e) });
-  }
+    const subscription = req.body?.subscription;
+    const endpoint = String(subscription?.endpoint || '').trim();
+    if (!endpoint || !subscription?.keys?.p256dh || !subscription?.keys?.auth) {
+      return res.status(400).json({ ok:false, error:'Suscripción push inválida' });
+    }
+    await ensureJarvisPushTable();
+    await qBypass(`INSERT INTO jarvis_push_subscriptions(tenant_id,endpoint,subscription,user_agent,active,updated_at)
+      VALUES($1::uuid,$2,$3::jsonb,$4,TRUE,NOW())
+      ON CONFLICT(tenant_id,endpoint) DO UPDATE SET subscription=EXCLUDED.subscription,user_agent=EXCLUDED.user_agent,active=TRUE,updated_at=NOW()`,
+      [tenantId, endpoint, JSON.stringify(subscription), String(req.get('user-agent') || '')]);
+    res.json({ ok:true });
+  } catch (e) { res.status(e.statusCode || 500).json({ ok:false, error:String(e.message || e) }); }
+});
+
+router.post('/jarvis/push/unsubscribe', async (req, res) => {
+  try {
+    const tenantId = requireTenantId(req);
+    const endpoint = String(req.body?.endpoint || '').trim();
+    if (endpoint) {
+      await ensureJarvisPushTable();
+      await qBypass(`UPDATE jarvis_push_subscriptions SET active=FALSE,updated_at=NOW() WHERE tenant_id=$1::uuid AND endpoint=$2`, [tenantId, endpoint]);
+    }
+    res.json({ ok:true });
+  } catch (e) { res.status(e.statusCode || 500).json({ ok:false, error:String(e.message || e) }); }
 });
 
 router.get('/jarvis/messages', async (req, res) => {
@@ -3180,10 +3218,8 @@ router.get('/jarvis/messages', async (req, res) => {
     const limit = Math.max(1, Math.min(Number(req.query.limit || 1000), 2000));
     const { rows } = await qBypass(`
       SELECT m.id, m.wa_message_id, m.direction AS type, m.phone, m.message, m.status,
-             m.created_at AS timestamp, c.name AS contact_name, TRUE AS manual
+             m.created_at AS timestamp, NULL::text AS contact_name, TRUE AS manual
         FROM jarvis_whatsapp_messages m
-        LEFT JOIN jarvis_whatsapp_contacts c
-          ON c.tenant_id=m.tenant_id AND c.channel_id=m.channel_id AND c.phone=m.phone
        WHERE m.tenant_id=$1::uuid AND m.channel_id=$2
        ORDER BY m.created_at ASC, m.id ASC
        LIMIT $3`, [tenantId, JARVIS_WA_CHANNEL_ID, limit]);
