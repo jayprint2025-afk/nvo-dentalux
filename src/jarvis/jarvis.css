@@ -2001,3 +2001,41 @@ button{font:inherit;color:inherit}
   .voice-core .jv-wave,
   .voice-core .tags{left:14px!important}
 }
+
+/* =========================================================
+   V9 — AJUSTE FINO DE EJE CENTRAL (SOLO CELULAR)
+   Fondo y tarjetas NO se modifican.
+   ========================================================= */
+@media (max-width:760px){
+  /* Núcleo aprobado: corrección óptica mínima */
+  .voice-core{
+    margin-left:-5px!important;
+    margin-top:-8px!important;
+  }
+
+  /* Información inferior centrada respecto al núcleo.
+     V8 tenía left:15px; ahora se compensa hacia la derecha. */
+  .voice-core h2,
+  .voice-core p,
+  .voice-core .jv-wave,
+  .voice-core .tags{
+    left:32px!important;
+    text-align:center!important;
+  }
+
+  .voice-core .jv-wave,
+  .voice-core .tags{
+    margin-left:auto!important;
+    margin-right:auto!important;
+  }
+}
+
+@media (max-width:390px){
+  .voice-core h2,
+  .voice-core p,
+  .voice-core .jv-wave,
+  .voice-core .tags{
+    left:31px!important;
+  }
+}
+
