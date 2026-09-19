@@ -2606,3 +2606,89 @@ button{font:inherit;color:inherit}
 @keyframes jvContactIn{from{opacity:0;transform:translateY(18px) scale(.94)}to{opacity:1;transform:none}}
 @keyframes jvContactScan{from{transform:translateY(-120%)}to{transform:translateY(430%)}}
 @media(max-width:760px){.jv-contact-backdrop{padding:12px;align-items:center}.jv-contact-modal{width:100%;max-width:430px;padding:17px;border-radius:18px}.jv-contact-modal h3{font-size:19px}.jv-contact-modal>p{margin:12px 0 14px}.jv-contact-modal label>div{height:48px}.jv-contact-modal footer{display:grid;grid-template-columns:.8fr 1.2fr}.jv-contact-modal footer button{padding:0 10px;font-size:12px}}
+
+
+/* =========================================================
+   JARVIS · WHATSAPP LIVE NOTIFICATIONS
+   ========================================================= */
+
+.module-card.green.jv-wa-incoming,
+.jv-float.green.jv-wa-incoming {
+  animation: jvWaIncomingPulse .62s ease-in-out 3;
+}
+
+@keyframes jvWaIncomingPulse {
+  0%, 100% {
+    box-shadow: 0 0 12px rgba(0, 220, 180, .20),
+                inset 0 0 18px rgba(0, 220, 180, .05);
+  }
+  50% {
+    box-shadow: 0 0 12px rgba(180, 255, 240, .82),
+                0 0 34px rgba(0, 255, 190, .55),
+                0 0 62px rgba(0, 190, 255, .32),
+                inset 0 0 28px rgba(0, 255, 200, .15);
+  }
+}
+
+.jv-wa-notification {
+  position: fixed;
+  right: 22px;
+  top: 22px;
+  z-index: 10050;
+  min-width: 260px;
+  max-width: min(390px, calc(100vw - 28px));
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 13px 16px;
+  border: 1px solid rgba(95, 244, 225, .48);
+  border-radius: 14px;
+  background: linear-gradient(145deg, rgba(4, 29, 37, .96), rgba(2, 13, 22, .98));
+  box-shadow: 0 0 26px rgba(0, 230, 190, .22),
+              inset 0 0 20px rgba(0, 220, 255, .05);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  animation: jvWaNoticeIn .28s ease-out;
+  color: #eaffff;
+}
+
+.jv-wa-notification > svg {
+  width: 25px;
+  height: 25px;
+  flex: 0 0 auto;
+  filter: drop-shadow(0 0 8px rgba(65, 255, 220, .72));
+}
+
+.jv-wa-notification div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.jv-wa-notification b {
+  font-size: 12px;
+  letter-spacing: .08em;
+}
+
+.jv-wa-notification span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  opacity: .82;
+}
+
+@keyframes jvWaNoticeIn {
+  from { opacity: 0; transform: translateY(-12px) scale(.97); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@media (max-width: 760px) {
+  .jv-wa-notification {
+    top: 12px;
+    right: 12px;
+    left: 12px;
+    min-width: 0;
+    max-width: none;
+  }
+}
