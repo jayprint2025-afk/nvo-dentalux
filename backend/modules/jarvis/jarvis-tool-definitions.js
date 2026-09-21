@@ -27,8 +27,23 @@ const personalTools = [
     description: 'Consulta la Agenda personal y los recordatorios de JARVIS para una fecha o rango.',
     parameters: { type:'object', properties:{ from:{type:'string'}, to:{type:'string'} } }
   },
+
+  {
+    type: 'function',
+    name: 'find_whatsapp_contact',
+    description: 'Busca PRIMERO un contacto en la libreta propia de WhatsApp de JARVIS. Úsala siempre que el usuario mencione un contacto por nombre antes de pedir un número o consultar CliniqOne. Si no existe, devuelve que se requiere confirmación antes de buscar en sistemas externos.',
+    parameters: { type:'object', properties:{ query:{type:'string',description:'Nombre o teléfono del contacto guardado en la tarjeta WhatsApp de JARVIS'} }, required:['query'] }
+  },
+  {
+    type: 'function',
+    name: 'send_whatsapp_message',
+    description: 'Envía un WhatsApp desde JARVIS. Si el usuario proporciona un nombre de contacto, usa contact_name y JARVIS lo resuelve contra SU libreta de contactos. No pidas el número si el contacto existe. No uses historial de CliniqOne como fuente primaria.',
+    parameters: { type:'object', properties:{ contact_name:{type:'string',description:'Nombre del contacto guardado en JARVIS'}, phone:{type:'string',description:'Número solo cuando el usuario lo proporciona explícitamente o no usa un contacto guardado'}, message:{type:'string',description:'Texto exacto que se enviará'} }, required:['message'] }
+  },
 ];
 
 // JARVIS conserva CliniqOne como sistema/herramienta subordinada, no como agenda por defecto.
-const tools = [...personalTools, ...cliniqOneTools];
+const personalToolNames = new Set(personalTools.map(tool => tool.name));
+const delegatedCliniqOneTools = cliniqOneTools.filter(tool => !personalToolNames.has(tool.name));
+const tools = [...personalTools, ...delegatedCliniqOneTools];
 module.exports = { tools, personalTools };
