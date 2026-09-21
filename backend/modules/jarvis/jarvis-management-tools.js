@@ -75,6 +75,68 @@ async function getAgenda(q,ctx,args={}){
   return {ok:true,from,to,events:ev.rows,reminders:rr.rows};
 }
 
-const personalHandlers={personal_create_event:createEvent,personal_create_reminder:createReminder,personal_acknowledge:acknowledge,personal_get_agenda:getAgenda};
+
+
+// ===================== JARVIS WhatsApp central =====================
+// JARVIS consulta primero SU directorio. CliniqOne solo se consulta si el usuario
+// lo autoriza explícitamente con allow_external_lookup=true.
+async function ensureJarvisWhatsAppContacts(q){
+  await q(`CREATE TABLE IF NOT EXISTS jarvis_whatsapp_contacts (
+    id BIGSERIAL PRIMARY KEY, tenant_id UUID NOT NULL, name TEXT NOT NULL, phone TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (tenant_id, phone)
+  )`);
+  await q(`CREATE INDEX IF NOT EXISTS idx_jarvis_wa_contacts_name
+    ON jarvis_whatsapp_contacts(tenant_id, lower(name), updated_at DESC)`);
+}
+function normalizeName(v){ return t(v).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase(); }
+
+async function findJarvisWhatsAppContact(q,ctx,args={}){
+  await ensureJarvisWhatsAppContacts(q);
+  const query=t(args.query||args.contact_name||args.name||args.phone);
+  if(!query) throw new Error('Falta el nombre o teléfono del contacto');
+  const digits=query.replace(/\D/g,'');
+  const {rows}=await q(`SELECT id,name,phone,created_at,updated_at
+    FROM jarvis_whatsapp_contacts
+    WHERE tenant_id=$1::uuid
+      AND ($2='' OR phone LIKE '%'||$2||'%' OR lower(name) LIKE '%'||lower($3)||'%')
+    ORDER BY CASE WHEN lower(name)=lower($3) THEN 0 ELSE 1 END, updated_at DESC, id DESC
+    LIMIT 20`,[ctx.tenant_id,digits,query]);
+  const exact=rows.filter(r=>normalizeName(r.name)===normalizeName(query) || (digits && r.phone.replace(/\D/g,'')===digits));
+  const matches=exact.length?exact:rows;
+  if(matches.length===1) return {ok:true,source:'jarvis_central',contact:matches[0],contacts:matches,assistant_message:`Encontré a ${matches[0].name} en tus contactos de JARVIS.`};
+  if(matches.length>1) return {ok:true,source:'jarvis_central',contacts:matches,requires_selection:true,assistant_message:`Encontré ${matches.length} contactos que coinciden. Indícame cuál quieres usar.`};
+  return {ok:true,source:'jarvis_central',contacts:[],not_found:true,requires_external_confirmation:true,
+    assistant_message:`No encontré “${query}” en tus contactos de JARVIS. Puedo buscarlo en CliniqOne u otra herramienta, pero necesito tu confirmación primero.`};
+}
+
+async function sendJarvisWhatsAppMessage(q,ctx,args={}){
+  const message=t(args.message); if(!message) throw new Error('Falta el mensaje');
+  let phone=t(args.phone); let contact=null;
+  const contactName=t(args.contact_name||args.name||args.query);
+  if(!phone && contactName){
+    const found=await findJarvisWhatsAppContact(q,ctx,{query:contactName});
+    if(found.requires_selection || found.not_found) return found;
+    contact=found.contact; phone=contact.phone;
+  }
+  // Compatibilidad: si el modelo puso un nombre en phone, resolverlo como contacto.
+  if(phone && !/\d/.test(phone)){
+    const found=await findJarvisWhatsAppContact(q,ctx,{query:phone});
+    if(found.requires_selection || found.not_found) return found;
+    contact=found.contact; phone=contact.phone;
+  }
+  if(!phone) throw new Error('Falta el contacto o número de WhatsApp');
+
+  const base=t(process.env.INTERNAL_BASE_URL||process.env.RENDER_EXTERNAL_URL)||`http://127.0.0.1:${process.env.PORT||10000}`;
+  const headers={'content-type':'application/json'};
+  if(t(ctx.authorization)) headers.authorization=t(ctx.authorization);
+  const r=await fetch(`${base}/api/whatsapp/jarvis/send-message`,{method:'POST',headers,body:JSON.stringify({phone,message})});
+  const raw=await r.text(); let data={}; try{data=raw?JSON.parse(raw):{};}catch{data={raw};}
+  if(!r.ok || data?.ok===false) throw new Error(data?.error||`No se pudo enviar el WhatsApp (${r.status})`);
+  return {ok:true,source:'jarvis_central',contact:contact||null,phone:data?.phone||phone,message_id:data?.data?.messages?.[0]?.id||null,
+    assistant_message:`Mensaje enviado por WhatsApp${contact?.name?` a ${contact.name}`:` al ${data?.phone||phone}`}.`,client_event:{type:'jarvis_whatsapp_changed'}};
+}
+
+const personalHandlers={personal_create_event:createEvent,personal_create_reminder:createReminder,personal_acknowledge:acknowledge,personal_get_agenda:getAgenda,find_whatsapp_contact:findJarvisWhatsAppContact,send_whatsapp_message:sendJarvisWhatsAppMessage};
 async function executeTool(q,ctx,name,args){ if(personalHandlers[name]) return personalHandlers[name](q,ctx,args||{}); return executeCliniqOneTool(q,ctx,name,args||{}); }
 module.exports={executeTool,personalHandlers,ensurePersonalTables};

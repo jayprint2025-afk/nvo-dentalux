@@ -348,15 +348,26 @@ const tools = [
   },
   {
     type: 'function',
+    name: 'find_whatsapp_contact',
+    description: 'Busca PRIMERO en el directorio propio de contactos WhatsApp de JARVIS. Úsala cuando el usuario mencione a una persona por nombre. Si no existe, informa que no se encontró y pide confirmación antes de buscar en CliniqOne u otra herramienta.',
+    parameters: {
+      type: 'object',
+      properties: { query: { type: 'string' } },
+      required: ['query'],
+    },
+  },
+  {
+    type: 'function',
     name: 'send_whatsapp_message',
-    description: 'Envía un mensaje real por WhatsApp desde el canal configurado de la empresa. Si falta teléfono o mensaje, solicítalo.',
+    description: 'Envía un mensaje real por el canal JARVIS-WA-001. Puede recibir contact_name o phone. Si recibe un nombre, debe resolverlo primero en el directorio propio de JARVIS; NO busques primero en historial de CliniqOne. El envío reclama el hilo para JARVIS, por lo que la recepcionista V5 deja de responder en ese hilo.',
     parameters: {
       type: 'object',
       properties: {
         phone: { type: 'string' },
+        contact_name: { type: 'string' },
         message: { type: 'string' },
       },
-      required: ['phone','message'],
+      required: ['message'],
     },
   },
 

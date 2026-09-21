@@ -1240,6 +1240,18 @@ async function ensureJarvisWaTables() {
     )`);
   await qBypass(`CREATE INDEX IF NOT EXISTS idx_jarvis_wa_messages_thread
     ON jarvis_whatsapp_messages(thread_id, created_at, id)`);
+  await qBypass(`
+    CREATE TABLE IF NOT EXISTS jarvis_whatsapp_contacts (
+      id BIGSERIAL PRIMARY KEY,
+      tenant_id UUID NOT NULL,
+      name TEXT NOT NULL,
+      phone TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (tenant_id, phone)
+    )`);
+  await qBypass(`CREATE INDEX IF NOT EXISTS idx_jarvis_wa_contacts_name
+    ON jarvis_whatsapp_contacts(tenant_id, lower(name), updated_at DESC)`);
 }
 
 async function claimJarvisWaThread({ tenantId, phone, phoneNumberId = null }) {
@@ -3128,12 +3140,71 @@ router.get('/jarvis/messages', async (req, res) => {
     const limit = Math.max(1, Math.min(Number(req.query.limit || 1000), 2000));
     const { rows } = await qBypass(`
       SELECT m.id, m.wa_message_id, m.direction AS type, m.phone, m.message, m.status,
-             m.created_at AS timestamp, NULL::text AS contact_name, TRUE AS manual
+             m.created_at AS timestamp,
+             (SELECT c.name FROM jarvis_whatsapp_contacts c
+               WHERE c.tenant_id=m.tenant_id AND c.phone=m.phone
+               ORDER BY c.updated_at DESC LIMIT 1) AS contact_name,
+             TRUE AS manual
         FROM jarvis_whatsapp_messages m
        WHERE m.tenant_id=$1::uuid AND m.channel_id=$2
        ORDER BY m.created_at ASC, m.id ASC
        LIMIT $3`, [tenantId, JARVIS_WA_CHANNEL_ID, limit]);
     res.json(rows);
+  } catch (e) {
+    res.status(e.statusCode || 500).json({ ok:false, error:String(e.message || e) });
+  }
+});
+
+// Directorio propio de JARVIS. Nunca consulta pacientes/historial de CliniqOne.
+router.get('/jarvis/contacts', async (req, res) => {
+  try {
+    const tenantId = requireTenantId(req);
+    await ensureJarvisWaTables();
+    const search = String(req.query.q || '').trim();
+    const params = [tenantId];
+    let filter = '';
+    if (search) {
+      params.push(`%${search}%`);
+      filter = ` AND (c.name ILIKE $2 OR c.phone ILIKE $2)`;
+    }
+    const { rows } = await qBypass(`
+      SELECT c.id,c.name,c.phone,c.created_at,c.updated_at
+        FROM jarvis_whatsapp_contacts c
+       WHERE c.tenant_id=$1::uuid ${filter}
+       ORDER BY lower(c.name), c.id`, params);
+    res.json(rows);
+  } catch (e) {
+    res.status(e.statusCode || 500).json({ ok:false, error:String(e.message || e) });
+  }
+});
+
+router.post('/jarvis/contacts', async (req, res) => {
+  try {
+    const tenantId = requireTenantId(req);
+    await ensureJarvisWaTables();
+    const name = String(req.body?.name || '').trim();
+    const phone = toE164(req.body?.phone || '');
+    if (!name || !phone) return res.status(400).json({ ok:false, error:'name and phone are required' });
+    const { rows } = await qBypass(`
+      INSERT INTO jarvis_whatsapp_contacts(tenant_id,name,phone)
+      VALUES($1::uuid,$2,$3)
+      ON CONFLICT (tenant_id,phone)
+      DO UPDATE SET name=EXCLUDED.name, updated_at=NOW()
+      RETURNING *`, [tenantId,name,phone]);
+    res.json({ ok:true, contact:rows[0] });
+  } catch (e) {
+    res.status(e.statusCode || 500).json({ ok:false, error:String(e.message || e) });
+  }
+});
+
+router.delete('/jarvis/contacts/:id', async (req, res) => {
+  try {
+    const tenantId = requireTenantId(req);
+    await ensureJarvisWaTables();
+    const id = Number(req.params.id);
+    if (!Number.isSafeInteger(id)) return res.status(400).json({ ok:false, error:'invalid contact id' });
+    await qBypass(`DELETE FROM jarvis_whatsapp_contacts WHERE id=$1 AND tenant_id=$2::uuid`, [id,tenantId]);
+    res.json({ ok:true });
   } catch (e) {
     res.status(e.statusCode || 500).json({ ok:false, error:String(e.message || e) });
   }
