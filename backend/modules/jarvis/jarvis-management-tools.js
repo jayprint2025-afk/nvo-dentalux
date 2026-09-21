@@ -99,8 +99,17 @@ async function findJarvisWhatsAppContact(q,ctx,args={}){
   const {rows}=await q(`SELECT id,name,phone,created_at,updated_at
     FROM jarvis_whatsapp_contacts
     WHERE tenant_id=$1::uuid
-      AND ($2='' OR phone LIKE '%'||$2||'%' OR lower(name) LIKE '%'||lower($3)||'%')
-    ORDER BY CASE WHEN lower(name)=lower($3) THEN 0 ELSE 1 END, updated_at DESC, id DESC
+      AND (
+        ($2<>'' AND regexp_replace(phone, '\\D', '', 'g') LIKE '%'||$2||'%')
+        OR lower(name) LIKE '%'||lower($3)||'%'
+      )
+    ORDER BY
+      CASE
+        WHEN lower(name)=lower($3) THEN 0
+        WHEN lower(name) LIKE lower($3)||'%' THEN 1
+        ELSE 2
+      END,
+      updated_at DESC, id DESC
     LIMIT 20`,[ctx.tenant_id,digits,query]);
   const exact=rows.filter(r=>normalizeName(r.name)===normalizeName(query) || (digits && r.phone.replace(/\D/g,'')===digits));
   const matches=exact.length?exact:rows;
