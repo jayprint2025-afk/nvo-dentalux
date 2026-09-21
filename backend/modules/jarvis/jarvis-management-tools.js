@@ -92,26 +92,32 @@ async function ensureJarvisWhatsAppContacts(q){
 function normalizeName(v){ return t(v).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase(); }
 
 async function findJarvisWhatsAppContact(q,ctx,args={}){
-  await ensureJarvisWhatsAppContacts(q);
   const query=t(args.query||args.contact_name||args.name||args.phone);
   if(!query) throw new Error('Falta el nombre o teléfono del contacto');
   const digits=query.replace(/\D/g,'');
-  const {rows}=await q(`SELECT id,name,phone,created_at,updated_at
-    FROM jarvis_whatsapp_contacts
+  const channelId='JARVIS-WA-001';
+
+  // IMPORTANTE: usar la MISMA fuente que la tarjeta/panel de WhatsApp de JARVIS.
+  // Los contactos reales se guardan en jarvis_whatsapp_threads.contact_name.
+  const {rows}=await q(`SELECT id, contact_name AS name, phone, claimed_at AS created_at, updated_at
+    FROM jarvis_whatsapp_threads
     WHERE tenant_id=$1::uuid
+      AND channel_id=$2
+      AND COALESCE(hidden,FALSE)=FALSE
       AND (
-        ($2<>'' AND regexp_replace(phone, '\\D', '', 'g') LIKE '%'||$2||'%')
-        OR lower(name) LIKE '%'||lower($3)||'%'
+        ($3<>'' AND regexp_replace(phone, '\\D', '', 'g') LIKE '%'||$3||'%')
+        OR lower(COALESCE(contact_name,'')) LIKE '%'||lower($4)||'%'
       )
     ORDER BY
       CASE
-        WHEN lower(name)=lower($3) THEN 0
-        WHEN lower(name) LIKE lower($3)||'%' THEN 1
+        WHEN lower(COALESCE(contact_name,''))=lower($4) THEN 0
+        WHEN lower(COALESCE(contact_name,'')) LIKE lower($4)||'%' THEN 1
         ELSE 2
       END,
       updated_at DESC, id DESC
-    LIMIT 20`,[ctx.tenant_id,digits,query]);
-  const exact=rows.filter(r=>normalizeName(r.name)===normalizeName(query) || (digits && r.phone.replace(/\D/g,'')===digits));
+    LIMIT 20`,[ctx.tenant_id,channelId,digits,query]);
+
+  const exact=rows.filter(r=>normalizeName(r.name)===normalizeName(query) || (digits && String(r.phone||'').replace(/\D/g,'')===digits));
   const matches=exact.length?exact:rows;
   if(matches.length===1) return {ok:true,source:'jarvis_central',contact:matches[0],contacts:matches,assistant_message:`Encontré a ${matches[0].name} en tus contactos de JARVIS.`};
   if(matches.length>1) return {ok:true,source:'jarvis_central',contacts:matches,requires_selection:true,assistant_message:`Encontré ${matches.length} contactos que coinciden. Indícame cuál quieres usar.`};
