@@ -1,11 +1,24 @@
 'use strict';
 
 const express = require('express');
-const { tools } = require('../f1/tool-definitions');
-const { executeTool } = require('../f1/management-tools');
+const { tools: rawTools } = require('./jarvis-tool-definitions');
+const { executeTool, ensurePersonalTables } = require('./jarvis-management-tools');
 const { jarvisInstructions } = require('./jarvis-instructions');
-const { jarvisTools } = require('./jarvis-tools');
-const { executeJarvisPersonalTool, ensureJarvisPersonalSchema } = require('./jarvis-personal-agenda');
+
+const BLOCKED_REALTIME_TOOLS = new Set([
+  'list_whatsapp_messages',
+  'send_whatsapp_to_patient',
+]);
+
+const tools = (Array.isArray(rawTools) ? rawTools : []).filter((tool) =>
+  tool &&
+  typeof tool.name === 'string' &&
+  !BLOCKED_REALTIME_TOOLS.has(tool.name)
+);
+
+function realtimeToolNames() {
+  return tools.map((tool) => tool.name);
+}
 
 function buildContext(req, getTenantId, getSucursal) {
   return {
@@ -59,36 +72,54 @@ function setupJarvisRoutes(app, q, deps={}) {
 
   app.use('/api/jarvis', authRequired);
 
-  // JARVIS Personal V1 — agenda ejecutiva + recordatorios persistentes
-  ensureJarvisPersonalSchema(q).catch((error) => {
-    console.error('❌ No se pudo preparar JARVIS Personal V1:', error);
+  app.get('/api/jarvis/health', (req,res) => res.json({ ok:true, service:'jarvis', central_connected:true, wake_word:'JARVIS', voice:'realtime-v1' }));
+
+  // Agenda personal y recordatorios propios de JARVIS.
+  app.get('/api/jarvis/personal/dashboard', async (req,res) => {
+    try {
+      const ctx=buildContext(req,getTenantId,getSucursal); await ensurePersonalTables(q);
+      const ev=await q(`SELECT * FROM jarvis_personal_events WHERE tenant_id=$1::uuid AND (user_id=$2 OR (user_id IS NULL AND $2 IS NULL)) AND status<>'cancelled' AND start_at>=NOW()-interval '1 day' ORDER BY start_at LIMIT 100`,[ctx.tenant_id,ctx.user_id||null]);
+      const rr=await q(`SELECT * FROM jarvis_personal_reminders WHERE tenant_id=$1::uuid AND (user_id=$2 OR (user_id IS NULL AND $2 IS NULL)) AND status NOT IN ('cancelled','acknowledged') AND remind_at>=NOW()-interval '1 day' ORDER BY remind_at LIMIT 100`,[ctx.tenant_id,ctx.user_id||null]);
+      res.json({ok:true,events:ev.rows,reminders:rr.rows});
+    } catch(error){ res.status(500).json({ok:false,error:error.message}); }
   });
 
-  app.get('/api/jarvis/health', (req,res) => res.json({ ok:true, service:'jarvis', central_connected:true, wake_word:'JARVIS', voice:'realtime-v1' }));
+  // Devuelve avisos vencidos una sola vez: primer aviso y, si no hubo ACK, una insistencia 5 min después.
+  app.get('/api/jarvis/personal/due', async (req,res) => {
+    try {
+      const ctx=buildContext(req,getTenantId,getSucursal); await ensurePersonalTables(q);
+      const first=await q(`UPDATE jarvis_personal_reminders SET notified_at=NOW(),updated_at=NOW() WHERE id IN (SELECT id FROM jarvis_personal_reminders WHERE tenant_id=$1::uuid AND (user_id=$2 OR (user_id IS NULL AND $2 IS NULL)) AND status='pending' AND acknowledged_at IS NULL AND notified_at IS NULL AND remind_at<=NOW() ORDER BY remind_at LIMIT 20 FOR UPDATE SKIP LOCKED) RETURNING *, 'first'::text AS alert_kind`,[ctx.tenant_id,ctx.user_id||null]);
+      const insist=await q(`UPDATE jarvis_personal_reminders SET insisted_at=NOW(),updated_at=NOW() WHERE id IN (SELECT id FROM jarvis_personal_reminders WHERE tenant_id=$1::uuid AND (user_id=$2 OR (user_id IS NULL AND $2 IS NULL)) AND status='pending' AND acknowledged_at IS NULL AND notified_at IS NOT NULL AND insisted_at IS NULL AND insist_at<=NOW() ORDER BY insist_at LIMIT 20 FOR UPDATE SKIP LOCKED) RETURNING *, 'insist'::text AS alert_kind`,[ctx.tenant_id,ctx.user_id||null]);
+      const alerts=[...first.rows,...insist.rows];
+      res.json({ok:true,alerts});
+    } catch(error){ res.status(500).json({ok:false,error:error.message}); }
+  });
+
+  app.post('/api/jarvis/personal/acknowledge', async (req,res) => {
+    try { const ctx=buildContext(req,getTenantId,getSucursal); const result=await executeTool(q,ctx,'personal_acknowledge',req.body||{}); res.json(result); }
+    catch(error){ res.status(400).json({ok:false,error:error.message}); }
+  });
 
   app.post('/api/jarvis/actions', async (req,res) => {
     try {
       const ctx = buildContext(req,getTenantId,getSucursal);
       const name = String(req.body?.name || '');
       const args = typeof req.body?.arguments === 'string' ? JSON.parse(req.body.arguments || '{}') : (req.body?.arguments || req.body?.args || {});
-      const result = jarvisTools.some((tool) => tool.name === name)
-        ? await executeJarvisPersonalTool(q, ctx, name, args)
-        : await executeTool(q, ctx, name, args);
+
+      // Guardia central: aunque una sesión vieja/caché intente usar herramientas
+      // clínicas para resolver contactos, JARVIS no las ejecutará.
+      if (name === 'list_whatsapp_messages' || name === 'send_whatsapp_to_patient') {
+        console.warn('[JARVIS ACTION BLOCKED]', { name, reason: 'Use JARVIS WhatsApp contacts first' });
+        return res.status(409).json({
+          ok:false,
+          error:'Esta acción no está disponible para resolver contactos de JARVIS. Use find_whatsapp_contact y después send_whatsapp_message.'
+        });
+      }
+
+      console.log('[JARVIS ACTION]', { name, args });
+      const result = await executeTool(q, ctx, name, args);
       res.json({ok:true,name,result});
     } catch(error) { res.status(error.statusCode || error.status || 400).json({ok:false,error:error.message}); }
-  });
-
-  app.get('/api/jarvis/personal/dashboard', async (req,res) => {
-    try {
-      const ctx = buildContext(req,getTenantId,getSucursal);
-      const result = await executeJarvisPersonalTool(q, ctx, 'get_personal_dashboard', {
-        from: req.query?.from,
-        to: req.query?.to,
-      });
-      res.json({ok:true,...result});
-    } catch(error) {
-      res.status(error.statusCode || error.status || 400).json({ok:false,error:error.message});
-    }
   });
 
   app.post('/api/jarvis/wake/verify', async (req,res) => {
@@ -101,7 +132,7 @@ function setupJarvisRoutes(app, q, deps={}) {
     } catch(error) { res.status(503).json({ok:false,accepted:false,error:error.message}); }
   });
 
-  app.get('/api/jarvis/realtime/profile', (req,res) => res.json({ok:true,wake_words:['JARVIS'],voice:process.env.JARVIS_VOICE || 'cedar',model:process.env.JARVIS_REALTIME_MODEL || process.env.F1_REALTIME_MODEL || 'gpt-realtime'}));
+  app.get('/api/jarvis/realtime/profile', (req,res) => res.json({ok:true,wake_words:['JARVIS'],voice:process.env.JARVIS_VOICE || process.env.F1_VOICE || 'marin',model:process.env.JARVIS_REALTIME_MODEL || process.env.F1_REALTIME_MODEL || 'gpt-realtime'}));
 
   app.post('/api/jarvis/realtime/call', express.text({type:'application/sdp',limit:'1mb'}), async (req,res) => {
     try {
@@ -109,11 +140,13 @@ function setupJarvisRoutes(app, q, deps={}) {
       const key = process.env.OPENAI_API_KEY;
       if (!key) return res.status(503).json({error:'Falta OPENAI_API_KEY'});
       if (!req.body || typeof req.body !== 'string') return res.status(400).json({error:'Oferta SDP vacía'});
+      console.log('[JARVIS REALTIME TOOLS]', realtimeToolNames());
+
       const session = {
         type:'realtime', model:process.env.JARVIS_REALTIME_MODEL || process.env.F1_REALTIME_MODEL || 'gpt-realtime',
         instructions:jarvisInstructions(ctx), output_modalities:['audio'],
-        audio:{input:{transcription:{model:process.env.JARVIS_TRANSCRIBE_MODEL || process.env.F1_TRANSCRIBE_MODEL || 'gpt-4o-mini-transcribe',language:'es',prompt:'JARVIS. Asistente personal y empresarial. Agenda, recordatorios, correo, WhatsApp, llamadas e Internet.'},noise_reduction:{type:'near_field'},turn_detection:{type:'semantic_vad',eagerness:'low',create_response:true,interrupt_response:false}},output:{voice:process.env.JARVIS_VOICE || 'cedar',speed:1.0}},
-        tools:[...tools, ...jarvisTools], tool_choice:'auto', max_output_tokens:1200,
+        audio:{input:{transcription:{model:process.env.JARVIS_TRANSCRIBE_MODEL || process.env.F1_TRANSCRIBE_MODEL || 'gpt-4o-mini-transcribe',language:'es',prompt:'JARVIS. Asistente personal y empresarial. Agenda, recordatorios, correo, WhatsApp, llamadas e Internet.'},noise_reduction:{type:'near_field'},turn_detection:{type:'semantic_vad',eagerness:'low',create_response:true,interrupt_response:false}},output:{voice:process.env.JARVIS_VOICE || process.env.F1_VOICE || 'marin',speed:1.0}},
+        tools, tool_choice:'auto', max_output_tokens:1200,
       };
       const boundary=`----JarvisRealtime${Date.now().toString(16)}${Math.random().toString(16).slice(2)}`;
       const body=Buffer.concat([
@@ -127,7 +160,15 @@ function setupJarvisRoutes(app, q, deps={}) {
     } catch(error){res.status(500).json({error:error.message});}
   });
 
-  console.log('✅ JARVIS Core V1: Realtime + wake JARVIS + herramientas F1 montados');
+  const names = realtimeToolNames();
+  console.log('[JARVIS CORE TOOLS]', names);
+  if (!names.includes('find_whatsapp_contact') || !names.includes('send_whatsapp_message')) {
+    console.error('[JARVIS CORE ERROR] Faltan herramientas propias de WhatsApp:', {
+      find_whatsapp_contact: names.includes('find_whatsapp_contact'),
+      send_whatsapp_message: names.includes('send_whatsapp_message')
+    });
+  }
+  console.log('✅ JARVIS Core V3: filtro central de tools + agenda personal + recordatorios + WhatsApp JARVIS');
 }
 
 module.exports={setupJarvisRoutes};
