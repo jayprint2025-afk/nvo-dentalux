@@ -1,9 +1,24 @@
 'use strict';
 
 const express = require('express');
-const { tools } = require('./jarvis-tool-definitions');
+const { tools: rawTools } = require('./jarvis-tool-definitions');
 const { executeTool, ensurePersonalTables } = require('./jarvis-management-tools');
 const { jarvisInstructions } = require('./jarvis-instructions');
+
+const BLOCKED_REALTIME_TOOLS = new Set([
+  'list_whatsapp_messages',
+  'send_whatsapp_to_patient',
+]);
+
+const tools = (Array.isArray(rawTools) ? rawTools : []).filter((tool) =>
+  tool &&
+  typeof tool.name === 'string' &&
+  !BLOCKED_REALTIME_TOOLS.has(tool.name)
+);
+
+function realtimeToolNames() {
+  return tools.map((tool) => tool.name);
+}
 
 function buildContext(req, getTenantId, getSucursal) {
   return {
@@ -90,6 +105,18 @@ function setupJarvisRoutes(app, q, deps={}) {
       const ctx = buildContext(req,getTenantId,getSucursal);
       const name = String(req.body?.name || '');
       const args = typeof req.body?.arguments === 'string' ? JSON.parse(req.body.arguments || '{}') : (req.body?.arguments || req.body?.args || {});
+
+      // Guardia central: aunque una sesión vieja/caché intente usar herramientas
+      // clínicas para resolver contactos, JARVIS no las ejecutará.
+      if (name === 'list_whatsapp_messages' || name === 'send_whatsapp_to_patient') {
+        console.warn('[JARVIS ACTION BLOCKED]', { name, reason: 'Use JARVIS WhatsApp contacts first' });
+        return res.status(409).json({
+          ok:false,
+          error:'Esta acción no está disponible para resolver contactos de JARVIS. Use find_whatsapp_contact y después send_whatsapp_message.'
+        });
+      }
+
+      console.log('[JARVIS ACTION]', { name, args });
       const result = await executeTool(q, ctx, name, args);
       res.json({ok:true,name,result});
     } catch(error) { res.status(error.statusCode || error.status || 400).json({ok:false,error:error.message}); }
@@ -113,6 +140,8 @@ function setupJarvisRoutes(app, q, deps={}) {
       const key = process.env.OPENAI_API_KEY;
       if (!key) return res.status(503).json({error:'Falta OPENAI_API_KEY'});
       if (!req.body || typeof req.body !== 'string') return res.status(400).json({error:'Oferta SDP vacía'});
+      console.log('[JARVIS REALTIME TOOLS]', realtimeToolNames());
+
       const session = {
         type:'realtime', model:process.env.JARVIS_REALTIME_MODEL || process.env.F1_REALTIME_MODEL || 'gpt-realtime',
         instructions:jarvisInstructions(ctx), output_modalities:['audio'],
@@ -131,7 +160,15 @@ function setupJarvisRoutes(app, q, deps={}) {
     } catch(error){res.status(500).json({error:error.message});}
   });
 
-  console.log('✅ JARVIS Core V2: cerebro/orquestador + agenda personal + recordatorios + CliniqOne como sistema subordinado');
+  const names = realtimeToolNames();
+  console.log('[JARVIS CORE TOOLS]', names);
+  if (!names.includes('find_whatsapp_contact') || !names.includes('send_whatsapp_message')) {
+    console.error('[JARVIS CORE ERROR] Faltan herramientas propias de WhatsApp:', {
+      find_whatsapp_contact: names.includes('find_whatsapp_contact'),
+      send_whatsapp_message: names.includes('send_whatsapp_message')
+    });
+  }
+  console.log('✅ JARVIS Core V3: filtro central de tools + agenda personal + recordatorios + WhatsApp JARVIS');
 }
 
 module.exports={setupJarvisRoutes};
