@@ -1,8 +1,8 @@
 'use strict';
 
 const express = require('express');
-const { tools } = require('../f1/tool-definitions');
-const { executeTool } = require('../f1/management-tools');
+const { tools } = require('./jarvis-tool-definitions');
+const { executeTool, ensurePersonalTables } = require('./jarvis-management-tools');
 const { jarvisInstructions } = require('./jarvis-instructions');
 
 function buildContext(req, getTenantId, getSucursal) {
@@ -59,6 +59,32 @@ function setupJarvisRoutes(app, q, deps={}) {
 
   app.get('/api/jarvis/health', (req,res) => res.json({ ok:true, service:'jarvis', central_connected:true, wake_word:'JARVIS', voice:'realtime-v1' }));
 
+  // Agenda personal y recordatorios propios de JARVIS.
+  app.get('/api/jarvis/personal/dashboard', async (req,res) => {
+    try {
+      const ctx=buildContext(req,getTenantId,getSucursal); await ensurePersonalTables(q);
+      const ev=await q(`SELECT * FROM jarvis_personal_events WHERE tenant_id=$1::uuid AND (user_id=$2 OR (user_id IS NULL AND $2 IS NULL)) AND status<>'cancelled' AND start_at>=NOW()-interval '1 day' ORDER BY start_at LIMIT 100`,[ctx.tenant_id,ctx.user_id||null]);
+      const rr=await q(`SELECT * FROM jarvis_personal_reminders WHERE tenant_id=$1::uuid AND (user_id=$2 OR (user_id IS NULL AND $2 IS NULL)) AND status NOT IN ('cancelled','acknowledged') AND remind_at>=NOW()-interval '1 day' ORDER BY remind_at LIMIT 100`,[ctx.tenant_id,ctx.user_id||null]);
+      res.json({ok:true,events:ev.rows,reminders:rr.rows});
+    } catch(error){ res.status(500).json({ok:false,error:error.message}); }
+  });
+
+  // Devuelve avisos vencidos una sola vez: primer aviso y, si no hubo ACK, una insistencia 5 min después.
+  app.get('/api/jarvis/personal/due', async (req,res) => {
+    try {
+      const ctx=buildContext(req,getTenantId,getSucursal); await ensurePersonalTables(q);
+      const first=await q(`UPDATE jarvis_personal_reminders SET notified_at=NOW(),updated_at=NOW() WHERE id IN (SELECT id FROM jarvis_personal_reminders WHERE tenant_id=$1::uuid AND (user_id=$2 OR (user_id IS NULL AND $2 IS NULL)) AND status='pending' AND acknowledged_at IS NULL AND notified_at IS NULL AND remind_at<=NOW() ORDER BY remind_at LIMIT 20 FOR UPDATE SKIP LOCKED) RETURNING *, 'first'::text AS alert_kind`,[ctx.tenant_id,ctx.user_id||null]);
+      const insist=await q(`UPDATE jarvis_personal_reminders SET insisted_at=NOW(),updated_at=NOW() WHERE id IN (SELECT id FROM jarvis_personal_reminders WHERE tenant_id=$1::uuid AND (user_id=$2 OR (user_id IS NULL AND $2 IS NULL)) AND status='pending' AND acknowledged_at IS NULL AND notified_at IS NOT NULL AND insisted_at IS NULL AND insist_at<=NOW() ORDER BY insist_at LIMIT 20 FOR UPDATE SKIP LOCKED) RETURNING *, 'insist'::text AS alert_kind`,[ctx.tenant_id,ctx.user_id||null]);
+      const alerts=[...first.rows,...insist.rows];
+      res.json({ok:true,alerts});
+    } catch(error){ res.status(500).json({ok:false,error:error.message}); }
+  });
+
+  app.post('/api/jarvis/personal/acknowledge', async (req,res) => {
+    try { const ctx=buildContext(req,getTenantId,getSucursal); const result=await executeTool(q,ctx,'personal_acknowledge',req.body||{}); res.json(result); }
+    catch(error){ res.status(400).json({ok:false,error:error.message}); }
+  });
+
   app.post('/api/jarvis/actions', async (req,res) => {
     try {
       const ctx = buildContext(req,getTenantId,getSucursal);
@@ -105,7 +131,7 @@ function setupJarvisRoutes(app, q, deps={}) {
     } catch(error){res.status(500).json({error:error.message});}
   });
 
-  console.log('✅ JARVIS Core V1: Realtime + wake JARVIS + herramientas F1 montados');
+  console.log('✅ JARVIS Core V2: cerebro/orquestador + agenda personal + recordatorios + CliniqOne como sistema subordinado');
 }
 
 module.exports={setupJarvisRoutes};

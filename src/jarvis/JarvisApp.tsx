@@ -7,7 +7,7 @@ import {
   CalendarDays, Bell, Mail, MessageCircle, Phone, Globe2,
   Lock, X, Minus, GripHorizontal, ChevronLeft, ChevronRight, Maximize2, Minimize2,
   Plus, CheckCircle2, Clock3, Send, Search, PhoneCall, Sparkles,
-  FileText, BarChart3, Settings, Home, Sun, Menu, Facebook, Trash2, Undo2, Contact, UserPlus
+  FileText, BarChart3, Settings, Home, Sun, Menu, Facebook
 } from 'lucide-react';
 import { jarvisApi } from './lib/jarvisApi';
 import { JarvisVoiceController } from './voice/JarvisVoiceController';
@@ -36,7 +36,6 @@ type WaContact = {
   id?: string | number;
   phone: string;
   name: string;
-  contact_name?: string | null;
   avatar_url?: string | null;
   updated_at?: string;
 };
@@ -139,49 +138,17 @@ export default function JarvisApp() {
   const [fullscreenModule, setFullscreenModule] = React.useState<ModuleId | null>(null);
   const [waQuery, setWaQuery] = React.useState('');
   const [waChat, setWaChat] = React.useState('');
-
-  // Deep link desde una notificación nativa: ?jarvis=whatsapp&phone=+52...
-  React.useEffect(() => {
-    try {
-      const params = new URLSearchParams(window.location.search);
-      if (params.get('jarvis') !== 'whatsapp') return;
-      const phone = String(params.get('phone') || '').trim();
-      setFullscreenModule('whatsapp');
-      if (phone) {
-        setWaChat(phone);
-        setWaUnreadByPhone(prev => ({ ...prev, [phone]: 0 }));
-      }
-      // Limpia el deep-link para que refrescar la página no vuelva a forzar el módulo.
-      window.history.replaceState({}, document.title, window.location.pathname + window.location.hash);
-    } catch (err) {
-      console.warn('JARVIS WhatsApp deep link:', err);
-    }
-  }, []);
   const [waDraft, setWaDraft] = React.useState('');
   const [waMessages, setWaMessages] = React.useState<WaMessage[]>([]);
   const [waSavedContacts, setWaSavedContacts] = React.useState<WaContact[]>([]);
   const [waLoading, setWaLoading] = React.useState(false);
   const [waSending, setWaSending] = React.useState(false);
   const [waError, setWaError] = React.useState('');
-  const [waContactModal, setWaContactModal] = React.useState(false);
-  const [waContactName, setWaContactName] = React.useState('');
-  const [waContactPhone, setWaContactPhone] = React.useState('');
-  const [waSwipePhone, setWaSwipePhone] = React.useState('');
-  const [waDeletedPhone, setWaDeletedPhone] = React.useState('');
-  const [waContactsOpen, setWaContactsOpen] = React.useState(false);
-  const [waContactsQuery, setWaContactsQuery] = React.useState('');
-  const waDeleteGesture = React.useRef({ phone:'', x:0, y:0, active:false });
   const [now, setNow] = React.useState(() => new Date());
   const voiceRef = React.useRef<JarvisVoiceController | null>(null);
   const stageRef = React.useRef<HTMLDivElement | null>(null);
   const audioRef = React.useRef<AudioContext | null>(null);
   const lastHoverSound = React.useRef(0);
-  const waVoiceContactsRef = React.useRef<WaContact[]>([]);
-  const waLastVoiceCommandRef = React.useRef({ text: '', at: 0 });
-  const waSeenIncomingRef = React.useRef<Set<string>>(new Set());
-  const waInitialLoadRef = React.useRef(true);
-  const [waIncomingPulse, setWaIncomingPulse] = React.useState(false);
-  const [waUnreadByPhone, setWaUnreadByPhone] = React.useState<Record<string, number>>({});
   const carouselSwipe = React.useRef({ x: 0, y: 0, active: false, moved: false, pointerId: -1 });
 
   const flashUi = React.useCallback((kind: 'open' | 'slide' | 'close' | 'mic' | 'hover') => {
@@ -194,7 +161,7 @@ export default function JarvisApp() {
     window.setTimeout(() => stage.classList.remove(className), 650);
   }, []);
 
-  const playUiSound = React.useCallback((kind: 'open' | 'slide' | 'minimize' | 'close' | 'mic' | 'hover' | 'wa-send' | 'wa-receive') => {
+  const playUiSound = React.useCallback((kind: 'open' | 'slide' | 'minimize' | 'close' | 'mic' | 'hover') => {
     try {
       const AudioCtor = window.AudioContext;
       const ctx = audioRef.current || new AudioCtor();
@@ -226,15 +193,6 @@ export default function JarvisApp() {
       if (kind === 'close') { tone(360, 110, 0, .23, 'sine'); }
       if (kind === 'mic') { tone(240, 720, 0, .2, 'sine'); tone(480, 1280, .09, .26, 'triangle'); }
       if (kind === 'hover') { tone(880, 1040, 0, .07, 'sine'); }
-      // Sonidos propios de JARVIS para WhatsApp: salida corta / entrada doble.
-      if (kind === 'wa-send') {
-        tone(520, 920, 0, .10, 'sine');
-        tone(760, 1240, .045, .11, 'triangle');
-      }
-      if (kind === 'wa-receive') {
-        tone(880, 1320, 0, .11, 'sine');
-        tone(660, 1080, .13, .13, 'triangle');
-      }
       flashUi(kind === 'minimize' ? 'close' : kind);
     } catch { /* Audio no disponible: la interfaz sigue funcionando. */ }
   }, [flashUi]);
@@ -259,97 +217,45 @@ export default function JarvisApp() {
     };
   }, []);
 
-  React.useEffect(() => {
-    waVoiceContactsRef.current = waSavedContacts;
-  }, [waSavedContacts]);
-
-  const normalizeVoiceText = (value: string) =>
-    String(value || '')
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .toLowerCase()
-      .replace(/[^a-z0-9+\s]/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
-
-  const handleVoiceWhatsAppCommand = React.useCallback(async (spoken: string) => {
-    const raw = String(spoken || '').trim();
-    if (!raw) return false;
-
-    const normalized = normalizeVoiceText(raw);
-    const patterns = [
-      /^(?:jarvis\s+)?(?:manda|mandale|envia|enviale)\s+(?:un\s+)?mensaje\s+a\s+(.+?)\s+(?:y\s+)?(?:dile|diciendo|que\s+diga|con\s+el\s+mensaje)\s+(.+)$/i,
-      /^(?:jarvis\s+)?(?:manda|mandale|envia|enviale)\s+a\s+(.+?)\s+(?:y\s+)?(?:dile|diciendo|que)\s+(.+)$/i,
-      /^(?:jarvis\s+)?dile\s+a\s+(.+?)\s+que\s+(.+)$/i,
-    ];
-
-    let match: RegExpMatchArray | null = null;
-    for (const pattern of patterns) {
-      match = normalized.match(pattern);
-      if (match) break;
-    }
-    if (!match) return false;
-
-    // Recuperamos el mensaje desde la frase ORIGINAL para conservar mayúsculas, acentos y puntuación.
-    const targetNormalized = normalizeVoiceText(match[1]);
-    const markerCandidates = [' dile ', ' diciendo ', ' que diga ', ' con el mensaje ', ' que '];
-    const rawLower = normalizeVoiceText(raw);
-    let message = match[2].trim();
-    for (const marker of markerCandidates) {
-      const idx = rawLower.indexOf(marker, rawLower.indexOf(targetNormalized));
-      if (idx >= 0) {
-        // La longitud puede variar por acentos; buscamos el marcador equivalente en el original.
-        const originalMatch = raw.match(/\s(?:y\s+)?(?:dile|diciendo|que\s+diga|con\s+el\s+mensaje|que)\s+(.+)$/i);
-        if (originalMatch?.[1]) message = originalMatch[1].trim();
-        break;
-      }
-    }
-
-    const nowMs = Date.now();
-    if (waLastVoiceCommandRef.current.text === normalized && nowMs - waLastVoiceCommandRef.current.at < 6000) return true;
-    waLastVoiceCommandRef.current = { text: normalized, at: nowMs };
-
-    const contacts = waVoiceContactsRef.current;
-    const exact = contacts.filter(c => normalizeVoiceText(String(c.name || '')) === targetNormalized);
-    const candidates = exact.length ? exact : contacts.filter(c => {
-      const n = normalizeVoiceText(String(c.name || ''));
-      return n.startsWith(targetNormalized) || targetNormalized.startsWith(n);
-    });
-
-    if (candidates.length === 0) {
-      setLastText(`JARVIS: No encontré el contacto “${match[1]}”.`);
-      return true;
-    }
-    if (candidates.length > 1) {
-      setLastText(`JARVIS: Encontré varios contactos para “${match[1]}”. Dime el nombre completo.`);
-      return true;
-    }
-
-    const contact = candidates[0];
-    try {
-      await jarvisWhatsAppApi('/api/whatsapp/jarvis/send-message', {
-        method: 'POST',
-        body: JSON.stringify({ phone: contact.phone, message }),
-      });
-      setWaChat(String(contact.phone));
-      setSelected('whatsapp');
-      setLastText(`JARVIS: Mensaje enviado a ${contact.name}: “${message}”`);
-      playUiSound('wa-send');
-      window.dispatchEvent(new Event('jarvis:whatsapp-voice-sent'));
-      return true;
-    } catch (error: any) {
-      console.error('JARVIS voice WhatsApp:', error);
-      setLastText(`JARVIS: No pude enviar el mensaje a ${contact.name}.`);
-      return true;
-    }
-  }, [playUiSound]);
-
   const loadDashboard = React.useCallback(async () => {
     try {
       const data: any = await jarvisApi<any>('/api/jarvis/personal/dashboard');
       setItems(Array.isArray(data?.reminders) ? data.reminders : []);
       setEvents(Array.isArray(data?.events) ? data.events : []);
     } catch (e) { console.warn('JARVIS dashboard:', e); }
+  }, []);
+
+  // Avisos proactivos JARVIS: primer aviso + una insistencia si no hubo reconocimiento.
+  React.useEffect(() => {
+    let alive = true;
+    const spoken = new Set<string>();
+    const pollDue = async () => {
+      if (!alive) return;
+      try {
+        const data: any = await jarvisApi<any>('/api/jarvis/personal/due');
+        const alerts = Array.isArray(data?.alerts) ? data.alerts : [];
+        if (!alerts.length) return;
+        const fresh = alerts.filter((a: any) => !spoken.has(`${a.id}:${a.alert_kind}`));
+        fresh.forEach((a: any) => spoken.add(`${a.id}:${a.alert_kind}`));
+        if (!fresh.length) return;
+        const first = fresh.some((a: any) => a.alert_kind === 'first');
+        const titles = fresh.map((a: any) => String(a.title || 'compromiso').replace(/^Evento:\s*/i, '')).join('; ');
+        const phrase = first
+          ? `Señor, le recuerdo sus compromisos pendientes: ${titles}. ¿Desea realizar alguna acción o confirma que está enterado?`
+          : `Señor, debo insistir en los compromisos que tenemos pendientes. Le recuerdo una vez más: ${titles}.`;
+        setLastText(`JARVIS: ${phrase}`);
+        try {
+          window.speechSynthesis.cancel();
+          const u = new SpeechSynthesisUtterance(phrase);
+          u.lang = 'es-MX';
+          u.rate = 1;
+          window.speechSynthesis.speak(u);
+        } catch {}
+      } catch (e) { console.warn('JARVIS due reminders:', e); }
+    };
+    void pollDue();
+    const timer = window.setInterval(pollDue, 30000);
+    return () => { alive = false; window.clearInterval(timer); };
   }, []);
 
   React.useEffect(() => {
@@ -368,11 +274,7 @@ export default function JarvisApp() {
       onStatus: setVoiceStatus,
       onTranscript: (t, w) => {
         setLastText(`${w === 'jarvis' ? 'JARVIS' : 'Tú'}: ${t}`);
-        if (w === 'jarvis') {
-          window.setTimeout(safeLoad, 500);
-        } else {
-          void handleVoiceWhatsAppCommand(t);
-        }
+        if (w === 'jarvis') window.setTimeout(safeLoad, 500);
       },
       onError: e => setLastText(`Error: ${e.message}`)
     });
@@ -386,40 +288,7 @@ export default function JarvisApp() {
       document.removeEventListener('visibilitychange', refresh);
       voiceRef.current?.stop();
     };
-  }, [loadDashboard, handleVoiceWhatsAppCommand]);
-
-  const speakJarvisNotification = React.useCallback((contactName: string, message: string) => {
-    if (!('speechSynthesis' in window)) return;
-    const cleanName = String(contactName || 'un contacto').trim() || 'un contacto';
-    const cleanMessage = String(message || '').replace(/\s+/g, ' ').trim();
-    const spokenMessage = cleanMessage.length > 180 ? `${cleanMessage.slice(0, 177)}...` : cleanMessage;
-    const text = spokenMessage
-      ? `Señor, tiene un nuevo mensaje de ${cleanName}. Dice: ${spokenMessage}`
-      : `Señor, tiene un nuevo mensaje de ${cleanName}.`;
-
-    try {
-      window.speechSynthesis.cancel();
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.lang = 'es-MX';
-      utterance.rate = 0.96;
-      utterance.pitch = 0.82;
-      utterance.volume = 1;
-      const voices = window.speechSynthesis.getVoices();
-      const preferred = voices.find(v => /^es/i.test(v.lang) && /male|hombre|jorge|diego|raul/i.test(v.name))
-        || voices.find(v => /es[-_](MX|US)/i.test(v.lang))
-        || voices.find(v => /^es/i.test(v.lang));
-      if (preferred) utterance.voice = preferred;
-      utterance.onstart = () => {
-        setVoiceStatus('speaking');
-        setLastText(`JARVIS: Nuevo mensaje de ${cleanName}: ${cleanMessage}`);
-      };
-      utterance.onend = () => setVoiceStatus('idle');
-      utterance.onerror = () => setVoiceStatus('idle');
-      window.speechSynthesis.speak(utterance);
-    } catch (error) {
-      console.warn('JARVIS voice notification:', error);
-    }
-  }, []);
+  }, [loadDashboard]);
 
   const loadWhatsApp = React.useCallback(async (silent = false) => {
     if (!silent) setWaLoading(true);
@@ -428,38 +297,7 @@ export default function JarvisApp() {
         jarvisWhatsAppApi('/api/whatsapp/jarvis/messages?limit=1000'),
         jarvisWhatsAppApi('/api/whatsapp/jarvis/contacts'),
       ]);
-      const nextMessages: WaMessage[] = Array.isArray(messageData) ? messageData : [];
-      const incoming = nextMessages.filter(m => m.type === 'incoming');
-      const incomingKeys = incoming.map(m => String(m.wa_message_id || m.id));
-
-      if (waInitialLoadRef.current) {
-        // No sonar por todo el historial al abrir JARVIS.
-        waSeenIncomingRef.current = new Set(incomingKeys);
-        waInitialLoadRef.current = false;
-      } else {
-        const fresh = incoming.filter(m => !waSeenIncomingRef.current.has(String(m.wa_message_id || m.id)));
-        if (fresh.length) {
-          fresh.forEach(m => waSeenIncomingRef.current.add(String(m.wa_message_id || m.id)));
-          const contacts: WaContact[] = Array.isArray(contactData) ? contactData : [];
-          const newest = [...fresh].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()).pop()!;
-          const saved = contacts.find(c => String(c.phone) === String(newest.phone));
-          const speakerName = saved?.name?.trim() || newest.contact_name?.trim() || newest.phone || 'un contacto';
-          playUiSound('wa-receive');
-          speakJarvisNotification(speakerName, newest.message || '');
-          setWaIncomingPulse(true);
-          setWaUnreadByPhone(prev => {
-            const next = { ...prev };
-            fresh.forEach(msg => {
-              const phone = String(msg.phone || '').trim();
-              if (phone) next[phone] = (next[phone] || 0) + 1;
-            });
-            return next;
-          });
-          window.setTimeout(() => setWaIncomingPulse(false), 1800);
-        }
-      }
-
-      setWaMessages(nextMessages);
+      setWaMessages(Array.isArray(messageData) ? messageData : []);
       setWaSavedContacts(Array.isArray(contactData) ? contactData : []);
       setWaError('');
     } catch (e: any) {
@@ -468,7 +306,7 @@ export default function JarvisApp() {
     } finally {
       if (!silent) setWaLoading(false);
     }
-  }, [playUiSound, speakJarvisNotification]);
+  }, []);
 
   React.useEffect(() => {
     void loadWhatsApp();
@@ -476,12 +314,10 @@ export default function JarvisApp() {
     const refresh = () => void loadWhatsApp(true);
     window.addEventListener('focus', refresh);
     document.addEventListener('visibilitychange', refresh);
-    window.addEventListener('jarvis:whatsapp-voice-sent', refresh);
     return () => {
       window.clearInterval(timer);
       window.removeEventListener('focus', refresh);
       document.removeEventListener('visibilitychange', refresh);
-      window.removeEventListener('jarvis:whatsapp-voice-sent', refresh);
     };
   }, [loadWhatsApp]);
 
@@ -573,7 +409,7 @@ export default function JarvisApp() {
       groups.set(phone, arr);
     }
 
-    const saved = new Map(waSavedContacts.map(c => [String(c.phone), { ...c, name: String(c.name || c.contact_name || c.phone) }]));
+    const saved = new Map(waSavedContacts.map(c => [String(c.phone), c]));
     const phones = new Set([...groups.keys(), ...saved.keys()]);
 
     return Array.from(phones).map(phone => {
@@ -592,11 +428,11 @@ export default function JarvisApp() {
         avatar: initials || 'WA',
         preview: last?.message || 'Contacto guardado',
         timestamp: last?.timestamp || contact?.updated_at || '',
-        unread: waUnreadByPhone[phone] || 0,
+        unread: 0,
         messages,
       };
     }).sort((a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime());
-  }, [waMessages, waSavedContacts, waUnreadByPhone]);
+  }, [waMessages, waSavedContacts]);
 
   React.useEffect(() => {
     if (!waChat && waContacts.length) setWaChat(waContacts[0].phone);
@@ -607,11 +443,6 @@ export default function JarvisApp() {
     (c.name + ' ' + c.phone + ' ' + c.preview).toLowerCase().includes(waQuery.toLowerCase())
   );
   const waCurrent = waContacts.find(c => c.phone === waChat) || waContacts[0] || null;
-  const waConversationList = waFiltered.filter(c => c.messages.length > 0);
-  const waDirectory = waContacts.filter(c =>
-    (c.name + ' ' + c.phone).toLowerCase().includes(waContactsQuery.toLowerCase())
-  ).sort((a,b) => a.name.localeCompare(b.name, 'es', { sensitivity:'base' }));
-  const waUnreadTotal = React.useMemo(() => Object.values(waUnreadByPhone).reduce((sum, n) => sum + n, 0), [waUnreadByPhone]);
 
   const waTime = (v?: string) => {
     if (!v) return '';
@@ -629,7 +460,6 @@ export default function JarvisApp() {
         body: JSON.stringify({ phone: waCurrent.phone, message }),
       });
       setWaDraft('');
-      playUiSound('wa-send');
       await loadWhatsApp(true);
     } catch (e: any) {
       console.error('JARVIS WhatsApp send:', e);
@@ -639,24 +469,11 @@ export default function JarvisApp() {
     }
   };
 
-  const openWhatsAppContactModal = () => {
-    setWaContactName('');
-    setWaContactPhone('');
-    setWaError('');
-    setWaContactModal(true);
-    playUiSound('open');
-  };
-
-  const closeWhatsAppContactModal = () => {
-    setWaContactModal(false);
-    playUiSound('close');
-  };
-
-  const addWhatsAppContact = async (e?: React.FormEvent) => {
-    e?.preventDefault();
-    const name = waContactName.trim();
-    const phone = waContactPhone.trim();
-    if (!name || !phone || waSending) return;
+  const addWhatsAppContact = async () => {
+    const name = window.prompt('Nombre del contacto:')?.trim();
+    if (!name) return;
+    const phone = window.prompt('Número de WhatsApp con lada (ej. +15202713253):')?.trim();
+    if (!phone) return;
     setWaSending(true);
     try {
       const result: any = await jarvisWhatsAppApi('/api/whatsapp/jarvis/contacts', {
@@ -667,43 +484,11 @@ export default function JarvisApp() {
       await loadWhatsApp(true);
       setWaChat(savedPhone);
       setWaError('');
-      setWaContactModal(false);
-      playUiSound('open');
     } catch (e: any) {
       setWaError(e?.message || 'No se pudo guardar el contacto');
-      playUiSound('close');
     } finally {
       setWaSending(false);
     }
-  };
-
-  const waSwipeStart = (phone: string, e: React.PointerEvent<HTMLDivElement>) => {
-    waDeleteGesture.current = { phone, x:e.clientX, y:e.clientY, active:true };
-  };
-  const waSwipeEnd = (phone: string, e: React.PointerEvent<HTMLDivElement>) => {
-    const g=waDeleteGesture.current; waDeleteGesture.current.active=false;
-    if(g.phone!==phone) return;
-    const dx=e.clientX-g.x, dy=e.clientY-g.y;
-    if(Math.abs(dx)>55 && Math.abs(dx)>Math.abs(dy)*1.25){
-      setWaSwipePhone(dx<0 ? phone : '');
-      playUiSound('slide');
-    }
-  };
-  const deleteWhatsAppConversation = async (phone:string) => {
-    try {
-      await jarvisWhatsAppApi('/api/whatsapp/jarvis/conversations/delete',{method:'POST',body:JSON.stringify({phone})});
-      setWaDeletedPhone(phone); setWaSwipePhone('');
-      if(waChat===phone) setWaChat('');
-      playUiSound('close');
-      await loadWhatsApp(true);
-    } catch(e:any){ setWaError(e?.message||'No se pudo eliminar la conversación'); }
-  };
-  const undoWhatsAppDelete = async () => {
-    const phone=waDeletedPhone; if(!phone) return;
-    try {
-      await jarvisWhatsAppApi('/api/whatsapp/jarvis/conversations/restore',{method:'POST',body:JSON.stringify({phone})});
-      setWaDeletedPhone(''); playUiSound('open'); await loadWhatsApp(true); setWaChat(phone);
-    } catch(e:any){ setWaError(e?.message||'No se pudo deshacer'); }
   };
 
   const renderWhatsAppFull = () => (
@@ -715,22 +500,11 @@ export default function JarvisApp() {
           {waLoading && !waContacts.length && <div className="jv-panel-empty">Cargando conversaciones…</div>}
           {waError && !waContacts.length && <div className="jv-panel-empty">{waError}</div>}
           {!waLoading && !waFiltered.length && !waError && <div className="jv-panel-empty">No hay conversaciones de WhatsApp.</div>}
-          {waConversationList.map(c => <div key={c.phone} className={`jv-wa-swipe-row ${waSwipePhone===c.phone?'revealed':''}`}
-            onPointerDown={e=>waSwipeStart(c.phone,e)} onPointerUp={e=>waSwipeEnd(c.phone,e)}>
-            <button type="button" className="jv-wa-delete-action" aria-label={`Eliminar ${c.name}`} onClick={()=>void deleteWhatsAppConversation(c.phone)}><Trash2/><span>Eliminar</span></button>
-            <button type="button" className={`jv-wa-contact ${waChat===c.phone?'active':''}`} onClick={()=>{
-              if(waSwipePhone===c.phone){setWaSwipePhone('');return;} setWaChat(c.phone); setWaUnreadByPhone(prev=>({...prev,[c.phone]:0}));
-            }}>
-              <span className="jv-wa-avatar">{c.avatar}</span>
-              <span className="jv-wa-contact-copy"><b>{c.name}</b><small>{c.preview}</small></span>
-              <span className="jv-wa-meta"><small>{waTime(c.timestamp)}</small>{c.unread ? <em>{c.unread}</em> : null}</span>
-            </button>
-          </div>)}
-          {waDeletedPhone && <div className="jv-wa-delete-confirm" role="status">
-            <span>Conversación eliminada</span>
-            <button type="button" className="jv-wa-undo-btn" onClick={()=>void undoWhatsAppDelete()}><Undo2/>Deshacer</button>
-            <button type="button" onClick={()=>{setWaDeletedPhone('');playUiSound('slide');}}>No</button>
-          </div>}
+          {waFiltered.map(c => <button key={c.phone} className={`jv-wa-contact ${waChat===c.phone?'active':''}`} onClick={()=>setWaChat(c.phone)}>
+            <span className="jv-wa-avatar">{c.avatar}</span>
+            <span className="jv-wa-contact-copy"><b>{c.name}</b><small>{c.preview}</small></span>
+            <span className="jv-wa-meta"><small>{waTime(c.timestamp)}</small>{c.unread ? <em>{c.unread}</em> : null}</span>
+          </button>)}
         </div>
       </section>
 
@@ -785,31 +559,12 @@ export default function JarvisApp() {
       <div className="jv-wa-mini">
         <label><Search/><input value={waQuery} onChange={e=>setWaQuery(e.target.value)} placeholder="Buscar chat real" /></label>
         {waLoading && !waContacts.length && <div className="jv-panel-empty">Cargando WhatsApp…</div>}
-        <div className="jv-wa-mini-carousel" aria-label="Conversaciones de WhatsApp">
-          {waConversationList.map(c => <div key={c.phone} className={`jv-wa-mini-swipe ${waSwipePhone===c.phone?'revealed':''}`}
-            onPointerDown={e=>waSwipeStart(c.phone,e)} onPointerUp={e=>waSwipeEnd(c.phone,e)}>
-            <button type="button" className="jv-wa-mini-delete" aria-label={`Eliminar ${c.name}`} onClick={()=>void deleteWhatsAppConversation(c.phone)}><Trash2/><span>Eliminar</span></button>
-            <button type="button" className="jv-wa-mini-chat" onClick={()=>{
-              if(waSwipePhone===c.phone){setWaSwipePhone('');return;}
-              setWaChat(c.phone); setWaUnreadByPhone(prev => ({ ...prev, [c.phone]: 0 })); setFullscreenModule('whatsapp');
-            }}>
-              <span className="jv-wa-avatar">{c.avatar}</span><span><b>{c.name}</b><small>{c.preview}</small></span>
-              {c.unread > 0 && <em className="jv-wa-mini-unread">{c.unread > 99 ? '99+' : c.unread}</em>}
-            </button>
-          </div>)}
-        </div>
-        {waDeletedPhone && <div className="jv-wa-delete-confirm jv-wa-delete-confirm-mini" role="status">
-          <span>Conversación eliminada</span>
-          <button type="button" className="jv-wa-undo-btn" onClick={()=>void undoWhatsAppDelete()}><Undo2/>Deshacer</button>
-          <button type="button" onClick={()=>{setWaDeletedPhone('');playUiSound('slide');}}>No</button>
-        </div>}
+        {waFiltered.slice(0,3).map(c => <button key={c.phone} onClick={()=>{setWaChat(c.phone); setFullscreenModule('whatsapp');}}>
+          <span className="jv-wa-avatar">{c.avatar}</span><span><b>{c.name}</b><small>{c.preview}</small></span>
+        </button>)}
       </div>
-      <div className="jv-wa-mini-tools">
-        <button className="jv-wa-contacts-launch" onClick={()=>{setWaContactsQuery('');setWaContactsOpen(true);playUiSound('open');}}>
-          <Contact /><span><b>Contactos</b><small>{waContacts.length} disponibles</small></span><ChevronRight />
-        </button>
-        <button className="jv-wa-add-contact-icon" title="Agregar contacto" aria-label="Agregar contacto" onClick={openWhatsAppContactModal}><UserPlus /></button>
-      </div>
+      <button className="jv-action" onClick={()=>setFullscreenModule('whatsapp')}><Maximize2 /> Abrir WhatsApp completo</button>
+      <button className="jv-action secondary" onClick={()=>void addWhatsAppContact()}><Plus /> Agregar contacto</button>
     </>;
     if (id === 'facebook') return <>
       <div className="jv-panel-empty">Facebook listo para publicaciones, mensajes y seguimiento.</div>
@@ -908,7 +663,7 @@ export default function JarvisApp() {
           {rotated.map((m, i) => {
             const I = m.icon, slot = i - 2.5, b = badge(m.id);
             return <button key={m.id}
-              className={`module-card ${m.accent} ${selected === m.id ? 'selected' : ''} ${m.id === 'whatsapp' && waIncomingPulse ? 'jv-wa-incoming' : ''}`}
+              className={`module-card ${m.accent} ${selected === m.id ? 'selected' : ''}`}
               style={{ '--slot': slot, '--lift': Math.abs(slot) } as React.CSSProperties}
               onPointerEnter={hoverCard}
               onClick={() => { if (!carouselSwipe.current.moved) activate(m.id); }}>
@@ -1004,15 +759,11 @@ export default function JarvisApp() {
       {open.map((id, i) => {
         const m = modules.find(x => x.id === id)!; const I = m.icon; const pos = positions[id] || defaultPos(i);
         return <section key={id}
-          className={`jv-float ${m.accent} ${selected === id ? 'focused' : ''} ${id === 'whatsapp' && waIncomingPulse ? 'jv-wa-incoming' : ''}`}
+          className={`jv-float ${m.accent} ${selected === id ? 'focused' : ''}`}
           style={{ left: pos.x, top: pos.y, zIndex: selected === id ? 60 : 40 + i }}
           onPointerDown={e => { setSelected(id); beginDrag(id, e); }}>
           <header>
-            <div><I /><b>{m.label}</b>{id === 'whatsapp' && waUnreadTotal > 0 &&
-              <em className="jv-wa-header-unread" title={`${waUnreadTotal} mensajes sin leer`}>
-                {waUnreadTotal > 99 ? '99+' : waUnreadTotal}
-              </em>}
-            </div>
+            <div><I /><b>{m.label}</b></div>
             <span><GripHorizontal />
               <button title="Maximizar" onClick={() => setFullscreenModule(id)}><Maximize2 /></button>
               <button title="Minimizar" onClick={() => closePanel(id, 'minimize')}><Minus /></button>
@@ -1039,40 +790,6 @@ export default function JarvisApp() {
         </div>
       </section>;
     })()}
-
-    {waContactsOpen && <section className="jv-wa-directory-screen" style={{ '--jarvis-module-bg': `url(${jarvisModuleBg})` } as React.CSSProperties} aria-label="Libreta de contactos JARVIS">
-      <header className="jv-wa-directory-head">
-        <div className="jv-wa-directory-title"><span className="jv-wa-directory-emblem"><Contact/></span><div><small>JARVIS · DIRECTORIO SEGURO</small><b>Contactos</b></div></div>
-        <button type="button" aria-label="Cerrar contactos" onClick={()=>{setWaContactsOpen(false);playUiSound('close');}}><X/></button>
-      </header>
-      <div className="jv-wa-directory-search"><Search/><input autoFocus value={waContactsQuery} onChange={e=>setWaContactsQuery(e.target.value)} placeholder="Buscar nombre o número"/><button type="button" title="Nuevo contacto" onClick={()=>{setWaContactsOpen(false);openWhatsAppContactModal();}}><UserPlus/></button></div>
-      <div className="jv-wa-directory-list">
-        {waDirectory.map(c => <button type="button" className="jv-wa-directory-contact" key={c.phone} onClick={()=>{setWaChat(c.phone);setWaUnreadByPhone(prev=>({...prev,[c.phone]:0}));setWaContactsOpen(false);setFullscreenModule('whatsapp');playUiSound('open');}}>
-          <span className="jv-wa-avatar">{c.avatar}</span><span className="jv-wa-directory-copy"><b>{c.name}</b><small>{c.phone}</small>{c.messages.length===0 && <em>Sin conversación · toca para iniciar</em>}</span><ChevronRight/>
-        </button>)}
-        {!waDirectory.length && <div className="jv-panel-empty">No encontré contactos con esa búsqueda.</div>}
-      </div>
-      <footer><span>{waDirectory.length} contactos</span><span>JARVIS-WA-001 · canal privado</span></footer>
-    </section>}
-
-    {waContactModal && <div className="jv-contact-backdrop" onPointerDown={e => { if (e.target === e.currentTarget) closeWhatsAppContactModal(); }}>
-      <form className="jv-contact-modal" onSubmit={e => void addWhatsAppContact(e)}>
-        <div className="jv-contact-scan" aria-hidden="true" />
-        <header>
-          <div className="jv-contact-emblem"><Plus /></div>
-          <div><small>JARVIS · WHATSAPP LINK</small><h3>Nuevo contacto</h3></div>
-          <button type="button" aria-label="Cerrar" onClick={closeWhatsAppContactModal}><X /></button>
-        </header>
-        <p>Registra un contacto en el canal seguro de WhatsApp.</p>
-        <label><span>IDENTIDAD</span><div><MessageCircle/><input autoFocus value={waContactName} onChange={e=>setWaContactName(e.target.value)} placeholder="Nombre del contacto" /></div></label>
-        <label><span>CANAL WHATSAPP</span><div><Phone/><input inputMode="tel" value={waContactPhone} onChange={e=>setWaContactPhone(e.target.value)} placeholder="+1 520 271 3253" /></div></label>
-        {waError && <div className="jv-contact-error">{waError}</div>}
-        <footer>
-          <button type="button" className="cancel" onClick={closeWhatsAppContactModal}>Cancelar</button>
-          <button type="submit" className="save" disabled={waSending || !waContactName.trim() || !waContactPhone.trim()}><CheckCircle2 />{waSending ? 'Guardando…' : 'Guardar contacto'}</button>
-        </footer>
-      </form>
-    </div>}
 
     {open.length > 0 && <button className="jv-reset" onClick={resetPanels}><Sparkles /> Reorganizar paneles</button>}
   </div>;
