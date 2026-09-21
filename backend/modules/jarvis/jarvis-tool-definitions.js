@@ -44,6 +44,18 @@ const personalTools = [
 
 // JARVIS conserva CliniqOne como sistema/herramienta subordinada, no como agenda por defecto.
 const personalToolNames = new Set(personalTools.map(tool => tool.name));
-const delegatedCliniqOneTools = cliniqOneTools.filter(tool => !personalToolNames.has(tool.name));
+
+// Estas herramientas de CliniqOne NO se exponen a la sesión general de JARVIS
+// porque pueden competir con la libreta propia de WhatsApp de JARVIS.
+// El historial clínico nunca debe usarse para resolver un contacto personal.
+const blockedDelegatedTools = new Set([
+  'list_whatsapp_messages',
+]);
+
+const delegatedCliniqOneTools = cliniqOneTools.filter(tool =>
+  !personalToolNames.has(tool.name) &&
+  !blockedDelegatedTools.has(tool.name)
+);
+
 const tools = [...personalTools, ...delegatedCliniqOneTools];
 module.exports = { tools, personalTools };
