@@ -142,11 +142,21 @@ function setupJarvisRoutes(app, q, deps={}) {
       res.json({ok:true,name,result});
     } catch(error) {
       console.error('[JARVIS ACTION ERROR]', {
-        message:error?.message, code:error?.code, detail:error?.detail,
-        constraint:error?.constraint, table:error?.table, column:error?.column,
-        stack:error?.stack
+        message: error?.message,
+        code: error?.code,
+        detail: error?.detail,
+        constraint: error?.constraint,
+        table: error?.table,
+        column: error?.column,
+        stack: error?.stack
       });
-      res.status(error.statusCode || error.status || 400).json({ok:false,error:error.message});
+
+      res.status(error.statusCode || error.status || 400).json({
+        ok: false,
+        error: error?.message || String(error),
+        code: error?.code || null,
+        detail: error?.detail || null
+      });
     }
   });
 
@@ -227,7 +237,7 @@ function setupJarvisRoutes(app, q, deps={}) {
         type:'realtime', model:process.env.JARVIS_REALTIME_MODEL || process.env.F1_REALTIME_MODEL || 'gpt-realtime',
         instructions:jarvisInstructions(ctx), output_modalities:['audio'],
         audio:{input:{transcription:{model:process.env.JARVIS_TRANSCRIBE_MODEL || process.env.F1_TRANSCRIBE_MODEL || 'gpt-4o-mini-transcribe',language:'es',prompt:'JARVIS. Asistente personal y empresarial. Agenda, recordatorios, correo, WhatsApp, llamadas e Internet.'},noise_reduction:{type:'near_field'},turn_detection:{type:'semantic_vad',eagerness:'low',create_response:true,interrupt_response:false}},output:{voice:process.env.JARVIS_VOICE || process.env.F1_VOICE || 'marin',speed:1.0}},
-        tools, tool_choice:'auto', max_output_tokens:1200,
+        tools, tool_choice:'auto', max_output_tokens:4000,
       };
       const boundary=`----JarvisRealtime${Date.now().toString(16)}${Math.random().toString(16).slice(2)}`;
       const body=Buffer.concat([
