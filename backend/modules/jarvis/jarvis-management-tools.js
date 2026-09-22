@@ -632,8 +632,7 @@ async function approveSkillDraft(q,ctx,args={}){
   let draft=current.draft;
   let cost=t(draft.estimated_cost).toLowerCase() || 'unknown';
 
-  // Si un borrador viejo de clima quedó en unknown, migramos primero a la alternativa
-  // gratuita conocida en vez de obligar al usuario a recrearlo.
+  // Si un borrador viejo de clima quedó en unknown, migra a Open-Meteo gratuito.
   if(cost==='unknown' && isWeatherSkillDraft(draft)){
     const fallback=applyFreeServiceFallback({
       ...draft,
@@ -648,8 +647,7 @@ async function approveSkillDraft(q,ctx,args={}){
     cost='free';
   }
 
-  // La aprobación normal solo procede cuando el borrador está confirmado como gratuito.
-  // unknown/paid NO generan un 400: devolvemos un resultado explicable a Realtime.
+  // Servicios paid/unknown siguen bloqueados: una autorización normal nunca compra nada.
   if(cost!=='free'){
     const nextStatus=cost==='paid'?'blocked_cost_review':'cost_review';
     const {rows}=await q(`UPDATE jarvis_skill_drafts SET status=$4,updated_at=NOW()
@@ -657,26 +655,41 @@ async function approveSkillDraft(q,ctx,args={}){
       [t(ctx.tenant_id),ctx.user_id||null,draft.id,nextStatus]);
     return {ok:false,source:'jarvis_skill_builder',draft:rows[0],requires_cost_confirmation:true,
       assistant_message:cost==='paid'
-        ? `La habilidad “${draft.name}” indica un servicio de pago. No la aprobé; requiere autorización explícita de costo.`
-        : `La habilidad “${draft.name}” tiene costo todavía sin confirmar. Antes de aprobarla debo confirmar que los servicios elegidos sean gratuitos.`,
+        ? `La habilidad “${draft.name}” indica un servicio de pago. No la aprobé ni instalé; requiere autorización explícita de costo.`
+        : `La habilidad “${draft.name}” tiene costo todavía sin confirmar. No la aprobé ni instalé hasta confirmar que el servicio sea gratuito.`,
       client_event:{type:'jarvis_skill_builder_changed',draft_id:draft.id}};
   }
 
-  if(['approved','installed','active'].includes(t(draft.status).toLowerCase())){
-    return {ok:true,source:'jarvis_skill_builder',draft,already_approved:true,
-      assistant_message:`La habilidad “${draft.name}” ya estaba aprobada. La aprobación no instala ni despliega código.`};
-  }
   if(t(draft.status).toLowerCase()==='rejected'){
     return {ok:false,source:'jarvis_skill_builder',draft,
       assistant_message:`La habilidad “${draft.name}” está rechazada. Debe crearse o reabrirse una propuesta antes de aprobarla.`};
   }
 
-  const {rows}=await q(`UPDATE jarvis_skill_drafts SET status='approved',updated_at=NOW()
-    WHERE tenant_id=$1 AND (user_id=$2 OR (user_id IS NULL AND $2 IS NULL)) AND id=$3 RETURNING *`,
-    [t(ctx.tenant_id),ctx.user_id||null,draft.id]);
-  return {ok:true,source:'jarvis_skill_builder',draft:rows[0],executable:false,
-    assistant_message:`Aprobación registrada para “${draft.name}”. Aún no se instaló, no se modificó código y no se desplegó nada.`,
-    client_event:{type:'jarvis_skill_builder_changed',draft_id:draft.id}};
+  // Si ya está activa, la autorización es idempotente.
+  if(['active','installed'].includes(t(draft.status).toLowerCase())){
+    return {ok:true,source:'jarvis_skill_builder',draft,skill:draft,already_installed:true,executable:true,
+      assistant_message:`La habilidad “${draft.name}” ya está instalada y activa.`,
+      client_event:{type:'jarvis_skill_builder_changed',draft_id:draft.id}};
+  }
+
+  // Una sola autorización: aprobar y continuar inmediatamente a instalación segura.
+  if(t(draft.status).toLowerCase()!=='approved'){
+    const {rows}=await q(`UPDATE jarvis_skill_drafts SET status='approved',updated_at=NOW()
+      WHERE tenant_id=$1 AND (user_id=$2 OR (user_id IS NULL AND $2 IS NULL)) AND id=$3 RETURNING *`,
+      [t(ctx.tenant_id),ctx.user_id||null,draft.id]);
+    draft=rows[0]||draft;
+  }
+
+  const installed=await installApprovedSkill(q,ctx,{id:draft.id});
+  if(installed?.ok && installed?.executable){
+    return {
+      ...installed,
+      approved:true,
+      installed:true,
+      assistant_message:`Autorización registrada. ${installed.assistant_message}`
+    };
+  }
+  return installed;
 }
 
 async function rejectSkillDraft(q,ctx,args={}){
