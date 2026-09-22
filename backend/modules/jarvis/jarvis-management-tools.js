@@ -6,24 +6,87 @@ function t(v){ return v == null ? '' : String(v).trim(); }
 function idList(v){ return Array.isArray(v) ? v.map(Number).filter(Number.isSafeInteger) : []; }
 
 async function ensurePersonalTables(q){
+  // CREATE TABLE IF NOT EXISTS NO agrega columnas faltantes a tablas antiguas.
+  // Por eso esta función también actúa como migración idempotente/autorreparable.
   await q(`CREATE TABLE IF NOT EXISTS jarvis_personal_events (
     id BIGSERIAL PRIMARY KEY, tenant_id UUID NOT NULL, user_id TEXT,
     title TEXT NOT NULL, start_at TIMESTAMPTZ NOT NULL, end_at TIMESTAMPTZ,
     location TEXT, notes TEXT, category TEXT DEFAULT 'personal', status TEXT DEFAULT 'active',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`);
-  await q(`CREATE INDEX IF NOT EXISTS idx_jarvis_personal_events_due ON jarvis_personal_events(tenant_id,user_id,start_at)`);
+
+  await q(`ALTER TABLE jarvis_personal_events
+    ADD COLUMN IF NOT EXISTS tenant_id UUID,
+    ADD COLUMN IF NOT EXISTS user_id TEXT,
+    ADD COLUMN IF NOT EXISTS title TEXT,
+    ADD COLUMN IF NOT EXISTS start_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS end_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS location TEXT,
+    ADD COLUMN IF NOT EXISTS notes TEXT,
+    ADD COLUMN IF NOT EXISTS category TEXT DEFAULT 'personal',
+    ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'active',
+    ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW(),
+    ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()`);
+
   await q(`CREATE TABLE IF NOT EXISTS jarvis_personal_reminders (
     id BIGSERIAL PRIMARY KEY, tenant_id UUID NOT NULL, user_id TEXT,
-    event_id BIGINT REFERENCES jarvis_personal_events(id) ON DELETE CASCADE,
+    event_id BIGINT,
     title TEXT NOT NULL, remind_at TIMESTAMPTZ NOT NULL, notes TEXT,
     priority TEXT DEFAULT 'normal', status TEXT DEFAULT 'pending',
     insist_at TIMESTAMPTZ, notified_at TIMESTAMPTZ, insisted_at TIMESTAMPTZ, acknowledged_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`);
-  await q(`CREATE INDEX IF NOT EXISTS idx_jarvis_personal_reminders_due ON jarvis_personal_reminders(tenant_id,user_id,status,remind_at,insist_at)`);
-}
 
+  await q(`ALTER TABLE jarvis_personal_reminders
+    ADD COLUMN IF NOT EXISTS tenant_id UUID,
+    ADD COLUMN IF NOT EXISTS user_id TEXT,
+    ADD COLUMN IF NOT EXISTS event_id BIGINT,
+    ADD COLUMN IF NOT EXISTS title TEXT,
+    ADD COLUMN IF NOT EXISTS remind_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS notes TEXT,
+    ADD COLUMN IF NOT EXISTS priority TEXT DEFAULT 'normal',
+    ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'pending',
+    ADD COLUMN IF NOT EXISTS insist_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS notified_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS insisted_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS acknowledged_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW(),
+    ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()`);
+
+  // Normaliza filas antiguas antes de crear índices.
+  await q(`UPDATE jarvis_personal_events
+    SET category=COALESCE(category,'personal'),
+        status=COALESCE(status,'active'),
+        created_at=COALESCE(created_at,NOW()),
+        updated_at=COALESCE(updated_at,NOW())
+    WHERE category IS NULL OR status IS NULL OR created_at IS NULL OR updated_at IS NULL`);
+
+  await q(`UPDATE jarvis_personal_reminders
+    SET priority=COALESCE(priority,'normal'),
+        status=COALESCE(status,'pending'),
+        created_at=COALESCE(created_at,NOW()),
+        updated_at=COALESCE(updated_at,NOW())
+    WHERE priority IS NULL OR status IS NULL OR created_at IS NULL OR updated_at IS NULL`);
+
+  await q(`CREATE INDEX IF NOT EXISTS idx_jarvis_personal_events_due
+    ON jarvis_personal_events(tenant_id,user_id,start_at)`);
+  await q(`CREATE INDEX IF NOT EXISTS idx_jarvis_personal_reminders_due
+    ON jarvis_personal_reminders(tenant_id,user_id,status,remind_at,insist_at)`);
+
+  // Agrega la FK si la instalación antigua todavía no la tenía.
+  await q(`DO $$
+  BEGIN
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_constraint
+      WHERE conname='jarvis_personal_reminders_event_id_fkey'
+        AND conrelid='jarvis_personal_reminders'::regclass
+    ) THEN
+      ALTER TABLE jarvis_personal_reminders
+      ADD CONSTRAINT jarvis_personal_reminders_event_id_fkey
+      FOREIGN KEY (event_id) REFERENCES jarvis_personal_events(id) ON DELETE CASCADE;
+    END IF;
+  END $$`);
+}
 function userWhere(ctx, start=1){
   return { sql:`tenant_id=$${start}::uuid AND (user_id=$${start+1} OR (user_id IS NULL AND $${start+1} IS NULL))`, params:[ctx.tenant_id, ctx.user_id || null] };
 }
@@ -152,117 +215,6 @@ async function sendJarvisWhatsAppMessage(q,ctx,args={}){
     assistant_message:`Mensaje enviado por WhatsApp${contact?.name?` a ${contact.name}`:` al ${data?.phone||phone}`}.`,client_event:{type:'jarvis_whatsapp_changed'}};
 }
 
-
-// ===================== Reportes centrales de tarjetas JARVIS =====================
-const JARVIS_CARD_MODULES = ['agenda','recordatorios','whatsapp','correo','llamadas','internet'];
-
-async function fetchJarvisInternal(ctx, path){
-  const base=t(process.env.INTERNAL_BASE_URL||process.env.RENDER_EXTERNAL_URL)||`http://127.0.0.1:${process.env.PORT||10000}`;
-  const headers={};
-  if(t(ctx.authorization)) headers.authorization=t(ctx.authorization);
-  if(t(ctx.branch_key)) headers['x-sucursal']=t(ctx.branch_key);
-  const r=await fetch(`${base}${path}`,{headers});
-  const raw=await r.text();
-  let data=null;
-  try{ data=raw?JSON.parse(raw):null; }catch{ data=raw; }
-  if(!r.ok) throw new Error(`${path} respondió ${r.status}`);
-  return data;
-}
-
-function normalizeArrayPayload(data){
-  if(Array.isArray(data)) return data;
-  if(Array.isArray(data?.items)) return data.items;
-  if(Array.isArray(data?.messages)) return data.messages;
-  if(Array.isArray(data?.contacts)) return data.contacts;
-  if(Array.isArray(data?.data)) return data.data;
-  return [];
-}
-
-async function reportAgenda(q,ctx,args={}){
-  await ensurePersonalTables(q);
-  const now=new Date();
-  const days=Math.min(30,Math.max(1,Number(args.days)||7));
-  const to=new Date(now.getTime()+days*864e5);
-  const ev=await q(`SELECT id,title,start_at,end_at,location,status
-    FROM jarvis_personal_events
-    WHERE tenant_id=$1::uuid AND (user_id=$2 OR (user_id IS NULL AND $2 IS NULL))
-      AND status<>'cancelled' AND start_at BETWEEN $3::timestamptz AND $4::timestamptz
-    ORDER BY start_at LIMIT 50`,[ctx.tenant_id,ctx.user_id||null,now.toISOString(),to.toISOString()]);
-  return {module:'agenda',status:'operativo',validated:true,period_days:days,total:ev.rows.length,upcoming:ev.rows.slice(0,10)};
-}
-
-async function reportReminders(q,ctx,args={}){
-  await ensurePersonalTables(q);
-  const now=new Date();
-  const days=Math.min(30,Math.max(1,Number(args.days)||7));
-  const to=new Date(now.getTime()+days*864e5);
-  const rr=await q(`SELECT id,title,remind_at,priority,status,notified_at,acknowledged_at
-    FROM jarvis_personal_reminders
-    WHERE tenant_id=$1::uuid AND (user_id=$2 OR (user_id IS NULL AND $2 IS NULL))
-      AND status<>'cancelled' AND remind_at BETWEEN $3::timestamptz AND $4::timestamptz
-    ORDER BY remind_at LIMIT 50`,[ctx.tenant_id,ctx.user_id||null,now.toISOString(),to.toISOString()]);
-  const pending=rr.rows.filter(x=>String(x.status||'pending').toLowerCase()==='pending');
-  return {module:'recordatorios',status:'operativo',validated:true,period_days:days,total:rr.rows.length,pending:pending.length,items:rr.rows.slice(0,10)};
-}
-
-async function reportWhatsApp(q,ctx,args={}){
-  const limit=Math.min(1000,Math.max(20,Number(args.limit)||250));
-  const [messagePayload,contactPayload]=await Promise.all([
-    fetchJarvisInternal(ctx,`/api/whatsapp/jarvis/messages?limit=${limit}`),
-    fetchJarvisInternal(ctx,'/api/whatsapp/jarvis/contacts')
-  ]);
-  const messages=normalizeArrayPayload(messagePayload);
-  const contacts=normalizeArrayPayload(contactPayload);
-  const incoming=messages.filter(m=>String(m.type||m.direction||'').toLowerCase()==='incoming').length;
-  const outgoing=messages.filter(m=>String(m.type||m.direction||'').toLowerCase()==='outgoing').length;
-  const phones=new Set(messages.map(m=>t(m.phone)).filter(Boolean));
-  const recent=messages.slice().sort((a,b)=>new Date(b.timestamp||b.created_at||0)-new Date(a.timestamp||a.created_at||0)).slice(0,10);
-  return {
-    module:'whatsapp',status:'operativo',validated:true,source:'JARVIS-WA-001',
-    scope:'tarjeta_central_jarvis',contacts:contacts.length,messages:messages.length,
-    conversations:phones.size,incoming,outgoing,recent
-  };
-}
-
-function unavailableCard(module, reason){
-  return {module,status:'no_conectado',validated:false,reason};
-}
-
-async function getJarvisModuleReport(q,ctx,args={}){
-  const raw=normalizeName(args.module||args.card||'');
-  const aliases={
-    agenda:'agenda',calendario:'agenda',
-    recordatorio:'recordatorios',recordatorios:'recordatorios',
-    whatsapp:'whatsapp',wa:'whatsapp',
-    correo:'correo',email:'correo',mail:'correo',
-    llamada:'llamadas',llamadas:'llamadas',telefono:'llamadas',
-    internet:'internet',web:'internet'
-  };
-  const module=aliases[raw]||raw;
-  if(!JARVIS_CARD_MODULES.includes(module)) throw new Error(`Módulo no reconocido. Usa: ${JARVIS_CARD_MODULES.join(', ')}`);
-  if(module==='agenda') return reportAgenda(q,ctx,args);
-  if(module==='recordatorios') return reportReminders(q,ctx,args);
-  if(module==='whatsapp') return reportWhatsApp(q,ctx,args);
-  if(module==='correo') return unavailableCard('correo','La tarjeta existe en la interfaz, pero todavía no hay una fuente de correo conectada al backend central de JARVIS.');
-  if(module==='llamadas') return unavailableCard('llamadas','La tarjeta existe en la interfaz, pero todavía no hay una fuente de llamadas conectada al backend central de JARVIS.');
-  return unavailableCard('internet','La tarjeta existe en la interfaz, pero todavía no hay una fuente/historial de Internet conectada como herramienta central verificable.');
-}
-
-async function getJarvisCardsReport(q,ctx,args={}){
-  const requested=Array.isArray(args.modules)&&args.modules.length?args.modules:JARVIS_CARD_MODULES;
-  const reports=[];
-  for(const module of requested){
-    try{ reports.push(await getJarvisModuleReport(q,ctx,{...args,module})); }
-    catch(error){ reports.push({module:String(module),status:'con_incidencia',validated:false,error:error.message}); }
-  }
-  return {
-    ok:true,source:'jarvis_central',scope:'tarjetas_centrales',
-    generated_at:new Date().toISOString(),
-    reports,
-    assistant_message:'Reporte central de tarjetas JARVIS generado con fuentes propias. Los módulos sin integración real se marcan como no conectados; no se sustituyen con datos de CliniqOne.'
-  };
-}
-
-const personalHandlers={personal_create_event:createEvent,personal_create_reminder:createReminder,personal_acknowledge:acknowledge,personal_get_agenda:getAgenda,find_whatsapp_contact:findJarvisWhatsAppContact,send_whatsapp_message:sendJarvisWhatsAppMessage,jarvis_get_module_report:getJarvisModuleReport,jarvis_get_cards_report:getJarvisCardsReport};
+const personalHandlers={personal_create_event:createEvent,personal_create_reminder:createReminder,personal_acknowledge:acknowledge,personal_get_agenda:getAgenda,find_whatsapp_contact:findJarvisWhatsAppContact,send_whatsapp_message:sendJarvisWhatsAppMessage};
 async function executeTool(q,ctx,name,args){ if(personalHandlers[name]) return personalHandlers[name](q,ctx,args||{}); return executeCliniqOneTool(q,ctx,name,args||{}); }
 module.exports={executeTool,personalHandlers,ensurePersonalTables};
