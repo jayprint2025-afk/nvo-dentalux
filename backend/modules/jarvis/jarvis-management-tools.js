@@ -544,7 +544,12 @@ async function ensureSkillBuilderTables(q){
   )`);
   await q(`CREATE INDEX IF NOT EXISTS idx_jarvis_skill_drafts_owner
     ON jarvis_skill_drafts(tenant_id,user_id,updated_at DESC)`);
+  // Skill Installer V1: metadatos de activación. ALTER es idempotente y no rompe borradores existentes.
+  await q(`ALTER TABLE jarvis_skill_drafts ADD COLUMN IF NOT EXISTS installed_at TIMESTAMPTZ`);
+  await q(`ALTER TABLE jarvis_skill_drafts ADD COLUMN IF NOT EXISTS installer_type TEXT`);
+  await q(`ALTER TABLE jarvis_skill_drafts ADD COLUMN IF NOT EXISTS runtime_config JSONB NOT NULL DEFAULT '{}'::jsonb`);
 }
+
 
 function isWeatherSkillDraft(d={}){
   const haystack=[d.name,d.purpose,d.proposed_card,d.required_services,...(Array.isArray(d.proposed_tools)?d.proposed_tools:[])]
@@ -687,6 +692,107 @@ async function rejectSkillDraft(q,ctx,args={}){
     client_event:{type:'jarvis_skill_builder_changed',draft_id:id}};
 }
 
-const personalHandlers={personal_create_event:createEvent,personal_create_reminder:createReminder,personal_acknowledge:acknowledge,personal_get_agenda:getAgenda,find_whatsapp_contact:findJarvisWhatsAppContact,send_whatsapp_message:sendJarvisWhatsAppMessage,jarvis_get_module_report:getJarvisModuleReport,jarvis_get_cards_report:getJarvisCardsReport,internet_search:internetSearch,internet_read_page:internetReadPage,internet_research:internetResearch,internet_get_history:internetGetHistory,skill_create_draft:createSkillDraft,skill_list_drafts:listSkillDrafts,skill_get_draft:getSkillDraft,skill_approve_draft:approveSkillDraft,skill_reject_draft:rejectSkillDraft};
+
+
+// ===================== JARVIS Skill Installer V1 =====================
+// Instalación controlada: NO toca archivos, GitHub, Render, secretos ni servicios de pago.
+// V1 solo activa runtimes que ya vienen incluidos en el backend. El primero es clima vía Open-Meteo.
+function weatherCodeText(code){
+  const c=Number(code);
+  const map={0:'despejado',1:'mayormente despejado',2:'parcialmente nublado',3:'nublado',45:'niebla',48:'niebla con escarcha',51:'llovizna ligera',53:'llovizna moderada',55:'llovizna intensa',56:'llovizna helada ligera',57:'llovizna helada intensa',61:'lluvia ligera',63:'lluvia moderada',65:'lluvia intensa',66:'lluvia helada ligera',67:'lluvia helada intensa',71:'nieve ligera',73:'nieve moderada',75:'nieve intensa',77:'granos de nieve',80:'chubascos ligeros',81:'chubascos moderados',82:'chubascos fuertes',85:'chubascos de nieve ligeros',86:'chubascos de nieve fuertes',95:'tormenta',96:'tormenta con granizo ligero',99:'tormenta con granizo fuerte'};
+  return map[c]||`código meteorológico ${c}`;
+}
+
+async function findSkillDraftByRef(q,ctx,args={}){
+  await ensureSkillBuilderTables(q);
+  const id=Number(args.id ?? args.draft_id ?? args.skill_id);
+  if(Number.isSafeInteger(id)&&id>0) return (await getSkillDraft(q,ctx,{id})).draft;
+  const name=t(args.name||args.skill_name);
+  if(!name) throw new Error('Falta el ID o nombre de la habilidad');
+  const {rows}=await q(`SELECT * FROM jarvis_skill_drafts
+    WHERE tenant_id=$1 AND (user_id=$2 OR (user_id IS NULL AND $2 IS NULL))
+      AND lower(name)=lower($3)
+    ORDER BY updated_at DESC LIMIT 1`,[t(ctx.tenant_id),ctx.user_id||null,name]);
+  if(rows[0]) return rows[0];
+  const fuzzy=await q(`SELECT * FROM jarvis_skill_drafts
+    WHERE tenant_id=$1 AND (user_id=$2 OR (user_id IS NULL AND $2 IS NULL))
+      AND lower(name) LIKE '%'||lower($3)||'%'
+    ORDER BY updated_at DESC LIMIT 5`,[t(ctx.tenant_id),ctx.user_id||null,name]);
+  if(fuzzy.rows.length===1) return fuzzy.rows[0];
+  if(fuzzy.rows.length>1) return {ambiguous:true,matches:fuzzy.rows};
+  throw new Error(`No encontré la habilidad “${name}”`);
+}
+
+async function installApprovedSkill(q,ctx,args={}){
+  const draft=await findSkillDraftByRef(q,ctx,args);
+  if(draft?.ambiguous) return {ok:false,requires_selection:true,skills:draft.matches,assistant_message:'Encontré varias habilidades con ese nombre. Indícame cuál deseas instalar.'};
+  const status=t(draft.status).toLowerCase();
+  const cost=t(draft.estimated_cost).toLowerCase();
+  if(status==='active' || status==='installed') return {ok:true,already_installed:true,skill:draft,assistant_message:`La habilidad “${draft.name}” ya está activa.`};
+  if(status!=='approved') return {ok:false,requires_approval:true,skill:draft,assistant_message:`La habilidad “${draft.name}” todavía no está aprobada. Debe aprobarse antes de instalarla.`};
+  if(cost!=='free') return {ok:false,requires_cost_confirmation:true,skill:draft,assistant_message:`No instalé “${draft.name}” porque su costo no está confirmado como gratuito.`};
+  if(!isWeatherSkillDraft(draft)) return {ok:false,unsupported_runtime:true,skill:draft,assistant_message:`“${draft.name}” está aprobada, pero Skill Installer V1 todavía no tiene un runtime seguro para ese tipo de habilidad. No modifiqué código ni desplegué nada.`};
+
+  const config={type:'weather',provider:'open-meteo',api_key_required:false,installed_by:'jarvis_skill_installer_v1'};
+  const {rows}=await q(`UPDATE jarvis_skill_drafts
+    SET status='active',installed_at=NOW(),installer_type='builtin_runtime',runtime_config=$4::jsonb,updated_at=NOW()
+    WHERE tenant_id=$1 AND (user_id=$2 OR (user_id IS NULL AND $2 IS NULL)) AND id=$3 RETURNING *`,
+    [t(ctx.tenant_id),ctx.user_id||null,draft.id,JSON.stringify(config)]);
+  return {ok:true,source:'jarvis_skill_installer',skill:rows[0],executable:true,
+    assistant_message:`Instalé y activé “${draft.name}” usando el runtime gratuito de clima. No se modificó GitHub ni Render y no se agregó ningún servicio de pago.`,
+    client_event:{type:'jarvis_skill_builder_changed',draft_id:draft.id}};
+}
+
+async function geocodeOpenMeteo(location){
+  const url=`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(location)}&count=5&language=es&format=json`;
+  const r=await fetch(url,{headers:{accept:'application/json','user-agent':'JARVIS/1.0'}});
+  if(!r.ok) throw new Error(`Open-Meteo geocoding respondió ${r.status}`);
+  const data=await r.json();
+  const place=Array.isArray(data?.results)?data.results[0]:null;
+  if(!place) throw new Error(`No encontré la ubicación “${location}”`);
+  return place;
+}
+
+async function runWeatherSkill(q,ctx,draft,args={}){
+  const location=t(args.location||args.city||args.ciudad||args.place);
+  if(!location) return {ok:false,requires_location:true,assistant_message:'¿De qué ciudad o ubicación desea consultar el clima?'};
+  const place=await geocodeOpenMeteo(location);
+  const params=new URLSearchParams({
+    latitude:String(place.latitude),longitude:String(place.longitude),timezone:'auto',
+    current:'temperature_2m,apparent_temperature,weather_code,wind_speed_10m',
+    daily:'weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max',
+    forecast_days:'4'
+  });
+  const r=await fetch(`https://api.open-meteo.com/v1/forecast?${params.toString()}`,{headers:{accept:'application/json','user-agent':'JARVIS/1.0'}});
+  if(!r.ok) throw new Error(`Open-Meteo forecast respondió ${r.status}`);
+  const data=await r.json();
+  const days=(data?.daily?.time||[]).map((date,i)=>({date,condition:weatherCodeText(data.daily.weather_code?.[i]),max_c:data.daily.temperature_2m_max?.[i],min_c:data.daily.temperature_2m_min?.[i],rain_probability:data.daily.precipitation_probability_max?.[i]}));
+  const result={location:{name:place.name,admin1:place.admin1||null,country:place.country||null,latitude:place.latitude,longitude:place.longitude},current:{temperature_c:data?.current?.temperature_2m,feels_like_c:data?.current?.apparent_temperature,condition:weatherCodeText(data?.current?.weather_code),wind_kmh:data?.current?.wind_speed_10m},forecast:days,provider:'Open-Meteo',skill_id:draft.id,skill_name:draft.name};
+  const today=days[0];
+  return {ok:true,source:'jarvis_skill_runtime',result,
+    assistant_message:`En ${place.name}${place.admin1?`, ${place.admin1}`:''}, ahora hay ${result.current.temperature_c} °C, sensación de ${result.current.feels_like_c} °C y está ${result.current.condition}. Hoy se esperan entre ${today?.min_c} y ${today?.max_c} °C, con hasta ${today?.rain_probability ?? 0}% de probabilidad de precipitación.`};
+}
+
+async function runInstalledSkill(q,ctx,args={}){
+  await ensureSkillBuilderTables(q);
+  let draft=null;
+  if(args.id||args.draft_id||args.skill_id||args.name||args.skill_name){
+    draft=await findSkillDraftByRef(q,ctx,args);
+    if(draft?.ambiguous) return {ok:false,requires_selection:true,skills:draft.matches,assistant_message:'Encontré varias habilidades. Indícame cuál deseas ejecutar.'};
+  }else{
+    const intent=t(args.intent||args.request||args.action);
+    if(/clima|tiempo|weather|temperatura|pron[oó]stico/i.test(intent)){
+      const {rows}=await q(`SELECT * FROM jarvis_skill_drafts WHERE tenant_id=$1 AND (user_id=$2 OR (user_id IS NULL AND $2 IS NULL)) AND status='active' ORDER BY updated_at DESC`,[t(ctx.tenant_id),ctx.user_id||null]);
+      draft=rows.find(isWeatherSkillDraft)||null;
+    }
+  }
+  if(!draft) throw new Error('No encontré una habilidad activa que pueda ejecutar esa solicitud');
+  if(t(draft.status).toLowerCase()!=='active') return {ok:false,not_active:true,skill:draft,assistant_message:`La habilidad “${draft.name}” no está activa todavía.`};
+  const cfg=draft.runtime_config&&typeof draft.runtime_config==='object'?draft.runtime_config:{};
+  if(cfg.type==='weather'||isWeatherSkillDraft(draft)) return runWeatherSkill(q,ctx,draft,args);
+  return {ok:false,unsupported_runtime:true,skill:draft,assistant_message:`La habilidad “${draft.name}” está activa, pero su runtime no está disponible en Skill Installer V1.`};
+}
+
+const personalHandlers={personal_create_event:createEvent,personal_create_reminder:createReminder,personal_acknowledge:acknowledge,personal_get_agenda:getAgenda,find_whatsapp_contact:findJarvisWhatsAppContact,send_whatsapp_message:sendJarvisWhatsAppMessage,jarvis_get_module_report:getJarvisModuleReport,jarvis_get_cards_report:getJarvisCardsReport,internet_search:internetSearch,internet_read_page:internetReadPage,internet_research:internetResearch,internet_get_history:internetGetHistory,skill_create_draft:createSkillDraft,skill_list_drafts:listSkillDrafts,skill_get_draft:getSkillDraft,skill_approve_draft:approveSkillDraft,skill_reject_draft:rejectSkillDraft,skill_install_approved:installApprovedSkill,skill_run:runInstalledSkill};
 async function executeTool(q,ctx,name,args){ if(personalHandlers[name]) return personalHandlers[name](q,ctx,args||{}); return executeCliniqOneTool(q,ctx,name,args||{}); }
 module.exports={executeTool,personalHandlers,ensurePersonalTables};
