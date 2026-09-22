@@ -1,4 +1,4 @@
-'use strict';
+﻿'use strict';
 
 const express = require('express');
 const { tools: rawTools } = require('./jarvis-tool-definitions');
@@ -44,7 +44,7 @@ async function transcribeWake(wavBuffer) {
   const field = (name, value) => Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n${value}\r\n`, 'utf8');
   const body = Buffer.concat([
     field('model', model), field('language', 'es'),
-    field('prompt', 'Transcribe literalmente. La palabra clave posible es “JARVIS”. No inventes JARVIS ante silencio, ruido, respiración o golpes.'),
+    field('prompt', 'Transcribe literalmente. La palabra clave posible es â€œJARVISâ€. No inventes JARVIS ante silencio, ruido, respiraciÃ³n o golpes.'),
     Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="wake.wav"\r\nContent-Type: audio/wav\r\n\r\n`, 'utf8'),
     wavBuffer, Buffer.from(`\r\n--${boundary}--\r\n`, 'utf8'),
   ]);
@@ -57,7 +57,7 @@ async function transcribeWake(wavBuffer) {
 function pcm16Base64ToWav(base64, sampleRate=16000) {
   const pcm = Buffer.from(String(base64 || ''), 'base64');
   const sr = Number(sampleRate || 16000);
-  if (!pcm.length || pcm.length % 2) throw new Error('Audio PCM16 inválido');
+  if (!pcm.length || pcm.length % 2) throw new Error('Audio PCM16 invÃ¡lido');
   if (sr !== 16000) throw new Error('Wake verifier requiere 16 kHz');
   const wav = Buffer.alloc(44 + pcm.length);
   wav.write('RIFF',0); wav.writeUInt32LE(36+pcm.length,4); wav.write('WAVE',8); wav.write('fmt ',12);
@@ -84,7 +84,7 @@ function setupJarvisRoutes(app, q, deps={}) {
     } catch(error){ res.status(500).json({ok:false,error:error.message}); }
   });
 
-  // Devuelve avisos vencidos una sola vez: primer aviso y, si no hubo ACK, una insistencia 5 min después.
+  // Devuelve avisos vencidos una sola vez: primer aviso y, si no hubo ACK, una insistencia 5 min despuÃ©s.
   app.get('/api/jarvis/personal/due', async (req,res) => {
     try {
       const ctx=buildContext(req,getTenantId,getSucursal); await ensurePersonalTables(q);
@@ -106,13 +106,13 @@ function setupJarvisRoutes(app, q, deps={}) {
       const name = String(req.body?.name || '');
       const args = typeof req.body?.arguments === 'string' ? JSON.parse(req.body.arguments || '{}') : (req.body?.arguments || req.body?.args || {});
 
-      // Guardia central: aunque una sesión vieja/caché intente usar herramientas
-      // clínicas para resolver contactos, JARVIS no las ejecutará.
+      // Guardia central: aunque una sesiÃ³n vieja/cachÃ© intente usar herramientas
+      // clÃ­nicas para resolver contactos, JARVIS no las ejecutarÃ¡.
       if (name === 'list_whatsapp_messages' || name === 'send_whatsapp_to_patient') {
         console.warn('[JARVIS ACTION BLOCKED]', { name, reason: 'Use JARVIS WhatsApp contacts first' });
         return res.status(409).json({
           ok:false,
-          error:'Esta acción no está disponible para resolver contactos de JARVIS. Use find_whatsapp_contact y después send_whatsapp_message.'
+          error:'Esta acciÃ³n no estÃ¡ disponible para resolver contactos de JARVIS. Use find_whatsapp_contact y despuÃ©s send_whatsapp_message.'
         });
       }
 
@@ -144,7 +144,7 @@ function setupJarvisRoutes(app, q, deps={}) {
       const text = String(req.body?.text || '').replace(/\s+/g,' ').trim();
       if (!key) return res.status(503).json({ok:false,error:'Falta FISH_API_KEY'});
       if (!referenceId) return res.status(503).json({ok:false,error:'Falta FISH_REFERENCE_ID'});
-      if (!text) return res.status(400).json({ok:false,error:'Texto vacío'});
+      if (!text) return res.status(400).json({ok:false,error:'Texto vacÃ­o'});
       if (text.length > 5000) return res.status(400).json({ok:false,error:'Texto demasiado largo'});
 
       const upstream = await fetch('https://api.fish.audio/v1/tts', {
@@ -192,14 +192,14 @@ function setupJarvisRoutes(app, q, deps={}) {
       const ctx = buildContext(req,getTenantId,getSucursal);
       const key = process.env.OPENAI_API_KEY;
       if (!key) return res.status(503).json({error:'Falta OPENAI_API_KEY'});
-      if (!req.body || typeof req.body !== 'string') return res.status(400).json({error:'Oferta SDP vacía'});
+      if (!req.body || typeof req.body !== 'string') return res.status(400).json({error:'Oferta SDP vacÃ­a'});
       console.log('[JARVIS REALTIME TOOLS]', realtimeToolNames());
 
       const session = {
         type:'realtime', model:process.env.JARVIS_REALTIME_MODEL || process.env.F1_REALTIME_MODEL || 'gpt-realtime',
         instructions:jarvisInstructions(ctx), output_modalities:['audio'],
         audio:{input:{transcription:{model:process.env.JARVIS_TRANSCRIBE_MODEL || process.env.F1_TRANSCRIBE_MODEL || 'gpt-4o-mini-transcribe',language:'es',prompt:'JARVIS. Asistente personal y empresarial. Agenda, recordatorios, correo, WhatsApp, llamadas e Internet.'},noise_reduction:{type:'near_field'},turn_detection:{type:'semantic_vad',eagerness:'low',create_response:true,interrupt_response:false}},output:{voice:process.env.JARVIS_VOICE || process.env.F1_VOICE || 'marin',speed:1.0}},
-        tools, tool_choice:'auto', max_output_tokens:1200,
+        tools, tool_choice:'auto', max_output_tokens:4000,
       };
       const boundary=`----JarvisRealtime${Date.now().toString(16)}${Math.random().toString(16).slice(2)}`;
       const body=Buffer.concat([
@@ -221,7 +221,8 @@ function setupJarvisRoutes(app, q, deps={}) {
       send_whatsapp_message: names.includes('send_whatsapp_message')
     });
   }
-  console.log('✅ JARVIS Core V3: filtro central de tools + agenda personal + recordatorios + WhatsApp JARVIS');
+  console.log('âœ… JARVIS Core V3: filtro central de tools + agenda personal + recordatorios + WhatsApp JARVIS');
 }
 
 module.exports={setupJarvisRoutes};
+
