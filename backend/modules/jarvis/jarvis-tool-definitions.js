@@ -1,6 +1,7 @@
 'use strict';
 
 const { tools: cliniqOneTools } = require('../f1/tool-definitions');
+const { skillTools } = require('./jarvis-skill-tools');
 
 const personalTools = [
   {
@@ -65,5 +66,5 @@ const personalTools = [
   }
 ];
 
-const tools=[...personalTools,...cliniqOneTools];
+const tools=[...personalTools,...cliniqOneTools,...skillTools];
 module.exports={tools,personalTools};
