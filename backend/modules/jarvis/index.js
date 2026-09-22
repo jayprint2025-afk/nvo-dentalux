@@ -134,6 +134,59 @@ function setupJarvisRoutes(app, q, deps={}) {
 
   app.get('/api/jarvis/realtime/profile', (req,res) => res.json({ok:true,wake_words:['JARVIS'],voice:process.env.JARVIS_VOICE || process.env.F1_VOICE || 'marin',model:process.env.JARVIS_REALTIME_MODEL || process.env.F1_REALTIME_MODEL || 'gpt-realtime'}));
 
+
+  // Fish Audio TTS: la API key permanece exclusivamente en el backend.
+  app.post('/api/jarvis/tts', express.json({limit:'64kb'}), async (req,res) => {
+    try {
+      const key = process.env.FISH_API_KEY;
+      const referenceId = process.env.FISH_REFERENCE_ID;
+      const model = process.env.FISH_TTS_MODEL || 's2.1-pro';
+      const text = String(req.body?.text || '').replace(/\s+/g,' ').trim();
+      if (!key) return res.status(503).json({ok:false,error:'Falta FISH_API_KEY'});
+      if (!referenceId) return res.status(503).json({ok:false,error:'Falta FISH_REFERENCE_ID'});
+      if (!text) return res.status(400).json({ok:false,error:'Texto vacío'});
+      if (text.length > 5000) return res.status(400).json({ok:false,error:'Texto demasiado largo'});
+
+      const upstream = await fetch('https://api.fish.audio/v1/tts', {
+        method:'POST',
+        headers:{
+          Authorization:`Bearer ${key}`,
+          'Content-Type':'application/json',
+          model,
+        },
+        body:JSON.stringify({
+          text,
+          reference_id:referenceId,
+          format:'mp3',
+          sample_rate:44100,
+          mp3_bitrate:128,
+          latency:process.env.FISH_TTS_LATENCY || 'balanced',
+          temperature:Number(process.env.FISH_TTS_TEMPERATURE || 0.7),
+          top_p:Number(process.env.FISH_TTS_TOP_P || 0.7),
+          prosody:{
+            speed:Number(process.env.FISH_TTS_SPEED || 1),
+            volume:Number(process.env.FISH_TTS_VOLUME || 0),
+            normalize_loudness:true,
+          },
+          normalize:true,
+        }),
+      });
+      if (!upstream.ok) {
+        const detail = await upstream.text().catch(()=> '');
+        console.error('[JARVIS FISH TTS]', upstream.status, detail.slice(0,500));
+        return res.status(upstream.status).json({ok:false,error:`Fish TTS ${upstream.status}`,detail:detail.slice(0,500)});
+      }
+      const audio = Buffer.from(await upstream.arrayBuffer());
+      res.setHeader('Content-Type', upstream.headers.get('content-type') || 'audio/mpeg');
+      res.setHeader('Content-Length', String(audio.length));
+      res.setHeader('Cache-Control','no-store');
+      return res.status(200).send(audio);
+    } catch(error) {
+      console.error('[JARVIS FISH TTS ERROR]', error);
+      return res.status(500).json({ok:false,error:error.message});
+    }
+  });
+
   app.post('/api/jarvis/realtime/call', express.text({type:'application/sdp',limit:'1mb'}), async (req,res) => {
     try {
       const ctx = buildContext(req,getTenantId,getSucursal);
@@ -145,7 +198,7 @@ function setupJarvisRoutes(app, q, deps={}) {
       const session = {
         type:'realtime', model:process.env.JARVIS_REALTIME_MODEL || process.env.F1_REALTIME_MODEL || 'gpt-realtime',
         instructions:jarvisInstructions(ctx), output_modalities:['audio'],
-        audio:{input:{transcription:{model:process.env.JARVIS_TRANSCRIBE_MODEL || process.env.F1_TRANSCRIBE_MODEL || 'gpt-4o-mini-transcribe',language:'es',prompt:'JARVIS. Asistente personal y empresarial. Agenda, recordatorios, correo, WhatsApp, llamadas e Internet.'},noise_reduction:{type:'near_field'},turn_detection:{type:'semantic_vad',eagerness:'low',create_response:true,interrupt_response:false}},output:{voice:process.env.JARVIS_VOICE || process.env.F1_VOICE || 'marin',speed:0.92}},
+        audio:{input:{transcription:{model:process.env.JARVIS_TRANSCRIBE_MODEL || process.env.F1_TRANSCRIBE_MODEL || 'gpt-4o-mini-transcribe',language:'es',prompt:'JARVIS. Asistente personal y empresarial. Agenda, recordatorios, correo, WhatsApp, llamadas e Internet.'},noise_reduction:{type:'near_field'},turn_detection:{type:'semantic_vad',eagerness:'low',create_response:true,interrupt_response:false}},output:{voice:process.env.JARVIS_VOICE || process.env.F1_VOICE || 'marin',speed:1.0}},
         tools, tool_choice:'auto', max_output_tokens:1200,
       };
       const boundary=`----JarvisRealtime${Date.now().toString(16)}${Math.random().toString(16).slice(2)}`;
