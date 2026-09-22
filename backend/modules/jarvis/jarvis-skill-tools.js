@@ -45,6 +45,19 @@ const skillTools = [
     description:'Rechaza una propuesta de habilidad para que no se instale.',
     parameters:{type:'object',properties:{id:{type:'number'},reason:{type:'string'}},required:['id']}
   }
+,
+  {
+    type:'function',
+    name:'skill_install_approved',
+    description:'Instala/activa una habilidad YA APROBADA usando únicamente runtimes seguros incluidos en JARVIS. V1 no modifica código, GitHub, Render, secretos ni contrata servicios. Solo procede si estimated_cost=free.',
+    parameters:{type:'object',properties:{id:{type:'number'},name:{type:'string'}},additionalProperties:false}
+  },
+  {
+    type:'function',
+    name:'skill_run',
+    description:'Ejecuta una habilidad previamente instalada y activa. Para clima, usa location/city. No simules el resultado: usa esta herramienta.',
+    parameters:{type:'object',properties:{id:{type:'number'},name:{type:'string'},intent:{type:'string'},location:{type:'string'},city:{type:'string'}},additionalProperties:true}
+  }
 ];
 
 module.exports={skillTools};
