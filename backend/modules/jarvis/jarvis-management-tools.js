@@ -546,20 +546,43 @@ async function ensureSkillBuilderTables(q){
     ON jarvis_skill_drafts(tenant_id,user_id,updated_at DESC)`);
 }
 
+function isWeatherSkillDraft(d={}){
+  const haystack=[d.name,d.purpose,d.proposed_card,d.required_services,...(Array.isArray(d.proposed_tools)?d.proposed_tools:[])]
+    .map(x=>t(x).toLowerCase()).join(' ');
+  return /\b(clima|tiempo|weather|meteorolog|temperatura|pron[oó]stico)\b/i.test(haystack);
+}
+
+function applyFreeServiceFallback(d={}){
+  const out={...d,proposed_tools:Array.isArray(d.proposed_tools)?[...d.proposed_tools]:[]};
+  const cost=t(out.estimated_cost).toLowerCase()||'unknown';
+
+  // V1: para clima preferimos una fuente sin API key antes de dejar el costo en unknown.
+  // No convertimos servicios explícitamente de pago.
+  if(cost==='unknown' && isWeatherSkillDraft(out)){
+    out.estimated_cost='free';
+    out.required_services='Open-Meteo (sin API key; usar dentro de los términos del proveedor)';
+    if(!out.proposed_tools.some(x=>/open-meteo/i.test(t(x)))){
+      out.proposed_tools.push('Consulta HTTPS a Open-Meteo para clima actual y pronóstico');
+    }
+    out.free_fallback_applied=true;
+  }
+  return out;
+}
+
 function normalizeSkillDraftArgs(args={}){
   // Acepta tanto el contrato nuevo como los nombres que Realtime ya está enviando.
   const toolsRaw=args.proposed_tools ?? args.tools_needed ?? [];
   const proposedTools=Array.isArray(toolsRaw)
     ? toolsRaw.map(x=>t(x)).filter(Boolean)
     : (t(toolsRaw) ? [t(toolsRaw)] : []);
-  return {
+  return applyFreeServiceFallback({
     name:t(args.name||args.skill_name||args.title),
     purpose:t(args.purpose||args.objective||args.description),
     proposed_tools:proposedTools,
     proposed_card:t(args.proposed_card||args.interface||args.card),
     required_services:t(args.required_services||args.services_required||args.services),
     estimated_cost:t(args.estimated_cost||args.cost)||'unknown'
-  };
+  });
 }
 
 async function createSkillDraft(q,ctx,args={}){
@@ -601,8 +624,24 @@ async function getSkillDraft(q,ctx,args={}){
 
 async function approveSkillDraft(q,ctx,args={}){
   const current=await getSkillDraft(q,ctx,args);
-  const draft=current.draft;
-  const cost=t(draft.estimated_cost).toLowerCase() || 'unknown';
+  let draft=current.draft;
+  let cost=t(draft.estimated_cost).toLowerCase() || 'unknown';
+
+  // Si un borrador viejo de clima quedó en unknown, migramos primero a la alternativa
+  // gratuita conocida en vez de obligar al usuario a recrearlo.
+  if(cost==='unknown' && isWeatherSkillDraft(draft)){
+    const fallback=applyFreeServiceFallback({
+      ...draft,
+      proposed_tools:Array.isArray(draft.proposed_tools)?draft.proposed_tools:[],
+      estimated_cost:'unknown'
+    });
+    const {rows}=await q(`UPDATE jarvis_skill_drafts
+      SET proposed_tools=$4::jsonb,required_services=$5,estimated_cost='free',status='draft',updated_at=NOW()
+      WHERE tenant_id=$1 AND (user_id=$2 OR (user_id IS NULL AND $2 IS NULL)) AND id=$3 RETURNING *`,
+      [t(ctx.tenant_id),ctx.user_id||null,draft.id,JSON.stringify(fallback.proposed_tools),fallback.required_services]);
+    draft=rows[0]||draft;
+    cost='free';
+  }
 
   // La aprobación normal solo procede cuando el borrador está confirmado como gratuito.
   // unknown/paid NO generan un 400: devolvemos un resultado explicable a Realtime.
