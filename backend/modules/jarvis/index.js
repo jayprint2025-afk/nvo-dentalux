@@ -78,8 +78,8 @@ function setupJarvisRoutes(app, q, deps={}) {
   app.get('/api/jarvis/personal/dashboard', async (req,res) => {
     try {
       const ctx=buildContext(req,getTenantId,getSucursal); await ensurePersonalTables(q);
-      const ev=await q(`SELECT * FROM jarvis_personal_events WHERE tenant_id=$1::uuid AND (user_id=$2 OR (user_id IS NULL AND $2 IS NULL)) AND status<>'cancelled' AND start_at>=NOW()-interval '1 day' ORDER BY start_at LIMIT 100`,[ctx.tenant_id,ctx.user_id||null]);
-      const rr=await q(`SELECT * FROM jarvis_personal_reminders WHERE tenant_id=$1::uuid AND (user_id=$2 OR (user_id IS NULL AND $2 IS NULL)) AND status NOT IN ('cancelled','acknowledged') AND remind_at>=NOW()-interval '1 day' ORDER BY remind_at LIMIT 100`,[ctx.tenant_id,ctx.user_id||null]);
+      const ev=await q(`SELECT * FROM jarvis_personal_events WHERE tenant_id::text=$1::text AND (user_id=$2 OR (user_id IS NULL AND $2 IS NULL)) AND status<>'cancelled' AND start_at>=NOW()-interval '1 day' ORDER BY start_at LIMIT 100`,[ctx.tenant_id,ctx.user_id||null]);
+      const rr=await q(`SELECT * FROM jarvis_personal_reminders WHERE tenant_id::text=$1::text AND (user_id=$2 OR (user_id IS NULL AND $2 IS NULL)) AND status NOT IN ('cancelled','acknowledged') AND remind_at>=NOW()-interval '1 day' ORDER BY remind_at LIMIT 100`,[ctx.tenant_id,ctx.user_id||null]);
       res.json({ok:true,events:ev.rows,reminders:rr.rows});
     } catch(error){
       console.error('[JARVIS DASHBOARD ERROR]', {
@@ -95,8 +95,8 @@ function setupJarvisRoutes(app, q, deps={}) {
   app.get('/api/jarvis/personal/due', async (req,res) => {
     try {
       const ctx=buildContext(req,getTenantId,getSucursal); await ensurePersonalTables(q);
-      const first=await q(`UPDATE jarvis_personal_reminders SET notified_at=NOW(),updated_at=NOW() WHERE id IN (SELECT id FROM jarvis_personal_reminders WHERE tenant_id=$1::uuid AND (user_id=$2 OR (user_id IS NULL AND $2 IS NULL)) AND status='pending' AND acknowledged_at IS NULL AND notified_at IS NULL AND remind_at<=NOW() ORDER BY remind_at LIMIT 20 FOR UPDATE SKIP LOCKED) RETURNING *, 'first'::text AS alert_kind`,[ctx.tenant_id,ctx.user_id||null]);
-      const insist=await q(`UPDATE jarvis_personal_reminders SET insisted_at=NOW(),updated_at=NOW() WHERE id IN (SELECT id FROM jarvis_personal_reminders WHERE tenant_id=$1::uuid AND (user_id=$2 OR (user_id IS NULL AND $2 IS NULL)) AND status='pending' AND acknowledged_at IS NULL AND notified_at IS NOT NULL AND insisted_at IS NULL AND insist_at<=NOW() ORDER BY insist_at LIMIT 20 FOR UPDATE SKIP LOCKED) RETURNING *, 'insist'::text AS alert_kind`,[ctx.tenant_id,ctx.user_id||null]);
+      const first=await q(`UPDATE jarvis_personal_reminders SET notified_at=NOW(),updated_at=NOW() WHERE id IN (SELECT id FROM jarvis_personal_reminders WHERE tenant_id::text=$1::text AND (user_id=$2 OR (user_id IS NULL AND $2 IS NULL)) AND status='pending' AND acknowledged_at IS NULL AND notified_at IS NULL AND remind_at<=NOW() ORDER BY remind_at LIMIT 20 FOR UPDATE SKIP LOCKED) RETURNING *, 'first'::text AS alert_kind`,[ctx.tenant_id,ctx.user_id||null]);
+      const insist=await q(`UPDATE jarvis_personal_reminders SET insisted_at=NOW(),updated_at=NOW() WHERE id IN (SELECT id FROM jarvis_personal_reminders WHERE tenant_id::text=$1::text AND (user_id=$2 OR (user_id IS NULL AND $2 IS NULL)) AND status='pending' AND acknowledged_at IS NULL AND notified_at IS NOT NULL AND insisted_at IS NULL AND insist_at<=NOW() ORDER BY insist_at LIMIT 20 FOR UPDATE SKIP LOCKED) RETURNING *, 'insist'::text AS alert_kind`,[ctx.tenant_id,ctx.user_id||null]);
       const alerts=[...first.rows,...insist.rows];
       res.json({ok:true,alerts});
     } catch(error){
