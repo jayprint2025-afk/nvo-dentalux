@@ -525,6 +525,69 @@ async function getJarvisCardsReport(q,ctx,args={}){
   return {ok:true,source:'jarvis_central',scope:'tarjetas_centrales',generated_at:new Date().toISOString(),reports};
 }
 
-const personalHandlers={personal_create_event:createEvent,personal_create_reminder:createReminder,personal_acknowledge:acknowledge,personal_get_agenda:getAgenda,find_whatsapp_contact:findJarvisWhatsAppContact,send_whatsapp_message:sendJarvisWhatsAppMessage,jarvis_get_module_report:getJarvisModuleReport,jarvis_get_cards_report:getJarvisCardsReport,internet_search:internetSearch,internet_read_page:internetReadPage,internet_research:internetResearch,internet_get_history:internetGetHistory};
+// ===================== JARVIS Skill Builder =====================
+// Estas herramientas son propias de JARVIS. No deben caer al ejecutor F1.
+async function ensureSkillBuilderTables(q){
+  await q(`CREATE TABLE IF NOT EXISTS jarvis_skill_drafts (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    user_id TEXT,
+    name TEXT NOT NULL,
+    purpose TEXT,
+    proposed_tools JSONB NOT NULL DEFAULT '[]'::jsonb,
+    proposed_card TEXT,
+    required_services TEXT,
+    estimated_cost TEXT,
+    status TEXT NOT NULL DEFAULT 'draft',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`);
+  await q(`CREATE INDEX IF NOT EXISTS idx_jarvis_skill_drafts_owner
+    ON jarvis_skill_drafts(tenant_id,user_id,updated_at DESC)`);
+}
+
+function normalizeSkillDraftArgs(args={}){
+  // Acepta tanto el contrato nuevo como los nombres que Realtime ya está enviando.
+  const toolsRaw=args.proposed_tools ?? args.tools_needed ?? [];
+  const proposedTools=Array.isArray(toolsRaw)
+    ? toolsRaw.map(x=>t(x)).filter(Boolean)
+    : (t(toolsRaw) ? [t(toolsRaw)] : []);
+  return {
+    name:t(args.name||args.skill_name||args.title),
+    purpose:t(args.purpose||args.objective||args.description),
+    proposed_tools:proposedTools,
+    proposed_card:t(args.proposed_card||args.interface||args.card),
+    required_services:t(args.required_services||args.services_required||args.services),
+    estimated_cost:t(args.estimated_cost||args.cost)||'unknown'
+  };
+}
+
+async function createSkillDraft(q,ctx,args={}){
+  await ensureSkillBuilderTables(q);
+  const d=normalizeSkillDraftArgs(args);
+  if(!d.name) throw new Error('Falta el nombre de la habilidad');
+  if(!d.purpose) throw new Error('Falta el propósito de la habilidad');
+  const {rows}=await q(`INSERT INTO jarvis_skill_drafts
+    (tenant_id,user_id,name,purpose,proposed_tools,proposed_card,required_services,estimated_cost,status)
+    VALUES($1,$2,$3,$4,$5::jsonb,$6,$7,$8,'draft') RETURNING *`,[
+      t(ctx.tenant_id),ctx.user_id||null,d.name,d.purpose,JSON.stringify(d.proposed_tools),
+      d.proposed_card||null,d.required_services||null,d.estimated_cost
+    ]);
+  const draft=rows[0];
+  return {ok:true,source:'jarvis_skill_builder',draft,
+    assistant_message:`Listo. Creé el borrador de la habilidad “${draft.name}”. Quedó pendiente de revisión antes de instalarse.`,
+    client_event:{type:'jarvis_skill_builder_changed',draft_id:draft.id}};
+}
+
+async function listSkillDrafts(q,ctx,args={}){
+  await ensureSkillBuilderTables(q);
+  const limit=Math.min(100,Math.max(1,Number(args.limit)||20));
+  const {rows}=await q(`SELECT * FROM jarvis_skill_drafts
+    WHERE tenant_id=$1 AND (user_id=$2 OR (user_id IS NULL AND $2 IS NULL))
+    ORDER BY updated_at DESC LIMIT $3`,[t(ctx.tenant_id),ctx.user_id||null,limit]);
+  return {ok:true,source:'jarvis_skill_builder',drafts:rows,total:rows.length};
+}
+
+const personalHandlers={personal_create_event:createEvent,personal_create_reminder:createReminder,personal_acknowledge:acknowledge,personal_get_agenda:getAgenda,find_whatsapp_contact:findJarvisWhatsAppContact,send_whatsapp_message:sendJarvisWhatsAppMessage,jarvis_get_module_report:getJarvisModuleReport,jarvis_get_cards_report:getJarvisCardsReport,internet_search:internetSearch,internet_read_page:internetReadPage,internet_research:internetResearch,internet_get_history:internetGetHistory,skill_create_draft:createSkillDraft,skill_list_drafts:listSkillDrafts};
 async function executeTool(q,ctx,name,args){ if(personalHandlers[name]) return personalHandlers[name](q,ctx,args||{}); return executeCliniqOneTool(q,ctx,name,args||{}); }
 module.exports={executeTool,personalHandlers,ensurePersonalTables};
