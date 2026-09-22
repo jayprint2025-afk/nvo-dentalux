@@ -186,9 +186,9 @@ export default function JarvisApp() {
   const [waSending, setWaSending] = React.useState(false);
   const [waError, setWaError] = React.useState('');
   const [skills, setSkills] = React.useState<JarvisSkill[]>([]);
-  const skillsRef = React.useRef<JarvisSkill[]>([]);
   const [skillsLoading, setSkillsLoading] = React.useState(false);
   const [skillsError, setSkillsError] = React.useState('');
+  const skillsRef = React.useRef<JarvisSkill[]>([]);
   const [skillCardOpen, setSkillCardOpen] = React.useState<JarvisSkill | null>(null);
   const [skillLocation, setSkillLocation] = React.useState('Yuma, Arizona');
   const [skillInputs, setSkillInputs] = React.useState<Record<string,string>>({});
@@ -289,57 +289,6 @@ export default function JarvisApp() {
     };
   }, []);
 
-  const normalizeVoiceText = React.useCallback((value: string) => String(value || '')
-    .normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim(), []);
-
-  const openTargetFromVoice = React.useCallback((spoken: string) => {
-    const text = normalizeVoiceText(spoken);
-    if (!text) return false;
-    const wantsOpen = /\b(abre|abrir|muestra|mostrar|ensena|ensenar|entra|entrar|ve a|ir a|abre la tarjeta|abre tarjeta)\b/.test(text);
-    if (!wantsOpen) return false;
-
-    const moduleAliases: Array<[ModuleId, string[]]> = [
-      ['agenda', ['agenda','calendario','citas']],
-      ['reminders', ['recordatorios','recordatorio','reminders']],
-      ['correo', ['correo','email','mail']],
-      ['whatsapp', ['whatsapp','whats app']],
-      ['llamadas', ['llamadas','llamada','telefono']],
-      ['internet', ['internet','buscador','busqueda']],
-      ['facebook', ['facebook']],
-      ['habilidades', ['habilidades','skills','habilidad']]
-    ];
-    for (const [id, aliases] of moduleAliases) {
-      if (aliases.some(alias => text.includes(normalizeVoiceText(alias)))) {
-        playUiSound('open');
-        setSelected(id);
-        setOpen(prev => prev.includes(id) ? prev : [...prev, id]);
-        setPositions(prev => ({ ...prev, [id]: prev[id] || defaultPos(0) }));
-        return true;
-      }
-    }
-
-    const active = skillsRef.current.filter(skill => String(skill.status || '').toLowerCase() === 'active');
-    let found = active.find(skill => {
-      const name = normalizeVoiceText(skill.name);
-      return name && (text.includes(name) || name.split(' ').filter(x => x.length > 3).every(x => text.includes(x)));
-    });
-    if (!found && /\b(clima|tiempo|weather|pronostico)\b/.test(text)) {
-      found = active.find(skill => {
-        const cfg = skill.runtime_config && typeof skill.runtime_config === 'object' ? skill.runtime_config : {};
-        const haystack = normalizeVoiceText(`${skill.name} ${skill.purpose || ''} ${cfg.type || ''}`);
-        return /\b(clima|tiempo|weather|pronostico)\b/.test(haystack);
-      });
-    }
-    if (found) {
-      setSkillCardOpen(found);
-      setSkillResult(null);
-      setSkillRunError('');
-      playUiSound('open');
-      return true;
-    }
-    return false;
-  }, [normalizeVoiceText, playUiSound]);
-
   const loadDashboard = React.useCallback(async () => {
     try {
       const data: any = await jarvisApi<any>('/api/jarvis/personal/dashboard');
@@ -364,7 +313,27 @@ export default function JarvisApp() {
       onStatus: setVoiceStatus,
       onTranscript: (t, w) => {
         setLastText(`${w === 'jarvis' ? 'JARVIS' : 'Tú'}: ${t}`);
-        if (w !== 'jarvis') openTargetFromVoice(t);
+        // Puente VOZ -> UI: las habilidades dinámicas no son módulos estáticos,
+        // por eso se resuelven desde el registro vivo de skills.
+        if (w === 'user') {
+          const spoken = String(t || '').toLowerCase();
+          const wantsOpen = /\b(abre|abrir|muestra|mostrar|ensena|enseña|ver|abrela|ábrela)\b/.test(spoken);
+          if (wantsOpen) {
+            const active = skillsRef.current.filter(s => String(s.status || '').toLowerCase() === 'active');
+            const wanted = active.find(s => {
+              const cfg:any = s.runtime_config && typeof s.runtime_config === 'object' ? s.runtime_config : {};
+              const hay = `${s.name || ''} ${s.purpose || ''} ${cfg.type || ''}`.toLowerCase();
+              if (/clima|tiempo|weather|pronostico|pronóstico/.test(spoken)) return /clima|tiempo|weather|pronostico|pronóstico/.test(hay);
+              return String(s.name || '').toLowerCase().split(/\s+/).filter(x => x.length > 3).some(x => spoken.includes(x));
+            });
+            if (wanted) {
+              setSkillCardOpen(wanted);
+              setSkillResult(null);
+              setSkillRunError('');
+              window.setTimeout(() => playUiSound('open'), 0);
+            }
+          }
+        }
         if (w === 'jarvis') window.setTimeout(safeLoad, 500);
       },
       onError: e => setLastText(`Error: ${e.message}`)
@@ -379,7 +348,7 @@ export default function JarvisApp() {
       document.removeEventListener('visibilitychange', refresh);
       voiceRef.current?.stop();
     };
-  }, [loadDashboard, openTargetFromVoice]);
+  }, [loadDashboard]);
 
   const loadWhatsApp = React.useCallback(async (silent = false) => {
     if (!silent) setWaLoading(true);
@@ -724,9 +693,7 @@ export default function JarvisApp() {
         body: JSON.stringify({ name: 'skill_list_drafts', arguments: {} }),
       });
       const result = data?.result ?? data;
-      const nextSkills = Array.isArray(result?.drafts) ? result.drafts : (Array.isArray(result?.skills) ? result.skills : []);
-      skillsRef.current = nextSkills;
-      setSkills(nextSkills);
+      setSkills(Array.isArray(result?.drafts) ? result.drafts : (Array.isArray(result?.skills) ? result.skills : []));
       setSkillsError('');
     } catch (e: any) {
       console.error('JARVIS skills:', e);
@@ -735,6 +702,8 @@ export default function JarvisApp() {
       if (!silent) setSkillsLoading(false);
     }
   }, []);
+
+  React.useEffect(() => { skillsRef.current = skills; }, [skills]);
 
   React.useEffect(() => {
     void loadSkills();
@@ -993,7 +962,15 @@ export default function JarvisApp() {
               className={`module-card ${m.accent} ${m.kind === 'module' && selected === m.id ? 'selected' : ''} ${m.id === 'whatsapp' && waIncomingPulse ? 'jv-wa-incoming' : ''}`}
               style={{ '--slot': slot, '--lift': Math.abs(slot) } as React.CSSProperties}
               onPointerEnter={hoverCard}
-              onClick={() => { if (!carouselSwipe.current.moved) { if (m.kind === 'skill') { setSkillCardOpen(m.skill); setSkillResult(null); setSkillRunError(''); playUiSound('open'); } else activate(m.id as ModuleId); } }}>
+              onClick={() => {
+                // Las skills dinámicas deben abrir siempre con click/tap. El flag moved
+                // pertenece al swipe del carrusel y podía quedarse activo durante el click.
+                if (m.kind === 'skill') {
+                  setSkillCardOpen(m.skill); setSkillResult(null); setSkillRunError(''); playUiSound('open');
+                  return;
+                }
+                if (!carouselSwipe.current.moved) activate(m.id as ModuleId);
+              }}>
               <span className="mc-icon"><I /></span>
               <b>{m.label}</b><small>{m.sub}</small>
               {m.kind === 'skill' ? <em>ACTIVA</em> : (b && <em>{b}</em>)}
