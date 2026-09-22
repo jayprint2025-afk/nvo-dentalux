@@ -32,6 +32,9 @@ type JarvisSkill = {
   required_services?: any[];
   created_at?: string;
   updated_at?: string;
+  proposed_card?: any;
+  runtime_config?: any;
+  installed_at?: string | null;
 };
 
 type WaMessage = {
@@ -53,6 +56,9 @@ type WaContact = {
   contact_name?: string | null;
   avatar_url?: string | null;
   updated_at?: string;
+  proposed_card?: any;
+  runtime_config?: any;
+  installed_at?: string | null;
 };
 
 type WaConversation = {
@@ -182,6 +188,12 @@ export default function JarvisApp() {
   const [skills, setSkills] = React.useState<JarvisSkill[]>([]);
   const [skillsLoading, setSkillsLoading] = React.useState(false);
   const [skillsError, setSkillsError] = React.useState('');
+  const [skillCardOpen, setSkillCardOpen] = React.useState<JarvisSkill | null>(null);
+  const [skillLocation, setSkillLocation] = React.useState('Yuma, Arizona');
+  const [skillInputs, setSkillInputs] = React.useState<Record<string,string>>({});
+  const [skillRunning, setSkillRunning] = React.useState(false);
+  const [skillResult, setSkillResult] = React.useState<any>(null);
+  const [skillRunError, setSkillRunError] = React.useState('');
   const [waContactModal, setWaContactModal] = React.useState(false);
   const [waContactName, setWaContactName] = React.useState('');
   const [waContactPhone, setWaContactPhone] = React.useState('');
@@ -402,7 +414,7 @@ export default function JarvisApp() {
   const slideCarousel = (direction: number) => {
     if (!direction) return;
     playUiSound('slide');
-    setCarousel(v => (v + direction + modules.length * 10) % modules.length);
+    setCarousel(v => carouselItems.length ? (v + direction + carouselItems.length * 10) % carouselItems.length : 0);
   };
 
   // Swipe real: deslizar horizontalmente equivale a pulsar una flecha.
@@ -659,12 +671,7 @@ export default function JarvisApp() {
         body: JSON.stringify({ name: 'skill_list_drafts', arguments: {} }),
       });
       const result = data?.result ?? data;
-      const rows =
-        Array.isArray(result?.drafts) ? result.drafts :
-        Array.isArray(result?.skills) ? result.skills :
-        Array.isArray(result) ? result :
-        [];
-      setSkills(rows);
+      setSkills(Array.isArray(result?.drafts) ? result.drafts : (Array.isArray(result?.skills) ? result.skills : []));
       setSkillsError('');
     } catch (e: any) {
       console.error('JARVIS skills:', e);
@@ -686,6 +693,50 @@ export default function JarvisApp() {
       window.removeEventListener('jarvis:skills-changed', refresh as EventListener);
     };
   }, [loadSkills]);
+
+
+  const activeVisualSkills = React.useMemo(() => skills.filter(skill => {
+    if (String(skill.status || '').toLowerCase() !== 'active') return false;
+    const cfg = skill.runtime_config && typeof skill.runtime_config === 'object' ? skill.runtime_config : {};
+    return Boolean(skill.proposed_card) || Boolean(cfg.type);
+  }), [skills]);
+
+  const parseSkillCard = React.useCallback((skill: JarvisSkill) => {
+    let card: any = skill.proposed_card;
+    if (typeof card === 'string') { try { card = JSON.parse(card); } catch { card = {}; } }
+    if (!card || typeof card !== 'object') card = {};
+    const cfg = skill.runtime_config && typeof skill.runtime_config === 'object' ? skill.runtime_config : {};
+    const type = String(card.type || cfg.type || 'skill').toLowerCase();
+    const rawFields = Array.isArray(card.fields) ? card.fields : [];
+    const fields = rawFields.map((field:any) => typeof field === 'string'
+      ? {name:field,label:field==='location'?'Ubicación':field,kind:'text',placeholder:field==='location'?'Ciudad, estado o país':''}
+      : {name:String(field?.name||field?.key||''),label:String(field?.label||field?.name||field?.key||'Dato'),kind:String(field?.kind||field?.type||'text'),placeholder:String(field?.placeholder||''),required:Boolean(field?.required),defaultValue:String(field?.defaultValue||field?.default||'')}
+    ).filter((field:any)=>field.name && !['current','forecast','result','output'].includes(field.name));
+    return {
+      type,
+      title: String(card.title || card.label || (type === 'weather' ? 'Clima' : skill.name)),
+      subtitle: String(card.subtitle || card.sub || skill.purpose || 'Habilidad instalada'),
+      accent: String(card.accent || (type === 'weather' ? 'weather-skill' : 'skills')),
+      actionLabel: String(card.action_label || card.actionLabel || (type === 'weather' ? 'Consultar clima' : 'Ejecutar habilidad')),
+      fields,
+      output: card.output && typeof card.output === 'object' ? card.output : {},
+    };
+  }, []);
+
+  const runVisualSkill = React.useCallback(async (skill: JarvisSkill) => {
+    setSkillRunning(true); setSkillRunError('');
+    try {
+      const card = parseSkillCard(skill);
+      const args: any = { id: Number(skill.id), name: skill.name, intent: skill.purpose || skill.name };
+      card.fields.forEach((field:any)=>{ const value=skillInputs[field.name] ?? field.defaultValue ?? ''; if(String(value).trim()) args[field.name]=String(value).trim(); });
+      if (card.type === 'weather') { const location=(args.location || skillLocation).trim(); args.location=location; args.city=location; }
+      const data: any = await jarvisApi<any>('/api/jarvis/actions', { method:'POST', body:JSON.stringify({name:'skill_run',arguments:args}) });
+      const result = data?.result ?? data;
+      if (result?.ok === false) throw new Error(result?.assistant_message || result?.error || 'No se pudo ejecutar la habilidad');
+      setSkillResult(result?.result ?? result);
+    } catch (e:any) { setSkillRunError(e?.message || 'No se pudo ejecutar la habilidad'); }
+    finally { setSkillRunning(false); }
+  }, [parseSkillCard, skillLocation, skillInputs]);
 
   const skillStatusLabel = (status?: string | null) => {
     const s = String(status || '').toLowerCase();
@@ -794,8 +845,12 @@ export default function JarvisApp() {
     </>;
   };
 
-  // Siempre hay exactamente 6 tarjetas visibles; las demás entran al girar la ruleta.
-  const rotated = Array.from({ length: 6 }, (_, i) => modules[(i + carousel) % modules.length]);
+  // Tarjetas base + habilidades activas con interfaz visual.
+  const carouselItems = React.useMemo(() => [
+    ...modules.map(m => ({kind:'module' as const, key:`module:${m.id}`, ...m})),
+    ...activeVisualSkills.map(skill => { const card=parseSkillCard(skill); return {kind:'skill' as const,key:`skill:${skill.id}`,skill,id:`skill-${skill.id}`,label:card.title,sub:card.subtitle,icon:card.type==='weather'?Sun:Zap,accent:card.accent}; })
+  ], [activeVisualSkills, parseSkillCard]);
+  const rotated = Array.from({ length: Math.min(6, carouselItems.length) }, (_, i) => carouselItems[(i + carousel) % carouselItems.length]);
 
   const badge = (id: ModuleId) => {
     if (id === 'agenda')    return `Hoy ${events.length}`;
@@ -878,15 +933,15 @@ export default function JarvisApp() {
           onPointerUp={finishCarouselSwipe}
           onPointerCancel={finishCarouselSwipe}>
           {rotated.map((m, i) => {
-            const I = m.icon, slot = i - 2.5, b = badge(m.id);
-            return <button key={m.id}
-              className={`module-card ${m.accent} ${selected === m.id ? 'selected' : ''} ${m.id === 'whatsapp' && waIncomingPulse ? 'jv-wa-incoming' : ''}`}
+            const I = m.icon, slot = i - 2.5, b = m.kind === 'module' ? badge(m.id as ModuleId) : null;
+            return <button key={m.key || m.id}
+              className={`module-card ${m.accent} ${m.kind === 'module' && selected === m.id ? 'selected' : ''} ${m.id === 'whatsapp' && waIncomingPulse ? 'jv-wa-incoming' : ''}`}
               style={{ '--slot': slot, '--lift': Math.abs(slot) } as React.CSSProperties}
               onPointerEnter={hoverCard}
-              onClick={() => { if (!carouselSwipe.current.moved) activate(m.id); }}>
+              onClick={() => { if (!carouselSwipe.current.moved) { if (m.kind === 'skill') { setSkillCardOpen(m.skill); setSkillResult(null); setSkillRunError(''); playUiSound('open'); } else activate(m.id as ModuleId); } }}>
               <span className="mc-icon"><I /></span>
               <b>{m.label}</b><small>{m.sub}</small>
-              {b && <em>{b}</em>}
+              {m.kind === 'skill' ? <em>ACTIVA</em> : (b && <em>{b}</em>)}
             </button>;
           })}
         </div>
@@ -1010,6 +1065,24 @@ export default function JarvisApp() {
             : <div className="jv-module-coming"><FI/><h2>{fm.label}</h2><p>Interfaz completa pendiente de definir.</p></div>}
         </div>
       </section>;
+    })()}
+
+    {skillCardOpen && (() => {
+      const card=parseSkillCard(skillCardOpen); const weather=card.type==='weather';
+      const current=skillResult?.current; const forecast=Array.isArray(skillResult?.forecast)?skillResult.forecast:[]; const loc=skillResult?.location;
+      return <div className="jv-skill-card-backdrop" onPointerDown={e=>{if(e.target===e.currentTarget)setSkillCardOpen(null);}}>
+        <section className={`jv-skill-runtime-card ${card.accent}`}>
+          <header><div><span className="jv-skill-runtime-icon">{weather?<Sun/>:<Zap/>}</span><div><small>JARVIS · HABILIDAD ACTIVA</small><h2>{card.title}</h2></div></div><button onClick={()=>setSkillCardOpen(null)} aria-label="Cerrar"><X/></button></header>
+          <p className="jv-skill-runtime-purpose">{skillCardOpen.purpose}</p>
+          <form className="jv-skill-dynamic-form" onSubmit={e=>{e.preventDefault();void runVisualSkill(skillCardOpen);}}>
+            {card.fields.map((field:any)=><label key={field.name}><span>{field.label}</span><input required={field.required} value={field.name==='location'&&weather?skillLocation:(skillInputs[field.name]??field.defaultValue??'')} onChange={e=>{if(field.name==='location'&&weather)setSkillLocation(e.target.value);setSkillInputs(v=>({...v,[field.name]:e.target.value}));}} placeholder={field.placeholder}/></label>)}
+            <button disabled={skillRunning}><Zap/>{skillRunning?'Ejecutando…':card.actionLabel}</button>
+          </form>
+          {skillRunError && <div className="jv-skill-runtime-error">{skillRunError}</div>}
+          {weather && current && <div className="jv-weather-runtime"><div className="jv-weather-now"><Sun/><div><small>{loc?.name}{loc?.admin1?`, ${loc.admin1}`:''}</small><strong>{current.temperature_c}°C</strong><span>{current.condition} · Sensación {current.feels_like_c}°C</span></div></div><div className="jv-weather-forecast">{forecast.slice(0,4).map((d:any)=><article key={d.date}><b>{new Date(`${d.date}T12:00:00`).toLocaleDateString('es-MX',{weekday:'short'})}</b><span>{d.max_c}° / {d.min_c}°</span><small>{d.condition}</small></article>)}</div><footer>Datos: {skillResult?.provider || 'runtime JARVIS'}</footer></div>}
+          {!weather && skillResult && <div className="jv-skill-generic-result"><small>RESULTADO</small><pre>{typeof skillResult==='string'?skillResult:JSON.stringify(skillResult,null,2)}</pre></div>}
+        </section>
+      </div>;
     })()}
 
     {waContactsOpen && <section className="jv-wa-directory-screen" style={{ '--jarvis-module-bg': `url(${jarvisModuleBg})` } as React.CSSProperties} aria-label="Libreta de contactos JARVIS">
