@@ -51,35 +51,75 @@ export class JarvisVoiceController{
    push(); return chunks;
  }
 
- private async playFishChunk(text:string,seq:number,token:string){
-   if(seq!==this.ttsSeq)return false;
-   const r=await fetch(`${jarvisBase}/api/jarvis/tts`,{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body:JSON.stringify({text})});
+ private async fetchFishChunk(text:string,seq:number,token:string){
+   if(seq!==this.ttsSeq)return null;
+   const r=await fetch(`${jarvisBase}/api/jarvis/tts`,{
+    method:'POST',
+    headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},
+    body:JSON.stringify({text})
+   });
    if(!r.ok)throw new Error(`Fish TTS ${r.status}: ${await r.text()}`);
-   if(seq!==this.ttsSeq)return false;
-   const blob=await r.blob(); if(seq!==this.ttsSeq)return false;
-   const url=URL.createObjectURL(blob); this.fishUrl=url;
+   if(seq!==this.ttsSeq)return null;
+   const blob=await r.blob(); if(seq!==this.ttsSeq)return null;
+   return URL.createObjectURL(blob);
+ }
+
+ private async playBufferedUrl(url:string,seq:number){
+   if(seq!==this.ttsSeq){URL.revokeObjectURL(url);return false;}
+   this.fishUrl=url;
    const audio=new Audio(url); this.fishAudio=audio;
    return await new Promise<boolean>((resolve,reject)=>{
-    audio.onended=()=>{if(this.fishAudio===audio)this.stopFishAudio(false);resolve(seq===this.ttsSeq)};
-    audio.onerror=()=>{if(this.fishAudio===audio)this.stopFishAudio(false);reject(new Error('Error reproduciendo Fish TTS'))};
-    audio.play().catch(reject);
+    audio.onended=()=>{
+     if(this.fishAudio===audio){this.fishAudio=null;this.fishUrl=null;}
+     URL.revokeObjectURL(url);
+     resolve(seq===this.ttsSeq);
+    };
+    audio.onerror=()=>{
+     if(this.fishAudio===audio){this.fishAudio=null;this.fishUrl=null;}
+     URL.revokeObjectURL(url);
+     reject(new Error('Error reproduciendo Fish TTS'));
+    };
+    audio.play().catch(err=>{
+     if(this.fishAudio===audio){this.fishAudio=null;this.fishUrl=null;}
+     URL.revokeObjectURL(url);
+     reject(err);
+    });
    });
  }
 
  async speak(text:string){
    const chunks=this.splitForSpeech(text); if(!chunks.length)return;
    const seq=++this.ttsSeq; this.stopFishAudio(); this.cb.onStatus?.('speaking');
+   const buffered=new Map<number,Promise<string|null>>();
    try{
     const token=jarvisToken(); if(!token)throw new Error('Sesión requerida');
-    for(const chunk of chunks){
+
+    // Prebuffer: empieza a generar los primeros audios antes de reproducirlos.
+    const ensure=(i:number)=>{
+     if(i<chunks.length&&!buffered.has(i))buffered.set(i,this.fetchFishChunk(chunks[i],seq,token));
+    };
+    ensure(0); ensure(1); ensure(2);
+
+    for(let i=0;i<chunks.length;i++){
      if(seq!==this.ttsSeq)return;
-     if(!await this.playFishChunk(chunk,seq,token))return;
+     ensure(i); ensure(i+1); ensure(i+2);
+     const url=await buffered.get(i)!;
+     buffered.delete(i);
+     if(!url||seq!==this.ttsSeq){if(url)URL.revokeObjectURL(url);return;}
+     const completed=await this.playBufferedUrl(url,seq);
+     if(!completed||seq!==this.ttsSeq)return;
     }
     if(seq===this.ttsSeq)this.cb.onStatus?.('listening');
    }catch(err:any){
     if(seq===this.ttsSeq)this.cb.onStatus?.('listening');
     this.stopFishAudio();
     this.cb.onError?.(err instanceof Error?err:new Error(String(err)));
+   }finally{
+    // Revoca cualquier audio preparado que ya no vaya a reproducirse.
+    for(const pending of buffered.values()){
+     pending.then(url=>{if(url)URL.revokeObjectURL(url)}).catch(()=>{});
+    }
+    buffered.clear();
    }
  }
  private stopFishAudio(revoke=true){
