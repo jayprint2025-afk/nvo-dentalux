@@ -81,7 +81,14 @@ function setupJarvisRoutes(app, q, deps={}) {
       const ev=await q(`SELECT * FROM jarvis_personal_events WHERE tenant_id=$1::uuid AND (user_id=$2 OR (user_id IS NULL AND $2 IS NULL)) AND status<>'cancelled' AND start_at>=NOW()-interval '1 day' ORDER BY start_at LIMIT 100`,[ctx.tenant_id,ctx.user_id||null]);
       const rr=await q(`SELECT * FROM jarvis_personal_reminders WHERE tenant_id=$1::uuid AND (user_id=$2 OR (user_id IS NULL AND $2 IS NULL)) AND status NOT IN ('cancelled','acknowledged') AND remind_at>=NOW()-interval '1 day' ORDER BY remind_at LIMIT 100`,[ctx.tenant_id,ctx.user_id||null]);
       res.json({ok:true,events:ev.rows,reminders:rr.rows});
-    } catch(error){ res.status(500).json({ok:false,error:error.message}); }
+    } catch(error){
+      console.error('[JARVIS DASHBOARD ERROR]', {
+        message:error?.message, code:error?.code, detail:error?.detail,
+        constraint:error?.constraint, table:error?.table, column:error?.column,
+        stack:error?.stack
+      });
+      res.status(500).json({ok:false,error:error.message});
+    }
   });
 
   // Devuelve avisos vencidos una sola vez: primer aviso y, si no hubo ACK, una insistencia 5 min después.
@@ -92,12 +99,26 @@ function setupJarvisRoutes(app, q, deps={}) {
       const insist=await q(`UPDATE jarvis_personal_reminders SET insisted_at=NOW(),updated_at=NOW() WHERE id IN (SELECT id FROM jarvis_personal_reminders WHERE tenant_id=$1::uuid AND (user_id=$2 OR (user_id IS NULL AND $2 IS NULL)) AND status='pending' AND acknowledged_at IS NULL AND notified_at IS NOT NULL AND insisted_at IS NULL AND insist_at<=NOW() ORDER BY insist_at LIMIT 20 FOR UPDATE SKIP LOCKED) RETURNING *, 'insist'::text AS alert_kind`,[ctx.tenant_id,ctx.user_id||null]);
       const alerts=[...first.rows,...insist.rows];
       res.json({ok:true,alerts});
-    } catch(error){ res.status(500).json({ok:false,error:error.message}); }
+    } catch(error){
+      console.error('[JARVIS DUE ERROR]', {
+        message:error?.message, code:error?.code, detail:error?.detail,
+        constraint:error?.constraint, table:error?.table, column:error?.column,
+        stack:error?.stack
+      });
+      res.status(500).json({ok:false,error:error.message});
+    }
   });
 
   app.post('/api/jarvis/personal/acknowledge', async (req,res) => {
     try { const ctx=buildContext(req,getTenantId,getSucursal); const result=await executeTool(q,ctx,'personal_acknowledge',req.body||{}); res.json(result); }
-    catch(error){ res.status(400).json({ok:false,error:error.message}); }
+    catch(error){
+      console.error('[JARVIS ACK ERROR]', {
+        message:error?.message, code:error?.code, detail:error?.detail,
+        constraint:error?.constraint, table:error?.table, column:error?.column,
+        stack:error?.stack
+      });
+      res.status(400).json({ok:false,error:error.message});
+    }
   });
 
   app.post('/api/jarvis/actions', async (req,res) => {
@@ -119,7 +140,14 @@ function setupJarvisRoutes(app, q, deps={}) {
       console.log('[JARVIS ACTION]', { name, args });
       const result = await executeTool(q, ctx, name, args);
       res.json({ok:true,name,result});
-    } catch(error) { res.status(error.statusCode || error.status || 400).json({ok:false,error:error.message}); }
+    } catch(error) {
+      console.error('[JARVIS ACTION ERROR]', {
+        message:error?.message, code:error?.code, detail:error?.detail,
+        constraint:error?.constraint, table:error?.table, column:error?.column,
+        stack:error?.stack
+      });
+      res.status(error.statusCode || error.status || 400).json({ok:false,error:error.message});
+    }
   });
 
   app.post('/api/jarvis/wake/verify', async (req,res) => {
