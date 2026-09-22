@@ -244,13 +244,10 @@ export default function JarvisApp() {
           ? `Señor, le recuerdo sus compromisos pendientes: ${titles}. ¿Desea realizar alguna acción o confirma que está enterado?`
           : `Señor, debo insistir en los compromisos que tenemos pendientes. Le recuerdo una vez más: ${titles}.`;
         setLastText(`JARVIS: ${phrase}`);
-        try {
-          window.speechSynthesis.cancel();
-          const u = new SpeechSynthesisUtterance(phrase);
-          u.lang = 'es-MX';
-          u.rate = 1;
-          window.speechSynthesis.speak(u);
-        } catch {}
+        // Usa la misma voz Fish Audio de JARVIS para los avisos proactivos.
+        // Si la sesión de voz aún no está abierta, el aviso queda visible y se hablará
+        // cuando JARVIS esté activo, evitando volver a la voz del navegador.
+        if (voiceRef.current) void voiceRef.current.speak(phrase);
       } catch (e) { console.warn('JARVIS due reminders:', e); }
     };
     void pollDue();
