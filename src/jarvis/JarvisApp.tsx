@@ -659,7 +659,12 @@ export default function JarvisApp() {
         body: JSON.stringify({ name: 'skill_list_drafts', arguments: {} }),
       });
       const result = data?.result ?? data;
-      setSkills(Array.isArray(result?.skills) ? result.skills : []);
+      const rows =
+        Array.isArray(result?.drafts) ? result.drafts :
+        Array.isArray(result?.skills) ? result.skills :
+        Array.isArray(result) ? result :
+        [];
+      setSkills(rows);
       setSkillsError('');
     } catch (e: any) {
       console.error('JARVIS skills:', e);
