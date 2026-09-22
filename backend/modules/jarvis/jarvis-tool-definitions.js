@@ -35,18 +35,18 @@ const personalTools = [
   },
   {
     type:'function', name:'internet_search',
-    description:'Busca información pública actual en Internet mediante Brave Search. Devuelve títulos, URLs, fragmentos y contexto. Úsala para búsquedas web normales.',
+    description:'Busca información pública actual en Internet mediante Brave Search. Es la herramienta RÁPIDA y predeterminada para buscar, revisar noticias, consultar precios, hechos actuales y solicitudes normales de “busca”, “revisa” o “investiga”. Devuelve títulos, URLs y fragmentos. Prefiere esta herramienta salvo que el usuario pida explícitamente investigación profunda o comparación exhaustiva. Antes de ejecutar esta herramienta, responde primero al usuario con una confirmación oral breve como “De acuerdo, señor. Lo reviso ahora.” o “Entendido, señor. Buscaré esa información.” Luego ejecuta la herramienta; no permanezcas en silencio mientras inicia la consulta.',
     parameters:{type:'object',properties:{query:{type:'string'},count:{type:'number',default:8},country:{type:'string',default:'US'},search_lang:{type:'string',default:'es'},freshness:{type:'string',description:'Opcional: pd, pw, pm, py o rango YYYY-MM-DDtoYYYY-MM-DD'},safesearch:{type:'string',enum:['off','moderate','strict'],default:'moderate'}},required:['query']}
   },
   {
     type:'function', name:'internet_read_page',
-    description:'Lee el texto de una página web pública específica. Bloquea localhost, redes privadas e internas. Úsala cuando ya tengas una URL concreta.',
+    description:'Lee el texto de una página web pública específica. Bloquea localhost, redes privadas e internas. Úsala cuando ya tengas una URL concreta. Antes de ejecutar esta herramienta, responde primero al usuario con una confirmación oral breve como “De acuerdo, señor. Lo reviso ahora.” o “Entendido, señor. Buscaré esa información.” Luego ejecuta la herramienta; no permanezcas en silencio mientras inicia la consulta.',
     parameters:{type:'object',properties:{url:{type:'string'},max_chars:{type:'number',default:12000}},required:['url']}
   },
   {
     type:'function', name:'internet_research',
-    description:'Realiza investigación web con varias fuentes usando contexto extraído para IA. Úsala para comparar, investigar o responder preguntas que requieren varias fuentes.',
-    parameters:{type:'object',properties:{query:{type:'string'},country:{type:'string',default:'US'},search_lang:{type:'string',default:'es'},freshness:{type:'string'},safesearch:{type:'string',enum:['off','moderate','strict'],default:'moderate'},maximum_number_of_urls:{type:'number',default:8},maximum_number_of_tokens:{type:'number',default:6000}},required:['query']}
+    description:'Realiza investigación PROFUNDA con varias fuentes y más contexto. Es más lenta. Úsala SOLO cuando el usuario pida explícitamente “investiga a fondo”, “análisis completo/profundo”, “compara exhaustivamente varias fuentes” o equivalente. No la uses para búsquedas o noticias normales. Antes de ejecutar esta herramienta, responde primero al usuario con una confirmación oral breve como “De acuerdo, señor. Lo reviso ahora.” o “Entendido, señor. Buscaré esa información.” Luego ejecuta la herramienta; no permanezcas en silencio mientras inicia la consulta.',
+    parameters:{type:'object',properties:{query:{type:'string'},country:{type:'string',default:'US'},search_lang:{type:'string',default:'es'},freshness:{type:'string'},safesearch:{type:'string',enum:['off','moderate','strict'],default:'moderate'},maximum_number_of_urls:{type:'number',default:5},maximum_number_of_tokens:{type:'number',default:3000}},required:['query']}
   },
   {
     type:'function', name:'internet_get_history',
