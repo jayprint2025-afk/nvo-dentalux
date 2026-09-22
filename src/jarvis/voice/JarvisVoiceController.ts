@@ -28,20 +28,59 @@ export class JarvisVoiceController{
   this.ttsSeq++; this.stopFishAudio(); this.dc?.close();this.pc?.close();this.stream?.getTracks().forEach(t=>t.stop());
   if(this.remoteAudio)this.remoteAudio.srcObject=null;this.dc=null;this.pc=null;this.stream=null;this.remoteAudio=null;this.cb.onStatus?.('idle');
  }
- async speak(text:string){
-  const clean=String(text||'').replace(/\s+/g,' ').trim(); if(!clean)return;
-  const seq=++this.ttsSeq; this.stopFishAudio(); this.cb.onStatus?.('speaking');
-  try{
-   const token=jarvisToken(); if(!token) throw new Error('Sesión requerida');
-   const r=await fetch(`${jarvisBase}/api/jarvis/tts`,{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body:JSON.stringify({text:clean})});
-   if(!r.ok) throw new Error(`Fish TTS ${r.status}: ${await r.text()}`);
-   if(seq!==this.ttsSeq)return;
-   const blob=await r.blob(); const url=URL.createObjectURL(blob); this.fishUrl=url;
+ private splitForSpeech(text:string,maxChars=420){
+   const clean=String(text||'').replace(/\s+/g,' ').trim(); if(!clean)return [];
+   const sentences=clean.match(/[^.!?…]+[.!?…]+|[^.!?…]+$/g)?.map(x=>x.trim()).filter(Boolean)||[clean];
+   const chunks:string[]=[]; let current='';
+   const push=()=>{if(current.trim()){chunks.push(current.trim());current='';}};
+   for(const sentence of sentences){
+    if(sentence.length<=maxChars){
+     if(!current)current=sentence;
+     else if((current+' '+sentence).length<=maxChars)current+=' '+sentence;
+     else{push();current=sentence;}
+     continue;
+    }
+    push();
+    const words=sentence.split(/\s+/); let hard='';
+    for(const word of words){
+     if(hard&&(hard+' '+word).length>maxChars){chunks.push(hard);hard=word;}
+     else hard=hard?hard+' '+word:word;
+    }
+    if(hard)chunks.push(hard);
+   }
+   push(); return chunks;
+ }
+
+ private async playFishChunk(text:string,seq:number,token:string){
+   if(seq!==this.ttsSeq)return false;
+   const r=await fetch(`${jarvisBase}/api/jarvis/tts`,{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body:JSON.stringify({text})});
+   if(!r.ok)throw new Error(`Fish TTS ${r.status}: ${await r.text()}`);
+   if(seq!==this.ttsSeq)return false;
+   const blob=await r.blob(); if(seq!==this.ttsSeq)return false;
+   const url=URL.createObjectURL(blob); this.fishUrl=url;
    const audio=new Audio(url); this.fishAudio=audio;
-   audio.onended=()=>{if(seq===this.ttsSeq)this.cb.onStatus?.('listening');this.stopFishAudio(false)};
-   audio.onerror=()=>{if(seq===this.ttsSeq)this.cb.onStatus?.('listening');this.stopFishAudio(false)};
-   await audio.play();
-  }catch(err:any){if(seq===this.ttsSeq)this.cb.onStatus?.('listening');this.stopFishAudio();this.cb.onError?.(err instanceof Error?err:new Error(String(err)));}
+   return await new Promise<boolean>((resolve,reject)=>{
+    audio.onended=()=>{if(this.fishAudio===audio)this.stopFishAudio(false);resolve(seq===this.ttsSeq)};
+    audio.onerror=()=>{if(this.fishAudio===audio)this.stopFishAudio(false);reject(new Error('Error reproduciendo Fish TTS'))};
+    audio.play().catch(reject);
+   });
+ }
+
+ async speak(text:string){
+   const chunks=this.splitForSpeech(text); if(!chunks.length)return;
+   const seq=++this.ttsSeq; this.stopFishAudio(); this.cb.onStatus?.('speaking');
+   try{
+    const token=jarvisToken(); if(!token)throw new Error('Sesión requerida');
+    for(const chunk of chunks){
+     if(seq!==this.ttsSeq)return;
+     if(!await this.playFishChunk(chunk,seq,token))return;
+    }
+    if(seq===this.ttsSeq)this.cb.onStatus?.('listening');
+   }catch(err:any){
+    if(seq===this.ttsSeq)this.cb.onStatus?.('listening');
+    this.stopFishAudio();
+    this.cb.onError?.(err instanceof Error?err:new Error(String(err)));
+   }
  }
  private stopFishAudio(revoke=true){
   if(this.fishAudio){this.fishAudio.pause();this.fishAudio.src='';this.fishAudio=null;}
