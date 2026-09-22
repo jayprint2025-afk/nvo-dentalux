@@ -6,8 +6,7 @@ type Callbacks={onStatus?:(s:Status)=>void;onTranscript?:(text:string,who:'user'
 export class JarvisVoiceController{
  private pc:RTCPeerConnection|null=null; private dc:RTCDataChannel|null=null; private stream:MediaStream|null=null;
  private remoteAudio:HTMLAudioElement|null=null; private fishAudio:HTMLAudioElement|null=null; private fishUrl:string|null=null; private ttsSeq=0;
- private fishSpeaking=false; private fishStartedAt=0;
- private readonly echoGuardMs=900;
+ private fishSpeaking=false;
  constructor(private cb:Callbacks={}){}
  async start(){
   if(this.pc) return; this.cb.onStatus?.('connecting');
@@ -91,7 +90,8 @@ export class JarvisVoiceController{
 
  async speak(text:string){
    const chunks=this.splitForSpeech(text); if(!chunks.length)return;
-   const seq=++this.ttsSeq; this.stopFishAudio(); this.fishSpeaking=true; this.fishStartedAt=Date.now(); this.cb.onStatus?.('speaking');
+    console.log(`[JARVIS FISH] respuesta iniciada: ${chunks.length} chunks`);
+   const seq=++this.ttsSeq; this.stopFishAudio(); this.fishSpeaking=true; this.cb.onStatus?.('speaking');
    const buffered=new Map<number,Promise<string|null>>();
    try{
     const token=jarvisToken(); if(!token)throw new Error('Sesión requerida');
@@ -105,13 +105,17 @@ export class JarvisVoiceController{
     for(let i=0;i<chunks.length;i++){
      if(seq!==this.ttsSeq)return;
      ensure(i); ensure(i+1); ensure(i+2);
+     console.log(`[JARVIS FISH] esperando chunk ${i+1}/${chunks.length}`);
      const url=await buffered.get(i)!;
+     console.log(`[JARVIS FISH] chunk ${i+1}/${chunks.length} generado`);
      buffered.delete(i);
      if(!url||seq!==this.ttsSeq){if(url)URL.revokeObjectURL(url);return;}
+     console.log(`[JARVIS FISH] reproduciendo chunk ${i+1}/${chunks.length}`);
      const completed=await this.playBufferedUrl(url,seq);
+     console.log(`[JARVIS FISH] chunk ${i+1}/${chunks.length} terminado`);
      if(!completed||seq!==this.ttsSeq)return;
     }
-    if(seq===this.ttsSeq){this.fishSpeaking=false;this.cb.onStatus?.('listening');}
+    if(seq===this.ttsSeq){console.log('[JARVIS FISH] RESPUESTA COMPLETA');this.fishSpeaking=false;this.cb.onStatus?.('listening');}
    }catch(err:any){
     if(seq===this.ttsSeq){this.fishSpeaking=false;this.cb.onStatus?.('listening');}
     this.stopFishAudio();
@@ -141,11 +145,8 @@ export class JarvisVoiceController{
    const spoken=String(userText).replace(/\s+/g,' ').trim();
    this.cb.onTranscript?.(spoken,'user');
    if(this.fishSpeaking&&spoken){
-    const elapsed=Date.now()-this.fishStartedAt;
-    const looksLikeJarvisEcho=/^(señor\b|eso es lo más relevante\b|de acuerdo\b|entendido\b)/i.test(spoken);
-    if(elapsed>=this.echoGuardMs&&!looksLikeJarvisEcho){
-     this.ttsSeq++;this.fishSpeaking=false;this.stopFishAudio();this.cb.onStatus?.('listening');
-    }
+    // PRUEBA DIAGNOSTICA: el microfono NO puede cancelar Fish mientras habla.
+    console.log('[JARVIS FISH] transcripcion ignorada durante reproduccion:', spoken.slice(0,120));
    }
   }
   const outText=e.response?.output?.flatMap?.((x:any)=>x.content||[]).map?.((x:any)=>x.transcript||x.text||'').filter(Boolean).join(' ').trim();
