@@ -392,8 +392,8 @@ async function internetReadPage(q,ctx,args={}){
 async function internetResearch(q,ctx,args={}){
   const query=t(args.query||args.q);
   if(!query) throw new Error('Falta el tema de investigación');
-  const maxUrls=Math.min(12,Math.max(3,Number(args.maximum_number_of_urls)||8));
-  const maxTokens=Math.min(12000,Math.max(1024,Number(args.maximum_number_of_tokens)||6000));
+  const maxUrls=Math.min(6,Math.max(3,Number(args.maximum_number_of_urls)||5));
+  const maxTokens=Math.min(5000,Math.max(1024,Number(args.maximum_number_of_tokens)||3000));
   const data=await braveGet('llm/context',{
     q:query,
     country:t(args.country)||'US',
