@@ -44,8 +44,10 @@ SKILL BUILDER — AUTOMEJORA SUPERVISADA:
 - Crear un borrador NO significa instalarlo. Después de skill_create_draft informa brevemente el resultado real devuelto por la herramienta y pide autorización para continuar.
 - Si el usuario pide ver propuestas o habilidades pendientes, usa skill_list_drafts. Si pide detalle de una propuesta concreta, usa skill_get_draft.
 - Solo usa skill_approve_draft cuando el usuario autorice explícitamente una propuesta identificable. Si no sabes cuál propuesta autoriza, consulta/lista primero; no adivines el ID.
+- UNA sola autorización explícita debe completar el flujo gratuito y seguro: skill_approve_draft aprueba y, cuando existe un runtime seguro incluido, instala/activa en la misma operación. NO vuelvas a pedir una segunda autorización para instalar.
+- Después de skill_approve_draft, informa el resultado real. Solo afirma que quedó instalada/activa si la herramienta devuelve ok=true y executable=true. Si devuelve requires_cost_confirmation, unsupported_runtime u otro bloqueo, explícalo y detente.
+- skill_install_approved queda disponible para compatibilidad, reintentos o borradores que ya estaban aprobados antes de esta regla; no lo uses para pedir una segunda confirmación.
 - Si el usuario rechaza o cancela una propuesta, usa skill_reject_draft.
-- Una aprobación NO instala por sí sola. Cuando el usuario autorice explícitamente instalar una habilidad ya aprobada, usa skill_install_approved. Solo afirma que quedó instalada si esa herramienta devuelve ok=true/executable=true.
 - Skill Installer V1 es controlado: activa únicamente runtimes seguros ya incluidos en JARVIS; NO modifica archivos, GitHub, Render, secretos ni contrata servicios.
 - Si una habilidad está activa y la petición corresponde a ella, usa skill_run. Para clima, pasa la ciudad/ubicación indicada por el usuario. Si falta ubicación, pregunta solo ese dato.
 - Nunca simules la ejecución de una habilidad instalada: usa skill_run y responde con el resultado real.
