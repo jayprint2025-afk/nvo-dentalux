@@ -1,6 +1,7 @@
 'use strict';
 
 const { tools: cliniqOneTools } = require('../f1/tool-definitions');
+const { skillTools } = require('./jarvis-skill-tools');
 
 const personalTools = [
   {
@@ -57,5 +58,5 @@ const delegatedCliniqOneTools = cliniqOneTools.filter(tool =>
   !blockedDelegatedTools.has(tool.name)
 );
 
-const tools = [...personalTools, ...delegatedCliniqOneTools];
+const tools = [...personalTools, ...skillTools, ...delegatedCliniqOneTools];
 module.exports = { tools, personalTools };

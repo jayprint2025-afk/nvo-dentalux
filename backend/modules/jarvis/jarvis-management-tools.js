@@ -1,6 +1,7 @@
 'use strict';
 
 const { executeTool: executeCliniqOneTool } = require('../f1/management-tools');
+const { executeSkillTool } = require('./jarvis-skill-builder');
 
 function t(v){ return v == null ? '' : String(v).trim(); }
 function idList(v){ return Array.isArray(v) ? v.map(Number).filter(Number.isSafeInteger) : []; }
@@ -147,5 +148,10 @@ async function sendJarvisWhatsAppMessage(q,ctx,args={}){
 }
 
 const personalHandlers={personal_create_event:createEvent,personal_create_reminder:createReminder,personal_acknowledge:acknowledge,personal_get_agenda:getAgenda,find_whatsapp_contact:findJarvisWhatsAppContact,send_whatsapp_message:sendJarvisWhatsAppMessage};
-async function executeTool(q,ctx,name,args){ if(personalHandlers[name]) return personalHandlers[name](q,ctx,args||{}); return executeCliniqOneTool(q,ctx,name,args||{}); }
+async function executeTool(q,ctx,name,args){
+  if(personalHandlers[name]) return personalHandlers[name](q,ctx,args||{});
+  const skillResult = await executeSkillTool(q,ctx,name,args||{});
+  if(skillResult !== null) return skillResult;
+  return executeCliniqOneTool(q,ctx,name,args||{});
+}
 module.exports={executeTool,personalHandlers,ensurePersonalTables};
