@@ -588,6 +588,66 @@ async function listSkillDrafts(q,ctx,args={}){
   return {ok:true,source:'jarvis_skill_builder',drafts:rows,total:rows.length};
 }
 
-const personalHandlers={personal_create_event:createEvent,personal_create_reminder:createReminder,personal_acknowledge:acknowledge,personal_get_agenda:getAgenda,find_whatsapp_contact:findJarvisWhatsAppContact,send_whatsapp_message:sendJarvisWhatsAppMessage,jarvis_get_module_report:getJarvisModuleReport,jarvis_get_cards_report:getJarvisCardsReport,internet_search:internetSearch,internet_read_page:internetReadPage,internet_research:internetResearch,internet_get_history:internetGetHistory,skill_create_draft:createSkillDraft,skill_list_drafts:listSkillDrafts};
+async function getSkillDraft(q,ctx,args={}){
+  await ensureSkillBuilderTables(q);
+  const id=Number(args.id ?? args.draft_id);
+  if(!Number.isSafeInteger(id) || id<=0) throw new Error('Falta un ID de habilidad válido');
+  const {rows}=await q(`SELECT * FROM jarvis_skill_drafts
+    WHERE tenant_id=$1 AND (user_id=$2 OR (user_id IS NULL AND $2 IS NULL)) AND id=$3
+    LIMIT 1`,[t(ctx.tenant_id),ctx.user_id||null,id]);
+  if(!rows[0]) throw new Error('No encontré ese borrador de habilidad');
+  return {ok:true,source:'jarvis_skill_builder',draft:rows[0]};
+}
+
+async function approveSkillDraft(q,ctx,args={}){
+  const current=await getSkillDraft(q,ctx,args);
+  const draft=current.draft;
+  const cost=t(draft.estimated_cost).toLowerCase() || 'unknown';
+
+  // La aprobación normal solo procede cuando el borrador está confirmado como gratuito.
+  // unknown/paid NO generan un 400: devolvemos un resultado explicable a Realtime.
+  if(cost!=='free'){
+    const nextStatus=cost==='paid'?'blocked_cost_review':'cost_review';
+    const {rows}=await q(`UPDATE jarvis_skill_drafts SET status=$4,updated_at=NOW()
+      WHERE tenant_id=$1 AND (user_id=$2 OR (user_id IS NULL AND $2 IS NULL)) AND id=$3 RETURNING *`,
+      [t(ctx.tenant_id),ctx.user_id||null,draft.id,nextStatus]);
+    return {ok:false,source:'jarvis_skill_builder',draft:rows[0],requires_cost_confirmation:true,
+      assistant_message:cost==='paid'
+        ? `La habilidad “${draft.name}” indica un servicio de pago. No la aprobé; requiere autorización explícita de costo.`
+        : `La habilidad “${draft.name}” tiene costo todavía sin confirmar. Antes de aprobarla debo confirmar que los servicios elegidos sean gratuitos.`,
+      client_event:{type:'jarvis_skill_builder_changed',draft_id:draft.id}};
+  }
+
+  if(['approved','installed','active'].includes(t(draft.status).toLowerCase())){
+    return {ok:true,source:'jarvis_skill_builder',draft,already_approved:true,
+      assistant_message:`La habilidad “${draft.name}” ya estaba aprobada. La aprobación no instala ni despliega código.`};
+  }
+  if(t(draft.status).toLowerCase()==='rejected'){
+    return {ok:false,source:'jarvis_skill_builder',draft,
+      assistant_message:`La habilidad “${draft.name}” está rechazada. Debe crearse o reabrirse una propuesta antes de aprobarla.`};
+  }
+
+  const {rows}=await q(`UPDATE jarvis_skill_drafts SET status='approved',updated_at=NOW()
+    WHERE tenant_id=$1 AND (user_id=$2 OR (user_id IS NULL AND $2 IS NULL)) AND id=$3 RETURNING *`,
+    [t(ctx.tenant_id),ctx.user_id||null,draft.id]);
+  return {ok:true,source:'jarvis_skill_builder',draft:rows[0],executable:false,
+    assistant_message:`Aprobación registrada para “${draft.name}”. Aún no se instaló, no se modificó código y no se desplegó nada.`,
+    client_event:{type:'jarvis_skill_builder_changed',draft_id:draft.id}};
+}
+
+async function rejectSkillDraft(q,ctx,args={}){
+  await ensureSkillBuilderTables(q);
+  const id=Number(args.id ?? args.draft_id);
+  if(!Number.isSafeInteger(id) || id<=0) throw new Error('Falta un ID de habilidad válido');
+  const {rows}=await q(`UPDATE jarvis_skill_drafts SET status='rejected',updated_at=NOW()
+    WHERE tenant_id=$1 AND (user_id=$2 OR (user_id IS NULL AND $2 IS NULL)) AND id=$3 RETURNING *`,
+    [t(ctx.tenant_id),ctx.user_id||null,id]);
+  if(!rows[0]) throw new Error('No encontré ese borrador de habilidad');
+  return {ok:true,source:'jarvis_skill_builder',draft:rows[0],reason:t(args.reason)||null,
+    assistant_message:`La propuesta “${rows[0].name}” fue rechazada y no se instalará.`,
+    client_event:{type:'jarvis_skill_builder_changed',draft_id:id}};
+}
+
+const personalHandlers={personal_create_event:createEvent,personal_create_reminder:createReminder,personal_acknowledge:acknowledge,personal_get_agenda:getAgenda,find_whatsapp_contact:findJarvisWhatsAppContact,send_whatsapp_message:sendJarvisWhatsAppMessage,jarvis_get_module_report:getJarvisModuleReport,jarvis_get_cards_report:getJarvisCardsReport,internet_search:internetSearch,internet_read_page:internetReadPage,internet_research:internetResearch,internet_get_history:internetGetHistory,skill_create_draft:createSkillDraft,skill_list_drafts:listSkillDrafts,skill_get_draft:getSkillDraft,skill_approve_draft:approveSkillDraft,skill_reject_draft:rejectSkillDraft};
 async function executeTool(q,ctx,name,args){ if(personalHandlers[name]) return personalHandlers[name](q,ctx,args||{}); return executeCliniqOneTool(q,ctx,name,args||{}); }
 module.exports={executeTool,personalHandlers,ensurePersonalTables};
