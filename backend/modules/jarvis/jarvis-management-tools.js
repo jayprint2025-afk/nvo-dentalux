@@ -215,6 +215,86 @@ async function sendJarvisWhatsAppMessage(q,ctx,args={}){
     assistant_message:`Mensaje enviado por WhatsApp${contact?.name?` a ${contact.name}`:` al ${data?.phone||phone}`}.`,client_event:{type:'jarvis_whatsapp_changed'}};
 }
 
-const personalHandlers={personal_create_event:createEvent,personal_create_reminder:createReminder,personal_acknowledge:acknowledge,personal_get_agenda:getAgenda,find_whatsapp_contact:findJarvisWhatsAppContact,send_whatsapp_message:sendJarvisWhatsAppMessage};
+
+// ===================== Reportes centrales de tarjetas JARVIS =====================
+const JARVIS_CARD_MODULES=['agenda','recordatorios','whatsapp','correo','llamadas','internet'];
+
+async function fetchJarvisInternal(ctx,path){
+  const base=t(process.env.INTERNAL_BASE_URL||process.env.RENDER_EXTERNAL_URL)||`http://127.0.0.1:${process.env.PORT||10000}`;
+  const headers={};
+  if(t(ctx.authorization)) headers.authorization=t(ctx.authorization);
+  if(t(ctx.branch_key)) headers['x-sucursal']=t(ctx.branch_key);
+  const r=await fetch(`${base}${path}`,{headers});
+  const raw=await r.text();
+  let data=null; try{data=raw?JSON.parse(raw):null;}catch{data=raw;}
+  if(!r.ok) throw new Error(`${path} respondió ${r.status}${data?.error?`: ${data.error}`:''}`);
+  return data;
+}
+function normalizeArrayPayload(data){
+  if(Array.isArray(data)) return data;
+  for(const k of ['items','messages','contacts','data']) if(Array.isArray(data?.[k])) return data[k];
+  return [];
+}
+async function reportAgenda(q,ctx,args={}){
+  await ensurePersonalTables(q);
+  const days=Math.min(30,Math.max(1,Number(args.days)||7));
+  const now=new Date(), to=new Date(now.getTime()+days*864e5);
+  const r=await q(`SELECT id,title,start_at,end_at,location,status FROM jarvis_personal_events
+    WHERE tenant_id=$1::uuid AND (user_id=$2 OR (user_id IS NULL AND $2 IS NULL))
+    AND status<>'cancelled' AND start_at BETWEEN $3::timestamptz AND $4::timestamptz
+    ORDER BY start_at LIMIT 50`,[ctx.tenant_id,ctx.user_id||null,now.toISOString(),to.toISOString()]);
+  return {module:'agenda',status:'operativo',validated:true,period_days:days,total:r.rows.length,upcoming:r.rows.slice(0,10)};
+}
+async function reportReminders(q,ctx,args={}){
+  await ensurePersonalTables(q);
+  const days=Math.min(30,Math.max(1,Number(args.days)||7));
+  const now=new Date(), to=new Date(now.getTime()+days*864e5);
+  const r=await q(`SELECT id,title,remind_at,priority,status,notified_at,acknowledged_at FROM jarvis_personal_reminders
+    WHERE tenant_id=$1::uuid AND (user_id=$2 OR (user_id IS NULL AND $2 IS NULL))
+    AND status<>'cancelled' AND remind_at BETWEEN $3::timestamptz AND $4::timestamptz
+    ORDER BY remind_at LIMIT 50`,[ctx.tenant_id,ctx.user_id||null,now.toISOString(),to.toISOString()]);
+  return {module:'recordatorios',status:'operativo',validated:true,period_days:days,total:r.rows.length,
+    pending:r.rows.filter(x=>String(x.status||'pending').toLowerCase()==='pending').length,items:r.rows.slice(0,10)};
+}
+async function reportWhatsApp(q,ctx,args={}){
+  const limit=Math.min(1000,Math.max(20,Number(args.limit)||250));
+  const [mp,cp]=await Promise.all([
+    fetchJarvisInternal(ctx,`/api/whatsapp/jarvis/messages?limit=${limit}`),
+    fetchJarvisInternal(ctx,'/api/whatsapp/jarvis/contacts')
+  ]);
+  const messages=normalizeArrayPayload(mp), contacts=normalizeArrayPayload(cp);
+  const incoming=messages.filter(m=>String(m.type||m.direction||'').toLowerCase()==='incoming').length;
+  const outgoing=messages.filter(m=>String(m.type||m.direction||'').toLowerCase()==='outgoing').length;
+  const phones=new Set(messages.map(m=>t(m.phone)).filter(Boolean));
+  const recent=messages.slice().sort((a,b)=>new Date(b.timestamp||b.created_at||0)-new Date(a.timestamp||a.created_at||0)).slice(0,10);
+  return {module:'whatsapp',status:'operativo',validated:true,source:'JARVIS-WA-001',scope:'tarjeta_central_jarvis',
+    contacts:contacts.length,messages:messages.length,conversations:phones.size,incoming,outgoing,recent};
+}
+function unavailableCard(module,reason){return {module,status:'no_conectado',validated:false,reason};}
+async function getJarvisModuleReport(q,ctx,args={}){
+  const raw=normalizeName(args.module||args.card||'');
+  const aliases={agenda:'agenda',calendario:'agenda',recordatorio:'recordatorios',recordatorios:'recordatorios',
+    whatsapp:'whatsapp',wa:'whatsapp',correo:'correo',email:'correo',mail:'correo',
+    llamada:'llamadas',llamadas:'llamadas',telefono:'llamadas',internet:'internet',web:'internet'};
+  const module=aliases[raw]||raw;
+  if(!JARVIS_CARD_MODULES.includes(module)) throw new Error(`Módulo no reconocido: ${module}`);
+  if(module==='agenda') return reportAgenda(q,ctx,args);
+  if(module==='recordatorios') return reportReminders(q,ctx,args);
+  if(module==='whatsapp') return reportWhatsApp(q,ctx,args);
+  if(module==='correo') return unavailableCard('correo','La tarjeta todavía no tiene una fuente de correo conectada al backend central.');
+  if(module==='llamadas') return unavailableCard('llamadas','La tarjeta todavía no tiene una fuente de llamadas conectada al backend central.');
+  return unavailableCard('internet','La tarjeta todavía no tiene una fuente/historial de Internet central verificable.');
+}
+async function getJarvisCardsReport(q,ctx,args={}){
+  const requested=Array.isArray(args.modules)&&args.modules.length?args.modules:JARVIS_CARD_MODULES;
+  const reports=[];
+  for(const module of requested){
+    try{reports.push(await getJarvisModuleReport(q,ctx,{...args,module}));}
+    catch(error){reports.push({module:String(module),status:'con_incidencia',validated:false,error:error.message});}
+  }
+  return {ok:true,source:'jarvis_central',scope:'tarjetas_centrales',generated_at:new Date().toISOString(),reports};
+}
+
+const personalHandlers={personal_create_event:createEvent,personal_create_reminder:createReminder,personal_acknowledge:acknowledge,personal_get_agenda:getAgenda,find_whatsapp_contact:findJarvisWhatsAppContact,send_whatsapp_message:sendJarvisWhatsAppMessage,jarvis_get_module_report:getJarvisModuleReport,jarvis_get_cards_report:getJarvisCardsReport};
 async function executeTool(q,ctx,name,args){ if(personalHandlers[name]) return personalHandlers[name](q,ctx,args||{}); return executeCliniqOneTool(q,ctx,name,args||{}); }
 module.exports={executeTool,personalHandlers,ensurePersonalTables};
