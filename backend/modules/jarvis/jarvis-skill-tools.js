@@ -36,7 +36,7 @@ const skillTools = [
   {
     type:'function',
     name:'skill_approve_draft',
-    description:'Registra la autorización del administrador para una propuesta GRATUITA. Aprobar NO instala, NO modifica código, NO hace push y NO despliega. Las propuestas con posible costo quedan bloqueadas.',
+    description:'Registra UNA autorización explícita del administrador para una propuesta GRATUITA y, si existe un runtime seguro incluido en JARVIS, la aprueba y la instala/activa inmediatamente en la misma operación. NO modifica código, GitHub, Render, secretos ni contrata servicios. Las propuestas con costo paid/unknown quedan bloqueadas.',
     parameters:{type:'object',properties:{id:{type:'number'}},required:['id']}
   },
   {
