@@ -88,7 +88,7 @@ async function ensurePersonalTables(q){
   END $$`);
 }
 function userWhere(ctx, start=1){
-  return { sql:`tenant_id=$${start}::uuid AND (user_id=$${start+1} OR (user_id IS NULL AND $${start+1} IS NULL))`, params:[ctx.tenant_id, ctx.user_id || null] };
+  return { sql:`tenant_id::text=$${start}::text AND (user_id=$${start+1} OR (user_id IS NULL AND $${start+1} IS NULL))`, params:[ctx.tenant_id, ctx.user_id || null] };
 }
 
 async function createEvent(q,ctx,args={}){
@@ -97,11 +97,11 @@ async function createEvent(q,ctx,args={}){
   if(!t(args.start_at)) throw new Error('Falta la fecha y hora del evento');
   const mins = Number.isFinite(Number(args.reminder_minutes_before)) ? Math.max(0,Number(args.reminder_minutes_before)) : 10;
   const {rows} = await q(`INSERT INTO jarvis_personal_events(tenant_id,user_id,title,start_at,end_at,location,notes,category)
-    VALUES($1::uuid,$2,$3,$4::timestamptz,NULLIF($5,'')::timestamptz,$6,$7,$8) RETURNING *`,
+    VALUES($1,$2,$3,$4::timestamptz,NULLIF($5,'')::timestamptz,$6,$7,$8) RETURNING *`,
     [ctx.tenant_id,ctx.user_id||null,t(args.title),t(args.start_at),t(args.end_at),t(args.location)||null,t(args.notes)||null,t(args.category)||'personal']);
   const event=rows[0];
   const rr=await q(`INSERT INTO jarvis_personal_reminders(tenant_id,user_id,event_id,title,remind_at,notes,priority,insist_at)
-    VALUES($1::uuid,$2,$3,$4,$5::timestamptz - ($6::text || ' minutes')::interval,$7,'normal',$5::timestamptz - ($6::text || ' minutes')::interval + interval '5 minutes') RETURNING *`,
+    VALUES($1,$2,$3,$4,$5::timestamptz - ($6::text || ' minutes')::interval,$7,'normal',$5::timestamptz - ($6::text || ' minutes')::interval + interval '5 minutes') RETURNING *`,
     [ctx.tenant_id,ctx.user_id||null,event.id,`Evento: ${event.title}`,event.start_at,mins,t(args.notes)||null]);
   return {ok:true,event,reminder:rr.rows[0],assistant_message:`Listo. Programé ${event.title} y el aviso ${mins} minutos antes.`,client_event:{type:'jarvis_personal_changed'}};
 }
@@ -112,7 +112,7 @@ async function createReminder(q,ctx,args={}){
   if(!t(args.remind_at)) throw new Error('Falta la fecha y hora del recordatorio');
   const mins=Number.isFinite(Number(args.insist_after_minutes))?Math.max(1,Number(args.insist_after_minutes)):5;
   const {rows}=await q(`INSERT INTO jarvis_personal_reminders(tenant_id,user_id,title,remind_at,notes,priority,insist_at)
-    VALUES($1::uuid,$2,$3,$4::timestamptz,$5,$6,$4::timestamptz + ($7::text || ' minutes')::interval) RETURNING *`,
+    VALUES($1,$2,$3,$4::timestamptz,$5,$6,$4::timestamptz + ($7::text || ' minutes')::interval) RETURNING *`,
     [ctx.tenant_id,ctx.user_id||null,t(args.title),t(args.remind_at),t(args.notes)||null,t(args.priority)||'normal',mins]);
   return {ok:true,reminder:rows[0],assistant_message:`Listo. Programé el recordatorio: ${rows[0].title}.`,client_event:{type:'jarvis_personal_changed'}};
 }
@@ -122,19 +122,19 @@ async function acknowledge(q,ctx,args={}){
   const reminderIds=idList(args.reminder_ids); const eventIds=idList(args.event_ids);
   let reminders=[];
   if(!reminderIds.length && !eventIds.length){
-    const r=await q(`UPDATE jarvis_personal_reminders SET status='acknowledged',acknowledged_at=NOW(),updated_at=NOW() WHERE tenant_id=$1::uuid AND (user_id=$2 OR (user_id IS NULL AND $2 IS NULL)) AND status='pending' AND acknowledged_at IS NULL AND notified_at IS NOT NULL AND remind_at<=NOW()+interval '30 minutes' RETURNING *`,[ctx.tenant_id,ctx.user_id||null]);
+    const r=await q(`UPDATE jarvis_personal_reminders SET status='acknowledged',acknowledged_at=NOW(),updated_at=NOW() WHERE tenant_id::text=$1::text AND (user_id=$2 OR (user_id IS NULL AND $2 IS NULL)) AND status='pending' AND acknowledged_at IS NULL AND notified_at IS NOT NULL AND remind_at<=NOW()+interval '30 minutes' RETURNING *`,[ctx.tenant_id,ctx.user_id||null]);
     reminders=r.rows;
   }
-  if(reminderIds.length){ const r=await q(`UPDATE jarvis_personal_reminders SET status='acknowledged',acknowledged_at=NOW(),updated_at=NOW() WHERE tenant_id=$1::uuid AND (user_id=$2 OR (user_id IS NULL AND $2 IS NULL)) AND id=ANY($3::bigint[]) RETURNING *`,[ctx.tenant_id,ctx.user_id||null,reminderIds]); reminders=r.rows; }
-  if(eventIds.length){ const r=await q(`UPDATE jarvis_personal_reminders SET status='acknowledged',acknowledged_at=NOW(),updated_at=NOW() WHERE tenant_id=$1::uuid AND (user_id=$2 OR (user_id IS NULL AND $2 IS NULL)) AND event_id=ANY($3::bigint[]) RETURNING *`,[ctx.tenant_id,ctx.user_id||null,eventIds]); reminders=[...reminders,...r.rows]; }
+  if(reminderIds.length){ const r=await q(`UPDATE jarvis_personal_reminders SET status='acknowledged',acknowledged_at=NOW(),updated_at=NOW() WHERE tenant_id::text=$1::text AND (user_id=$2 OR (user_id IS NULL AND $2 IS NULL)) AND id=ANY($3::bigint[]) RETURNING *`,[ctx.tenant_id,ctx.user_id||null,reminderIds]); reminders=r.rows; }
+  if(eventIds.length){ const r=await q(`UPDATE jarvis_personal_reminders SET status='acknowledged',acknowledged_at=NOW(),updated_at=NOW() WHERE tenant_id::text=$1::text AND (user_id=$2 OR (user_id IS NULL AND $2 IS NULL)) AND event_id=ANY($3::bigint[]) RETURNING *`,[ctx.tenant_id,ctx.user_id||null,eventIds]); reminders=[...reminders,...r.rows]; }
   return {ok:true,acknowledged:reminders.length,assistant_message:'Entendido. Quedó confirmado de enterado y detuve la insistencia.'};
 }
 
 async function getAgenda(q,ctx,args={}){
   await ensurePersonalTables(q);
   const from=t(args.from)||new Date().toISOString(); const to=t(args.to)||new Date(Date.now()+7*864e5).toISOString();
-  const ev=await q(`SELECT * FROM jarvis_personal_events WHERE tenant_id=$1::uuid AND (user_id=$2 OR (user_id IS NULL AND $2 IS NULL)) AND start_at BETWEEN $3::timestamptz AND $4::timestamptz AND status<>'cancelled' ORDER BY start_at`,[ctx.tenant_id,ctx.user_id||null,from,to]);
-  const rr=await q(`SELECT * FROM jarvis_personal_reminders WHERE tenant_id=$1::uuid AND (user_id=$2 OR (user_id IS NULL AND $2 IS NULL)) AND remind_at BETWEEN $3::timestamptz AND $4::timestamptz AND status<>'cancelled' ORDER BY remind_at`,[ctx.tenant_id,ctx.user_id||null,from,to]);
+  const ev=await q(`SELECT * FROM jarvis_personal_events WHERE tenant_id::text=$1::text AND (user_id=$2 OR (user_id IS NULL AND $2 IS NULL)) AND start_at BETWEEN $3::timestamptz AND $4::timestamptz AND status<>'cancelled' ORDER BY start_at`,[ctx.tenant_id,ctx.user_id||null,from,to]);
+  const rr=await q(`SELECT * FROM jarvis_personal_reminders WHERE tenant_id::text=$1::text AND (user_id=$2 OR (user_id IS NULL AND $2 IS NULL)) AND remind_at BETWEEN $3::timestamptz AND $4::timestamptz AND status<>'cancelled' ORDER BY remind_at`,[ctx.tenant_id,ctx.user_id||null,from,to]);
   return {ok:true,from,to,events:ev.rows,reminders:rr.rows};
 }
 
@@ -164,7 +164,7 @@ async function findJarvisWhatsAppContact(q,ctx,args={}){
   // Los contactos reales se guardan en jarvis_whatsapp_threads.contact_name.
   const {rows}=await q(`SELECT id, contact_name AS name, phone, claimed_at AS created_at, updated_at
     FROM jarvis_whatsapp_threads
-    WHERE tenant_id=$1::uuid
+    WHERE tenant_id::text=$1::text
       AND channel_id=$2
       AND COALESCE(hidden,FALSE)=FALSE
       AND (
@@ -240,7 +240,7 @@ async function reportAgenda(q,ctx,args={}){
   const days=Math.min(30,Math.max(1,Number(args.days)||7));
   const now=new Date(), to=new Date(now.getTime()+days*864e5);
   const r=await q(`SELECT id,title,start_at,end_at,location,status FROM jarvis_personal_events
-    WHERE tenant_id=$1::uuid AND (user_id=$2 OR (user_id IS NULL AND $2 IS NULL))
+    WHERE tenant_id::text=$1::text AND (user_id=$2 OR (user_id IS NULL AND $2 IS NULL))
     AND status<>'cancelled' AND start_at BETWEEN $3::timestamptz AND $4::timestamptz
     ORDER BY start_at LIMIT 50`,[ctx.tenant_id,ctx.user_id||null,now.toISOString(),to.toISOString()]);
   return {module:'agenda',status:'operativo',validated:true,period_days:days,total:r.rows.length,upcoming:r.rows.slice(0,10)};
@@ -250,7 +250,7 @@ async function reportReminders(q,ctx,args={}){
   const days=Math.min(30,Math.max(1,Number(args.days)||7));
   const now=new Date(), to=new Date(now.getTime()+days*864e5);
   const r=await q(`SELECT id,title,remind_at,priority,status,notified_at,acknowledged_at FROM jarvis_personal_reminders
-    WHERE tenant_id=$1::uuid AND (user_id=$2 OR (user_id IS NULL AND $2 IS NULL))
+    WHERE tenant_id::text=$1::text AND (user_id=$2 OR (user_id IS NULL AND $2 IS NULL))
     AND status<>'cancelled' AND remind_at BETWEEN $3::timestamptz AND $4::timestamptz
     ORDER BY remind_at LIMIT 50`,[ctx.tenant_id,ctx.user_id||null,now.toISOString(),to.toISOString()]);
   return {module:'recordatorios',status:'operativo',validated:true,period_days:days,total:r.rows.length,
