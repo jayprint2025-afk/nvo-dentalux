@@ -1,5 +1,5 @@
 import React from 'react';
-import { X, Zap, Search, Play, Pause, SkipBack, SkipForward, MapPin, ExternalLink, Image as ImageIcon, Maximize2, Minimize2, Navigation, Volume2, VolumeX } from 'lucide-react';
+import { X, Zap, Search, Play, Pause, SkipBack, SkipForward, MapPin, ExternalLink, Image as ImageIcon, Maximize2, Minimize2, Navigation, Volume2, VolumeX, Crosshair } from 'lucide-react';
 
 export type DynamicCard = { type?:string; title?:string; subtitle?:string; accent?:string; actionLabel?:string; fields?:any[]; components?:any[]; layout?:string; version?:number|string; output?:any };
 const safeUrl=(v:any)=>{try{const u=new URL(String(v||''));return ['http:','https:'].includes(u.protocol)?u.toString():'';}catch{return ''}};
@@ -63,6 +63,8 @@ function MapView({c,result,inputs}:{c:any,result:any;inputs:any}){
  const destRef=React.useRef<any>(null);
  const watchRef=React.useRef<number|null>(null);
  const lastSpokenRef=React.useRef(-1);
+ const latestPosRef=React.useRef<{lat:number;lon:number;heading?:number|null}|null>(null);
+ const followingRef=React.useRef(true);
 
  const makeArrow=(heading=0)=>{
    const L=window.L;if(!L)return undefined;
@@ -70,10 +72,27 @@ function MapView({c,result,inputs}:{c:any,result:any;inputs:any}){
  };
  const updateUser=(here:{lat:number;lon:number},heading?:number|null)=>{
    const L=window.L,map=mapRef.current;if(!L||!map)return;
+   latestPosRef.current={...here,heading};
    const h=Number.isFinite(Number(heading))?Number(heading):0;
    if(!userRef.current) userRef.current=L.marker([here.lat,here.lon],{icon:makeArrow(h),zIndexOffset:1000}).addTo(map);
    else {userRef.current.setLatLng([here.lat,here.lon]);userRef.current.setIcon(makeArrow(h));}
-   if(nav?.following!==false) map.panTo([here.lat,here.lon],{animate:true,duration:.5});
+   if(followingRef.current){
+     const target=L.latLng(here.lat,here.lon);
+     const point=map.project(target,map.getZoom());
+     const forward=point.subtract(L.point(0,Math.min(150,Math.max(70,map.getSize().y*.18))));
+     map.panTo(map.unproject(forward,map.getZoom()),{animate:true,duration:.45});
+   }
+ };
+ const recenter=()=>{
+   const L=window.L,map=mapRef.current,pos=latestPosRef.current;
+   if(!L||!map||!pos){setNavError('Aún no tengo una ubicación GPS para centrar.');return;}
+   followingRef.current=true;
+   setNav((old:any)=>old?{...old,following:true}:old);
+   const z=Math.max(map.getZoom(),16);
+   const target=L.latLng(pos.lat,pos.lon);
+   const point=map.project(target,z);
+   const forward=point.subtract(L.point(0,Math.min(150,Math.max(70,map.getSize().y*.18))));
+   map.setView(map.unproject(forward,z),z,{animate:true});
  };
  React.useEffect(()=>{
    let dead=false;
@@ -86,6 +105,8 @@ function MapView({c,result,inputs}:{c:any,result:any;inputs:any}){
        maxZoom:19,attribution:'© OpenStreetMap contributors'
      }).addTo(map);
      mapRef.current=map;setMapReady(true);
+     map.on('dragstart',()=>{followingRef.current=false;setNav((old:any)=>old?{...old,following:false}:old);});
+     map.on('zoomstart',(e:any)=>{if(e?.originalEvent){followingRef.current=false;setNav((old:any)=>old?{...old,following:false}:old);}});
      setTimeout(()=>map.invalidateSize(),60);
    }).catch((e:any)=>setNavError(e?.message||'No pude cargar el mapa interactivo.'));
    return ()=>{dead=true;if(mapRef.current){mapRef.current.remove();mapRef.current=null;}};
@@ -102,7 +123,7 @@ function MapView({c,result,inputs}:{c:any,result:any;inputs:any}){
    if(watchRef.current!=null)navigator.geolocation.clearWatch(watchRef.current);watchRef.current=null;
    if(routeRef.current){routeRef.current.remove();routeRef.current=null;}
    if(userRef.current){userRef.current.remove();userRef.current=null;}
-   lastSpokenRef.current=-1;setNav(null);window.speechSynthesis?.cancel?.();
+   lastSpokenRef.current=-1;followingRef.current=true;latestPosRef.current=null;setNav(null);window.speechSynthesis?.cancel?.();
    if(mapRef.current&&Number.isFinite(lat)&&Number.isFinite(lon))mapRef.current.setView([lat,lon],zoom);
  };
  const startNav=()=>{
@@ -126,6 +147,7 @@ function MapView({c,result,inputs}:{c:any,result:any;inputs:any}){
          routeRef.current=L.polyline(line,{className:'jv-live-route-line',weight:7,opacity:.92,lineCap:'round',lineJoin:'round'}).addTo(map);
          map.fitBounds(routeRef.current.getBounds(),{padding:[42,42]});
        }
+       followingRef.current=true;
        updateUser({lat:slat,lon:slon},pos.coords.heading);
        setNav({distance:route.distance,duration:route.duration,steps,current:0,instruction:first,following:true});
        lastSpokenRef.current=0;if(voice)speak(first);
@@ -150,6 +172,7 @@ function MapView({c,result,inputs}:{c:any,result:any;inputs:any}){
    {!mapReady&&<div className="jv-map-loading"><Navigation/><span>Cargando mapa interactivo…</span></div>}
    <div className="jv-nav-actions">
      {!nav?<button type="button" onClick={startNav}><Navigation/>Cómo llegar desde mi ubicación</button>:<>
+       <button type="button" className={`jv-nav-center ${nav?.following!==false?'is-following':''}`} onClick={recenter}><Crosshair/>{nav?.following!==false?'Siguiendo':'Centrar'}</button>
        <button type="button" onClick={()=>{setVoice(v=>{if(v)window.speechSynthesis?.cancel?.();else if(nav?.instruction)speak(nav.instruction);return !v;});}}>{voice?<Volume2/>:<VolumeX/>}{voice?'Voz activada':'Voz desactivada'}</button>
        <button type="button" onClick={stopNav}><X/>Terminar ruta</button>
      </>}
