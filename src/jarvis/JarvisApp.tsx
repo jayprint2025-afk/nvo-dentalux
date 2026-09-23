@@ -705,31 +705,44 @@ export default function JarvisApp() {
   const parseSkillCard = React.useCallback((skill: JarvisSkill) => {
     let card: any = skill.proposed_card;
     if (typeof card === 'string') { try { card = JSON.parse(card); } catch { card = {}; } }
-    if (!card || typeof card !== 'object') card = {};
-    const cfg = skill.runtime_config && typeof skill.runtime_config === 'object' ? skill.runtime_config : {};
-    const type = String(card.type || cfg.type || 'skill').toLowerCase();
+    if (!card || typeof card !== 'object' || Array.isArray(card)) card = {};
 
-    // Runtime V4.2: si una habilidad de lugares fue instalada con una tarjeta
-    // antigua/incompleta, el renderer universal construye su UI declarativa.
-    if (type === 'places' || type === 'map' || String(cfg.provider || '').toLowerCase().includes('openstreetmap')) {
-      const existing = Array.isArray(card.components) ? card.components : (Array.isArray(card.ui) ? card.ui : []);
-      if (!existing.length) {
-        card = {
-          ...card,
-          version: 3,
-          type: 'places',
-          title: card.title || skill.name,
-          subtitle: card.subtitle || skill.purpose || 'Busca lugares y visualízalos en el mapa.',
-          actionLabel: 'Buscar lugares',
-          layout: 'stack',
-          components: [
-            {type:'search', name:'query', label:'Buscar lugar o dirección', placeholder:'Ej. Walmart Yuma, Hospital, 123 Main St'},
-            {type:'button', label:'Buscar'},
-            {type:'map', title:'Mapa', lat_bind:'result.center.lat', lon_bind:'result.center.lon', zoom:13},
-            {type:'list', bind:'result.places', title:'Resultados'}
-          ]
-        };
-      }
+    let cfg: any = skill.runtime_config;
+    if (typeof cfg === 'string') { try { cfg = JSON.parse(cfg); } catch { cfg = {}; } }
+    if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) cfg = {};
+
+    const haystack = [
+      skill.name, skill.purpose, skill.required_services,
+      ...(Array.isArray(skill.proposed_tools) ? skill.proposed_tools : []),
+      cfg.type, cfg.provider, card.type
+    ].map((x:any)=>typeof x==='string'?x:JSON.stringify(x||'')).join(' ').toLowerCase();
+
+    // Para habilidades instaladas, runtime_config manda sobre proposed_card.
+    // Esto evita que una proposed_card antigua type:"skill" oculte el runtime "places".
+    let type = String(cfg.type || card.runtime_type || card.type || 'skill').toLowerCase();
+    const isPlaces = type === 'places' || type === 'map' ||
+      /openstreetmap|nominatim|explorador de lugares|mapa interactivo|buscar ubicaciones|geocod/.test(haystack);
+
+    if (isPlaces) {
+      type = 'places';
+      card = {
+        ...card,
+        version: 3,
+        type: 'places',
+        runtime_type: 'places',
+        title: card.title || skill.name || 'Explorador de Lugares',
+        subtitle: card.subtitle || skill.purpose || 'Busca lugares y visualízalos en el mapa.',
+        actionLabel: 'Buscar',
+        fields: [
+          {name:'query',label:'Buscar lugar o dirección',kind:'search',placeholder:'Ej. Walmart Yuma Arizona',required:true}
+        ],
+        components: [
+          {type:'search',name:'query',label:'Buscar lugar o dirección',placeholder:'Ej. Walmart Yuma Arizona'},
+          {type:'button',action:'run',label:'Buscar'},
+          {type:'map',title:'Mapa',lat_bind:'result.center.lat',lon_bind:'result.center.lon',zoom:13},
+          {type:'list',bind:'result.places',title:'Resultados'}
+        ]
+      };
     }
 
     const rawFields = Array.isArray(card.fields) ? card.fields : [];
@@ -737,12 +750,15 @@ export default function JarvisApp() {
       ? {name:field,label:field==='location'?'Ubicación':field,kind:'text',placeholder:field==='location'?'Ciudad, estado o país':''}
       : {name:String(field?.name||field?.key||''),label:String(field?.label||field?.name||field?.key||'Dato'),kind:String(field?.kind||field?.type||'text'),placeholder:String(field?.placeholder||''),required:Boolean(field?.required),defaultValue:String(field?.defaultValue||field?.default||'')}
     ).filter((field:any)=>field.name && !['current','forecast','result','output'].includes(field.name));
+
     return {
+      ...card,
       type,
+      runtime_type:type,
       title: String(card.title || card.label || (type === 'weather' ? 'Clima' : skill.name)),
       subtitle: String(card.subtitle || card.sub || skill.purpose || 'Habilidad instalada'),
       accent: String(card.accent || (type === 'weather' ? 'weather-skill' : 'skills')),
-      actionLabel: String(card.action_label || card.actionLabel || (type === 'weather' ? 'Consultar clima' : 'Ejecutar habilidad')),
+      actionLabel: String(card.action_label || card.actionLabel || (type === 'weather' ? 'Consultar clima' : type === 'places' ? 'Buscar' : 'Ejecutar habilidad')),
       fields,
       output: card.output && typeof card.output === 'object' ? card.output : {},
       version: Number(card.version || card.schema_version || 3),
