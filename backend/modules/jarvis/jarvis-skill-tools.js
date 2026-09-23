@@ -16,7 +16,8 @@ const skillTools = [
         required_services:{type:'array',items:{type:['string','object']},description:'Servicios, APIs o fuentes requeridas. Indicar si son existentes/gratuitas/de pago.'},
         estimated_cost:{type:'string',enum:['free','unknown','paid'],description:'free si no agrega costo; unknown si debe verificarse; paid si requiere pago'},
         risk_level:{type:'string',enum:['low','medium','high']},
-        notes:{type:'string'}
+        notes:{type:'string'},
+        workflow_config:{type:'object',description:'Workflow declarativo seguro V4. Use steps con operaciones permitidas como http_get_json y select. No incluya JavaScript, shell ni código ejecutable.'}
       },
       required:['name','request','estimated_cost']
     }
@@ -55,7 +56,7 @@ const skillTools = [
   {
     type:'function',
     name:'skill_run',
-    description:'Ejecuta una habilidad previamente instalada y activa. Para clima, usa location/city. No simules el resultado: usa esta herramienta.',
+    description:'Ejecuta una habilidad previamente instalada y activa. Ejecuta una habilidad activa con Universal Skill Runtime V4. Pasa query/search/place/location/city y demás argumentos requeridos por la habilidad. No simules el resultado.',
     parameters:{type:'object',properties:{id:{type:'number'},name:{type:'string'},intent:{type:'string'},location:{type:'string'},city:{type:'string'}},additionalProperties:true}
   }
 ];
