@@ -574,15 +574,6 @@ function applyFreeServiceFallback(d={}){
   return out;
 }
 
-function buildAutomaticSkillCard(d={},runtimeType='skill'){
-  let supplied=d.proposed_card;
-  if(typeof supplied==='string' && supplied.trim()) { try { supplied=JSON.parse(supplied); } catch { supplied=null; } }
-  if(supplied && typeof supplied==='object') return supplied;
-  const type=t(runtimeType||'skill').toLowerCase()||'skill';
-  if(type==='weather' || isWeatherSkillDraft(d)) return {schema_version:2,type:'weather',title:d.name||'Clima',subtitle:d.purpose||'Clima actual y pronóstico',accent:'weather-skill',runtime_action:'skill_run',action_label:'Consultar clima',fields:[{name:'location',label:'Ubicación',type:'text',placeholder:'Ciudad, estado o país',required:true}],output:{renderer:'weather'}};
-  return {schema_version:2,type,title:d.name||'Habilidad',subtitle:d.purpose||'Habilidad instalada',accent:'skills',runtime_action:'skill_run',action_label:'Ejecutar habilidad',fields:[],output:{renderer:'json'}};
-}
-
 function normalizeSkillDraftArgs(args={}){
   // Acepta tanto el contrato nuevo como los nombres que Realtime ya está enviando.
   const toolsRaw=args.proposed_tools ?? args.tools_needed ?? [];
@@ -593,7 +584,7 @@ function normalizeSkillDraftArgs(args={}){
     name:t(args.name||args.skill_name||args.title),
     purpose:t(args.purpose||args.objective||args.description),
     proposed_tools:proposedTools,
-    proposed_card:(()=>{ const v=args.proposed_card??args.interface??args.card; if(v==null||v==='') return null; if(typeof v==='object') return JSON.stringify(v); const raw=t(v); try{return JSON.stringify(JSON.parse(raw));}catch{return raw;} })(),
+    proposed_card:t(args.proposed_card||args.interface||args.card),
     required_services:t(args.required_services||args.services_required||args.services),
     estimated_cost:t(args.estimated_cost||args.cost)||'unknown'
   });
@@ -604,9 +595,6 @@ async function createSkillDraft(q,ctx,args={}){
   const d=normalizeSkillDraftArgs(args);
   if(!d.name) throw new Error('Falta el nombre de la habilidad');
   if(!d.purpose) throw new Error('Falta el propósito de la habilidad');
-  // UI Builder V2: toda propuesta nace con una definición visual declarativa.
-  // JARVIS puede enviar proposed_card; si no lo hace, generamos una segura por defecto.
-  if(!d.proposed_card) d.proposed_card=JSON.stringify(buildAutomaticSkillCard(d,isWeatherSkillDraft(d)?'weather':'skill'));
   const {rows}=await q(`INSERT INTO jarvis_skill_drafts
     (tenant_id,user_id,name,purpose,proposed_tools,proposed_card,required_services,estimated_cost,status)
     VALUES($1,$2,$3,$4,$5::jsonb,$6,$7,$8,'draft') RETURNING *`,[
@@ -621,13 +609,6 @@ async function createSkillDraft(q,ctx,args={}){
 
 async function listSkillDrafts(q,ctx,args={}){
   await ensureSkillBuilderTables(q);
-  // UI Builder V2: migra automáticamente habilidades activas antiguas sin tarjeta.
-  const missing=await q(`SELECT * FROM jarvis_skill_drafts WHERE tenant_id=$1 AND (user_id=$2 OR (user_id IS NULL AND $2 IS NULL)) AND status='active' AND COALESCE(proposed_card,'')=''`,[t(ctx.tenant_id),ctx.user_id||null]);
-  for(const skill of missing.rows){
-    const cfg=skill.runtime_config&&typeof skill.runtime_config==='object'?skill.runtime_config:{};
-    const card=buildAutomaticSkillCard(skill,cfg.type||'skill');
-    await q(`UPDATE jarvis_skill_drafts SET proposed_card=$4,updated_at=updated_at WHERE tenant_id=$1 AND (user_id=$2 OR (user_id IS NULL AND $2 IS NULL)) AND id=$3`,[t(ctx.tenant_id),ctx.user_id||null,skill.id,JSON.stringify(card)]);
-  }
   const limit=Math.min(100,Math.max(1,Number(args.limit)||20));
   const {rows}=await q(`SELECT * FROM jarvis_skill_drafts
     WHERE tenant_id=$1 AND (user_id=$2 OR (user_id IS NULL AND $2 IS NULL))
@@ -752,15 +733,13 @@ async function installApprovedSkill(q,ctx,args={}){
   if(cost!=='free') return {ok:false,requires_cost_confirmation:true,skill:draft,assistant_message:`No instalé “${draft.name}” porque su costo no está confirmado como gratuito.`};
   if(!isWeatherSkillDraft(draft)) return {ok:false,unsupported_runtime:true,skill:draft,assistant_message:`“${draft.name}” está aprobada, pero Skill Installer V1 todavía no tiene un runtime seguro para ese tipo de habilidad. No modifiqué código ni desplegué nada.`};
 
-  const config={type:'weather',provider:'open-meteo',api_key_required:false,installed_by:'jarvis_skill_installer_v2',ui_schema_version:2};
-  // La tarjeta no está programada en React: se guarda como datos y el renderer universal la dibuja.
-  const visualCard=JSON.stringify(buildAutomaticSkillCard(draft,'weather'));
+  const config={type:'weather',provider:'open-meteo',api_key_required:false,installed_by:'jarvis_skill_installer_v1'};
   const {rows}=await q(`UPDATE jarvis_skill_drafts
-    SET status='active',installed_at=NOW(),installer_type='builtin_runtime',runtime_config=$4::jsonb,proposed_card=COALESCE(NULLIF(proposed_card,''),$5),updated_at=NOW()
+    SET status='active',installed_at=NOW(),installer_type='builtin_runtime',runtime_config=$4::jsonb,updated_at=NOW()
     WHERE tenant_id=$1 AND (user_id=$2 OR (user_id IS NULL AND $2 IS NULL)) AND id=$3 RETURNING *`,
-    [t(ctx.tenant_id),ctx.user_id||null,draft.id,JSON.stringify(config),visualCard]);
-  return {ok:true,source:'jarvis_skill_installer_v2',skill:rows[0],executable:true,
-    assistant_message:`Instalé y activé “${draft.name}” usando el runtime gratuito de clima y generé su interfaz visual declarativa automáticamente. No fue necesario modificar GitHub ni Render para crear esa tarjeta y no se agregó ningún servicio de pago.`,
+    [t(ctx.tenant_id),ctx.user_id||null,draft.id,JSON.stringify(config)]);
+  return {ok:true,source:'jarvis_skill_installer',skill:rows[0],executable:true,
+    assistant_message:`Instalé y activé “${draft.name}” usando el runtime gratuito de clima. No se modificó GitHub ni Render y no se agregó ningún servicio de pago.`,
     client_event:{type:'jarvis_skill_builder_changed',draft_id:draft.id}};
 }
 
