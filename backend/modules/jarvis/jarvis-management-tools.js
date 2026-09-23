@@ -831,23 +831,71 @@ function safePublicHttpsUrl(raw){
     throw new Error('Destino local/privado bloqueado');
   return u;
 }
-async function runPlacesSkill(q,ctx,draft,args={}){
-  const query=t(args.query||args.search||args.place||args.location||args.city||args.intent||args.request);
-  if(!query) return {ok:false,requires_query:true,assistant_message:'¿Qué lugar o categoría desea buscar?'};
+const placesCache=new Map();
+function cacheGetPlaceQuery(key){
+  const hit=placesCache.get(key);
+  if(!hit) return null;
+  if(Date.now()-hit.at>10*60*1000){placesCache.delete(key);return null;}
+  return hit.value;
+}
+function cacheSetPlaceQuery(key,value){
+  placesCache.set(key,{at:Date.now(),value});
+  if(placesCache.size>200){const first=placesCache.keys().next().value;placesCache.delete(first);}
+}
+const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));
+async function fetchNominatimPlaces(query){
   const u=new URL('https://nominatim.openstreetmap.org/search');
-  u.searchParams.set('q',query); u.searchParams.set('format','jsonv2'); u.searchParams.set('addressdetails','1'); u.searchParams.set('limit','8');
-  const r=await fetch(u,{headers:{accept:'application/json','user-agent':'JARVIS-CliniqOne/4.0'}});
-  if(!r.ok) throw new Error(`Nominatim respondió ${r.status}`);
+  u.searchParams.set('q',query);u.searchParams.set('format','jsonv2');u.searchParams.set('addressdetails','1');u.searchParams.set('limit','8');
+  for(let attempt=0;attempt<2;attempt++){
+    const r=await fetch(u,{headers:{accept:'application/json','accept-language':'es,en;q=0.8','user-agent':'CliniqOne-JARVIS/4.2 (places search)'}});
+    if(r.ok){
+      const data=await r.json();
+      return (Array.isArray(data)?data:[]).map(x=>({
+        name:x.name||String(x.display_name||'').split(',')[0]||'Lugar',
+        display_name:x.display_name||null,lat:Number(x.lat),lon:Number(x.lon),
+        type:x.type||null,category:x.category||x.class||null,address:x.address||{},provider:'nominatim'
+      }));
+    }
+    if(r.status!==429 && r.status<500) throw new Error(`Nominatim respondió ${r.status}`);
+    if(attempt===0) await sleep(900);
+  }
+  return null;
+}
+async function fetchOpenMeteoPlaceFallback(query){
+  const u=new URL('https://geocoding-api.open-meteo.com/v1/search');
+  u.searchParams.set('name',query);u.searchParams.set('count','8');u.searchParams.set('language','es');u.searchParams.set('format','json');
+  const r=await fetch(u,{headers:{accept:'application/json','user-agent':'CliniqOne-JARVIS/4.2'}});
+  if(!r.ok) throw new Error(`Proveedor alternativo respondió ${r.status}`);
   const data=await r.json();
-  const places=(Array.isArray(data)?data:[]).map(x=>({
-    name:x.name||String(x.display_name||'').split(',')[0]||'Lugar',
-    display_name:x.display_name||null,lat:Number(x.lat),lon:Number(x.lon),
-    type:x.type||null,category:x.category||x.class||null,address:x.address||{}
+  return (Array.isArray(data?.results)?data.results:[]).map(x=>({
+    name:x.name||'Lugar',
+    display_name:[x.name,x.admin1,x.country].filter(Boolean).join(', '),
+    lat:Number(x.latitude),lon:Number(x.longitude),
+    type:x.feature_code||null,category:'geocoding',address:{city:x.name,state:x.admin1,country:x.country},provider:'open-meteo-geocoding'
   }));
-  return {ok:true,source:'jarvis_universal_skill_runtime_v4',provider:'OpenStreetMap/Nominatim',
+}
+async function runPlacesSkill(q,ctx,draft,args={}){
+  const query=t(args.query||args.search||args.place||args.location||args.city||args.request);
+  if(!query) return {ok:false,requires_query:true,assistant_message:'¿Qué lugar o dirección desea buscar?'};
+  const key=query.toLowerCase();
+  const cached=cacheGetPlaceQuery(key);
+  if(cached) return {...cached,cached:true};
+
+  let places=null,provider='OpenStreetMap/Nominatim';
+  try{places=await fetchNominatimPlaces(query);}catch(error){
+    console.warn('[JARVIS PLACES] Nominatim error, usando fallback:',error?.message||error);
+  }
+  if(!places){
+    places=await fetchOpenMeteoPlaceFallback(query);
+    provider='Open-Meteo Geocoding (fallback)';
+  }
+  const payload={ok:true,source:'jarvis_universal_skill_runtime_v4_2',provider,
     result:{query,places,center:places[0]?{lat:places[0].lat,lon:places[0].lon}:null,skill_id:draft.id,skill_name:draft.name},
     assistant_message:places.length?`Encontré ${places.length} resultado${places.length===1?'':'s'} para “${query}”.`:`No encontré resultados para “${query}”.`};
+  cacheSetPlaceQuery(key,payload);
+  return payload;
 }
+
 function bindTemplate(value,args){
   if(typeof value!=='string') return value;
   return value.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g,(_,k)=>encodeURIComponent(t(args[k])));
