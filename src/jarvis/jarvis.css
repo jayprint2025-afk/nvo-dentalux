@@ -3237,3 +3237,27 @@ button{font:inherit;color:inherit}
 }
 .jv-module-fullscreen-body{min-height:0!important;height:100%!important;overflow:hidden!important}
 .jv-module-fullscreen .jv-wa-full{height:100%!important;max-height:none!important;border-radius:0!important}
+
+
+/* ===== JARVIS LIVE TURN-BY-TURN MAP V5.3 ===== */
+.jv-live-map-shell{position:relative!important;min-height:360px;background:#061923;overflow:hidden}
+.jv-live-map{position:absolute!important;inset:0!important;width:100%!important;height:100%!important;min-height:360px!important;background:#d9e5df}
+.jv-live-map .leaflet-container{width:100%;height:100%}
+.jv-live-map .leaflet-control-container{font-family:inherit}
+.jv-live-map .leaflet-control-zoom{margin-top:14px!important;margin-right:12px!important}
+.jv-live-map .leaflet-control-attribution{font-size:9px!important;opacity:.82}
+.jv-live-map .jv-live-route-line{stroke:#16a9ff;filter:drop-shadow(0 0 3px rgba(0,70,120,.75))}
+.jv-nav-arrow-wrap{background:transparent!important;border:0!important}
+.jv-nav-arrow{width:48px;height:48px;transform-origin:50% 50%;filter:drop-shadow(0 3px 5px rgba(0,0,0,.5));transition:transform .25s linear}
+.jv-nav-arrow svg{width:48px;height:48px;overflow:visible}
+.jv-nav-arrow path{fill:#087cff;stroke:white;stroke-width:4;stroke-linejoin:round}
+.jv-map-loading{position:absolute;z-index:12;inset:0;display:flex;align-items:center;justify-content:center;gap:10px;background:#061923;color:#9cecff;font-weight:700}
+.jv-runtime-app-places .jv-live-map-shell{position:absolute!important;inset:0!important;height:100%!important;min-height:0!important}
+.jv-runtime-app-places .jv-live-map{height:100%!important;min-height:0!important}
+.jv-runtime-app-places .leaflet-control-zoom{margin-top:92px!important}
+.jv-runtime-app-places .leaflet-control-attribution{margin-bottom:2px!important}
+.jv-runtime-app-places .jv-nav-panel{pointer-events:none}
+@media(max-width:760px){
+ .jv-runtime-app-places .leaflet-control-zoom{margin-top:82px!important;margin-right:10px!important}
+ .jv-runtime-app-places .jv-nav-panel{font-size:.95rem}
+}
