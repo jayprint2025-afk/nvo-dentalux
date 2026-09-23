@@ -708,6 +708,30 @@ export default function JarvisApp() {
     if (!card || typeof card !== 'object') card = {};
     const cfg = skill.runtime_config && typeof skill.runtime_config === 'object' ? skill.runtime_config : {};
     const type = String(card.type || cfg.type || 'skill').toLowerCase();
+
+    // Runtime V4.2: si una habilidad de lugares fue instalada con una tarjeta
+    // antigua/incompleta, el renderer universal construye su UI declarativa.
+    if (type === 'places' || type === 'map' || String(cfg.provider || '').toLowerCase().includes('openstreetmap')) {
+      const existing = Array.isArray(card.components) ? card.components : (Array.isArray(card.ui) ? card.ui : []);
+      if (!existing.length) {
+        card = {
+          ...card,
+          version: 3,
+          type: 'places',
+          title: card.title || skill.name,
+          subtitle: card.subtitle || skill.purpose || 'Busca lugares y visualízalos en el mapa.',
+          actionLabel: 'Buscar lugares',
+          layout: 'stack',
+          components: [
+            {type:'search', name:'query', label:'Buscar lugar o dirección', placeholder:'Ej. Walmart Yuma, Hospital, 123 Main St'},
+            {type:'button', label:'Buscar'},
+            {type:'map', title:'Mapa', lat_bind:'result.center.lat', lon_bind:'result.center.lon', zoom:13},
+            {type:'list', bind:'result.places', title:'Resultados'}
+          ]
+        };
+      }
+    }
+
     const rawFields = Array.isArray(card.fields) ? card.fields : [];
     const fields = rawFields.map((field:any) => typeof field === 'string'
       ? {name:field,label:field==='location'?'Ubicación':field,kind:'text',placeholder:field==='location'?'Ciudad, estado o país':''}
@@ -731,9 +755,15 @@ export default function JarvisApp() {
     setSkillRunning(true); setSkillRunError('');
     try {
       const card = parseSkillCard(skill);
-      const args: any = { id: Number(skill.id), name: skill.name, intent: skill.purpose || skill.name };
+      const args: any = { id: Number(skill.id), name: skill.name };
       card.fields.forEach((field:any)=>{ const value=skillInputs[field.name] ?? field.defaultValue ?? ''; if(String(value).trim()) args[field.name]=String(value).trim(); });
+      Object.entries(skillInputs).forEach(([key,value])=>{ if(value != null && String(value).trim()) args[key]=typeof value==='string'?value.trim():value; });
       if (card.type === 'weather') { const location=(args.location || skillLocation).trim(); args.location=location; args.city=location; }
+      if (card.type === 'places' || card.type === 'map') {
+        const query=String(args.query || args.search || args.place || args.location || '').trim();
+        if(!query) throw new Error('Escribe un lugar o dirección para buscar.');
+        args.query=query;
+      }
       const data: any = await jarvisApi<any>('/api/jarvis/actions', { method:'POST', body:JSON.stringify({name:'skill_run',arguments:args}) });
       const result = data?.result ?? data;
       if (result?.ok === false) throw new Error(result?.assistant_message || result?.error || 'No se pudo ejecutar la habilidad');
