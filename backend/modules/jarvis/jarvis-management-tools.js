@@ -548,6 +548,8 @@ async function ensureSkillBuilderTables(q){
   await q(`ALTER TABLE jarvis_skill_drafts ADD COLUMN IF NOT EXISTS installed_at TIMESTAMPTZ`);
   await q(`ALTER TABLE jarvis_skill_drafts ADD COLUMN IF NOT EXISTS installer_type TEXT`);
   await q(`ALTER TABLE jarvis_skill_drafts ADD COLUMN IF NOT EXISTS runtime_config JSONB NOT NULL DEFAULT '{}'::jsonb`);
+  await q(`ALTER TABLE jarvis_skill_drafts ADD COLUMN IF NOT EXISTS workflow_config JSONB NOT NULL DEFAULT '{}'::jsonb`);
+  await q(`ALTER TABLE jarvis_skill_drafts ADD COLUMN IF NOT EXISTS validation_report JSONB NOT NULL DEFAULT '{}'::jsonb`);
 }
 
 
@@ -555,6 +557,35 @@ function isWeatherSkillDraft(d={}){
   const haystack=[d.name,d.purpose,d.proposed_card,d.required_services,...(Array.isArray(d.proposed_tools)?d.proposed_tools:[])]
     .map(x=>t(x).toLowerCase()).join(' ');
   return /\b(clima|tiempo|weather|meteorolog|temperatura|pron[oó]stico)\b/i.test(haystack);
+}
+
+
+function skillHaystack(d={}){
+  return [d.name,d.purpose,d.proposed_card,d.required_services,
+    ...(Array.isArray(d.proposed_tools)?d.proposed_tools:[])]
+    .map(x=>typeof x==='string'?x:JSON.stringify(x||'')).join(' ').toLowerCase();
+}
+function isPlacesSkillDraft(d={}){
+  const h=skillHaystack(d);
+  return /(openstreetmap|nominatim|mapa|lugares|ubicacion|ubicación|geocod|places|map\b)/i.test(h);
+}
+function isReadOnlyWebSkillDraft(d={}){
+  const h=skillHaystack(d);
+  return /(buscar|busqueda|búsqueda|consulta|search|internet|web|api|https)/i.test(h);
+}
+function parseJsonObject(v,fallback={}){
+  if(v&&typeof v==='object'&&!Array.isArray(v)) return v;
+  if(typeof v==='string'&&v.trim()){
+    try{const x=JSON.parse(v); return x&&typeof x==='object'&&!Array.isArray(x)?x:fallback;}catch{}
+  }
+  return fallback;
+}
+function inferSafeRuntime(d={}){
+  if(isWeatherSkillDraft(d)) return {type:'weather',provider:'open-meteo',api_key_required:false};
+  if(isPlacesSkillDraft(d)) return {type:'places',provider:'openstreetmap-nominatim',api_key_required:false};
+  const wf=parseJsonObject(d.workflow_config,{});
+  if(wf && Array.isArray(wf.steps) && wf.steps.length) return {type:'declarative_v4',provider:'allowlisted_https',api_key_required:false,workflow:wf};
+  return null;
 }
 
 function applyFreeServiceFallback(d={}){
@@ -586,7 +617,8 @@ function normalizeSkillDraftArgs(args={}){
     proposed_tools:proposedTools,
     proposed_card:t(args.proposed_card||args.interface||args.card),
     required_services:t(args.required_services||args.services_required||args.services),
-    estimated_cost:t(args.estimated_cost||args.cost)||'unknown'
+    estimated_cost:t(args.estimated_cost||args.cost)||'unknown',
+    workflow_config:parseJsonObject(args.workflow_config||args.workflow||args.runtime_workflow,{})
   });
 }
 
@@ -596,10 +628,10 @@ async function createSkillDraft(q,ctx,args={}){
   if(!d.name) throw new Error('Falta el nombre de la habilidad');
   if(!d.purpose) throw new Error('Falta el propósito de la habilidad');
   const {rows}=await q(`INSERT INTO jarvis_skill_drafts
-    (tenant_id,user_id,name,purpose,proposed_tools,proposed_card,required_services,estimated_cost,status)
-    VALUES($1,$2,$3,$4,$5::jsonb,$6,$7,$8,'draft') RETURNING *`,[
+    (tenant_id,user_id,name,purpose,proposed_tools,proposed_card,required_services,estimated_cost,status,workflow_config)
+    VALUES($1,$2,$3,$4,$5::jsonb,$6,$7,$8,'draft',$9::jsonb) RETURNING *`,[
       t(ctx.tenant_id),ctx.user_id||null,d.name,d.purpose,JSON.stringify(d.proposed_tools),
-      d.proposed_card||null,d.required_services||null,d.estimated_cost
+      d.proposed_card||null,d.required_services||null,d.estimated_cost,JSON.stringify(d.workflow_config||{})
     ]);
   const draft=rows[0];
   return {ok:true,source:'jarvis_skill_builder',draft,
@@ -662,9 +694,12 @@ async function approveSkillDraft(q,ctx,args={}){
       client_event:{type:'jarvis_skill_builder_changed',draft_id:draft.id}};
   }
 
-  if(['approved','installed','active'].includes(t(draft.status).toLowerCase())){
-    return {ok:true,source:'jarvis_skill_builder',draft,already_approved:true,
-      assistant_message:`La habilidad “${draft.name}” ya estaba aprobada. La aprobación no instala ni despliega código.`};
+  if(t(draft.status).toLowerCase()==='active' || t(draft.status).toLowerCase()==='installed'){
+    return {ok:true,source:'jarvis_skill_builder',draft,already_approved:true,executable:true,
+      assistant_message:`La habilidad “${draft.name}” ya está instalada y activa.`};
+  }
+  if(t(draft.status).toLowerCase()==='approved'){
+    return installApprovedSkill(q,ctx,{id:draft.id});
   }
   if(t(draft.status).toLowerCase()==='rejected'){
     return {ok:false,source:'jarvis_skill_builder',draft,
@@ -674,9 +709,10 @@ async function approveSkillDraft(q,ctx,args={}){
   const {rows}=await q(`UPDATE jarvis_skill_drafts SET status='approved',updated_at=NOW()
     WHERE tenant_id=$1 AND (user_id=$2 OR (user_id IS NULL AND $2 IS NULL)) AND id=$3 RETURNING *`,
     [t(ctx.tenant_id),ctx.user_id||null,draft.id]);
-  return {ok:true,source:'jarvis_skill_builder',draft:rows[0],executable:false,
-    assistant_message:`Aprobación registrada para “${draft.name}”. Aún no se instaló, no se modificó código y no se desplegó nada.`,
-    client_event:{type:'jarvis_skill_builder_changed',draft_id:draft.id}};
+  const approved=rows[0];
+  const installed=await installApprovedSkill(q,ctx,{id:approved.id});
+  if(installed?.ok) return installed;
+  return {...installed,draft:approved,client_event:{type:'jarvis_skill_builder_changed',draft_id:approved.id}};
 }
 
 async function rejectSkillDraft(q,ctx,args={}){
@@ -728,18 +764,30 @@ async function installApprovedSkill(q,ctx,args={}){
   if(draft?.ambiguous) return {ok:false,requires_selection:true,skills:draft.matches,assistant_message:'Encontré varias habilidades con ese nombre. Indícame cuál deseas instalar.'};
   const status=t(draft.status).toLowerCase();
   const cost=t(draft.estimated_cost).toLowerCase();
-  if(status==='active' || status==='installed') return {ok:true,already_installed:true,skill:draft,assistant_message:`La habilidad “${draft.name}” ya está activa.`};
+  if(status==='active' || status==='installed') return {ok:true,already_installed:true,skill:draft,executable:true,assistant_message:`La habilidad “${draft.name}” ya está activa.`};
   if(status!=='approved') return {ok:false,requires_approval:true,skill:draft,assistant_message:`La habilidad “${draft.name}” todavía no está aprobada. Debe aprobarse antes de instalarla.`};
   if(cost!=='free') return {ok:false,requires_cost_confirmation:true,skill:draft,assistant_message:`No instalé “${draft.name}” porque su costo no está confirmado como gratuito.`};
-  if(!isWeatherSkillDraft(draft)) return {ok:false,unsupported_runtime:true,skill:draft,assistant_message:`“${draft.name}” está aprobada, pero Skill Installer V1 todavía no tiene un runtime seguro para ese tipo de habilidad. No modifiqué código ni desplegué nada.`};
 
-  const config={type:'weather',provider:'open-meteo',api_key_required:false,installed_by:'jarvis_skill_installer_v1'};
+  const inferred=inferSafeRuntime(draft);
+  if(!inferred){
+    const report={ok:false,reason:'no_safe_runtime_manifest',checked_at:new Date().toISOString()};
+    await q(`UPDATE jarvis_skill_drafts SET validation_report=$4::jsonb,updated_at=NOW()
+      WHERE tenant_id=$1 AND (user_id=$2 OR (user_id IS NULL AND $2 IS NULL)) AND id=$3`,
+      [t(ctx.tenant_id),ctx.user_id||null,draft.id,JSON.stringify(report)]);
+    return {ok:false,unsupported_runtime:true,skill:draft,validation_report:report,
+      assistant_message:`“${draft.name}” está aprobada, pero no contiene un workflow declarativo seguro que V4 pueda validar. No ejecuté código arbitrario.`};
+  }
+
+  const config={...inferred,installed_by:'jarvis_universal_runtime_v4'};
+  const report={ok:true,runtime:config.type,provider:config.provider,checked_at:new Date().toISOString(),
+    safety:['no_arbitrary_javascript','no_local_network','no_paid_service_auto_activation']};
   const {rows}=await q(`UPDATE jarvis_skill_drafts
-    SET status='active',installed_at=NOW(),installer_type='builtin_runtime',runtime_config=$4::jsonb,updated_at=NOW()
+    SET status='active',installed_at=NOW(),installer_type='universal_runtime_v4',
+        runtime_config=$4::jsonb,validation_report=$5::jsonb,updated_at=NOW()
     WHERE tenant_id=$1 AND (user_id=$2 OR (user_id IS NULL AND $2 IS NULL)) AND id=$3 RETURNING *`,
-    [t(ctx.tenant_id),ctx.user_id||null,draft.id,JSON.stringify(config)]);
-  return {ok:true,source:'jarvis_skill_installer',skill:rows[0],executable:true,
-    assistant_message:`Instalé y activé “${draft.name}” usando el runtime gratuito de clima. No se modificó GitHub ni Render y no se agregó ningún servicio de pago.`,
+    [t(ctx.tenant_id),ctx.user_id||null,draft.id,JSON.stringify(config),JSON.stringify(report)]);
+  return {ok:true,source:'jarvis_universal_skill_runtime_v4',skill:rows[0],executable:true,validation_report:report,
+    assistant_message:`Validé, instalé y activé “${draft.name}” con Universal Skill Runtime V4 (${config.type}).`,
     client_event:{type:'jarvis_skill_builder_changed',draft_id:draft.id}};
 }
 
@@ -773,6 +821,63 @@ async function runWeatherSkill(q,ctx,draft,args={}){
     assistant_message:`En ${place.name}${place.admin1?`, ${place.admin1}`:''}, ahora hay ${result.current.temperature_c} °C, sensación de ${result.current.feels_like_c} °C y está ${result.current.condition}. Hoy se esperan entre ${today?.min_c} y ${today?.max_c} °C, con hasta ${today?.rain_probability ?? 0}% de probabilidad de precipitación.`};
 }
 
+
+function safePublicHttpsUrl(raw){
+  let u; try{u=new URL(String(raw||''));}catch{throw new Error('URL inválida en workflow');}
+  if(u.protocol!=='https:') throw new Error('V4 solo permite HTTPS');
+  const h=u.hostname.toLowerCase();
+  if(h==='localhost'||h.endsWith('.local')||h==='0.0.0.0'||h==='127.0.0.1'||h==='::1'||
+     /^10\./.test(h)||/^192\.168\./.test(h)||/^169\.254\./.test(h)||/^172\.(1[6-9]|2\d|3[01])\./.test(h))
+    throw new Error('Destino local/privado bloqueado');
+  return u;
+}
+async function runPlacesSkill(q,ctx,draft,args={}){
+  const query=t(args.query||args.search||args.place||args.location||args.city||args.intent||args.request);
+  if(!query) return {ok:false,requires_query:true,assistant_message:'¿Qué lugar o categoría desea buscar?'};
+  const u=new URL('https://nominatim.openstreetmap.org/search');
+  u.searchParams.set('q',query); u.searchParams.set('format','jsonv2'); u.searchParams.set('addressdetails','1'); u.searchParams.set('limit','8');
+  const r=await fetch(u,{headers:{accept:'application/json','user-agent':'JARVIS-CliniqOne/4.0'}});
+  if(!r.ok) throw new Error(`Nominatim respondió ${r.status}`);
+  const data=await r.json();
+  const places=(Array.isArray(data)?data:[]).map(x=>({
+    name:x.name||String(x.display_name||'').split(',')[0]||'Lugar',
+    display_name:x.display_name||null,lat:Number(x.lat),lon:Number(x.lon),
+    type:x.type||null,category:x.category||x.class||null,address:x.address||{}
+  }));
+  return {ok:true,source:'jarvis_universal_skill_runtime_v4',provider:'OpenStreetMap/Nominatim',
+    result:{query,places,center:places[0]?{lat:places[0].lat,lon:places[0].lon}:null,skill_id:draft.id,skill_name:draft.name},
+    assistant_message:places.length?`Encontré ${places.length} resultado${places.length===1?'':'s'} para “${query}”.`:`No encontré resultados para “${query}”.`};
+}
+function bindTemplate(value,args){
+  if(typeof value!=='string') return value;
+  return value.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g,(_,k)=>encodeURIComponent(t(args[k])));
+}
+async function runDeclarativeV4(draft,args={}){
+  const cfg=draft.runtime_config&&typeof draft.runtime_config==='object'?draft.runtime_config:{};
+  const wf=cfg.workflow||parseJsonObject(draft.workflow_config,{});
+  const steps=Array.isArray(wf.steps)?wf.steps:[];
+  if(!steps.length) return {ok:false,unsupported_runtime:true,assistant_message:'La habilidad no tiene pasos declarativos ejecutables.'};
+  let last=null; const outputs=[];
+  for(const step of steps.slice(0,12)){
+    const op=t(step.op||step.type).toLowerCase();
+    if(op==='http_get_json'||op==='http_get'){
+      const raw=bindTemplate(step.url,args);
+      const u=safePublicHttpsUrl(raw);
+      const r=await fetch(u,{headers:{accept:'application/json','user-agent':'JARVIS-CliniqOne/4.0'}});
+      if(!r.ok) throw new Error(`HTTP ${r.status} en ${u.hostname}`);
+      last=await r.json(); outputs.push({op,url:u.origin+u.pathname,result:last});
+    }else if(op==='select'||op==='pick'){
+      const path=String(step.path||'').split('.').filter(Boolean);
+      let v=last; for(const p of path){v=v?.[p];}
+      last=v; outputs.push({op,path:step.path,result:last});
+    }else{
+      throw new Error(`Operación declarativa no permitida: ${op}`);
+    }
+  }
+  return {ok:true,source:'jarvis_universal_skill_runtime_v4',result:last,steps:outputs,skill_id:draft.id,skill_name:draft.name,
+    assistant_message:`Ejecuté “${draft.name}” correctamente.`};
+}
+
 async function runInstalledSkill(q,ctx,args={}){
   await ensureSkillBuilderTables(q);
   let draft=null;
@@ -790,7 +895,9 @@ async function runInstalledSkill(q,ctx,args={}){
   if(t(draft.status).toLowerCase()!=='active') return {ok:false,not_active:true,skill:draft,assistant_message:`La habilidad “${draft.name}” no está activa todavía.`};
   const cfg=draft.runtime_config&&typeof draft.runtime_config==='object'?draft.runtime_config:{};
   if(cfg.type==='weather'||isWeatherSkillDraft(draft)) return runWeatherSkill(q,ctx,draft,args);
-  return {ok:false,unsupported_runtime:true,skill:draft,assistant_message:`La habilidad “${draft.name}” está activa, pero su runtime no está disponible en Skill Installer V1.`};
+  if(cfg.type==='places'||isPlacesSkillDraft(draft)) return runPlacesSkill(q,ctx,draft,args);
+  if(cfg.type==='declarative_v4') return runDeclarativeV4(draft,args);
+  return {ok:false,unsupported_runtime:true,skill:draft,assistant_message:`La habilidad “${draft.name}” está activa, pero su runtime V4 no está disponible.`};
 }
 
 const personalHandlers={personal_create_event:createEvent,personal_create_reminder:createReminder,personal_acknowledge:acknowledge,personal_get_agenda:getAgenda,find_whatsapp_contact:findJarvisWhatsAppContact,send_whatsapp_message:sendJarvisWhatsAppMessage,jarvis_get_module_report:getJarvisModuleReport,jarvis_get_cards_report:getJarvisCardsReport,internet_search:internetSearch,internet_read_page:internetReadPage,internet_research:internetResearch,internet_get_history:internetGetHistory,skill_create_draft:createSkillDraft,skill_list_drafts:listSkillDrafts,skill_get_draft:getSkillDraft,skill_approve_draft:approveSkillDraft,skill_reject_draft:rejectSkillDraft,skill_install_approved:installApprovedSkill,skill_run:runInstalledSkill};
