@@ -117,19 +117,23 @@ export default function DynamicSkillRenderer({skill,card,result,inputs,setInputs
  const legacy=(card.fields||[]).map((f:any)=>({type:f.kind==='textarea'?'textarea':f.kind==='select'?'select':'input',...f,key:f.name,name:f.name}));
  const components=(card.components&&card.components.length?card.components:[...legacy,{type:'button',label:card.actionLabel||'Ejecutar habilidad'}]);
  React.useEffect(()=>{const fn=(e:KeyboardEvent)=>{if(e.key==='Escape'){if(fullscreen)setFullscreen(false);else onClose();}};window.addEventListener('keydown',fn);return()=>window.removeEventListener('keydown',fn)},[fullscreen,onClose]);
+ const appType=String(card.runtime_type||card.type||'skill').toLowerCase();
+ const appClass=fullscreen?`jv-runtime-app jv-runtime-app-${appType}`:'';
  return <div className={`jv-skill-card-backdrop ${fullscreen?'is-fullscreen':''}`} onPointerDown={e=>{if(!fullscreen&&e.target===e.currentTarget)onClose();}}>
-   <section className={`jv-skill-runtime-card jv-v3-runtime ${card.accent||'skills'} ${fullscreen?'jv-runtime-fullscreen':''}`}>
-    <header>
-      <div><span className="jv-skill-runtime-icon"><Zap/></span><div><small>JARVIS · DYNAMIC UI ENGINE V3</small><h2>{card.title||skill.name}</h2></div></div>
+   <section className={`jv-skill-runtime-card jv-v3-runtime ${card.accent||'skills'} ${fullscreen?'jv-runtime-fullscreen':''} ${appClass}`}>
+    <header className="jv-runtime-appbar">
+      <div><span className="jv-skill-runtime-icon"><Zap/></span><div><small>{fullscreen?'JARVIS · APP MODE':'JARVIS · DYNAMIC UI ENGINE V3'}</small><h2>{card.title||skill.name}</h2></div></div>
       <nav className="jv-runtime-window-actions">
        <button onClick={()=>setFullscreen(v=>!v)} aria-label={fullscreen?'Restaurar':'Pantalla completa'} title={fullscreen?'Restaurar':'Pantalla completa'}>{fullscreen?<Minimize2/>:<Maximize2/>}</button>
        <button onClick={onClose} aria-label="Cerrar" title="Cerrar"><X/></button>
       </nav>
     </header>
-    <p className="jv-skill-runtime-purpose">{card.subtitle||skill.purpose}</p>
-    <div className={`jv-v3-layout ${card.layout||'stack'}`}>{components.map((c:any,i:number)=><Component key={c.id||i} c={c} result={result} inputs={inputs} setInputs={setInputs} onRun={onRun} running={running}/>)}</div>
-    {error&&<div className="jv-skill-runtime-error">{error}</div>}
-    {result&&!components.some((c:any)=>c.bind||['map','metric','kpi','list','feed','table','audio','audio-player','video','video-player'].includes(String(c.type).toLowerCase()))&&<div className="jv-skill-generic-result"><small>RESULTADO</small><pre>{typeof result==='string'?result:JSON.stringify(result,null,2)}</pre></div>}
+    {!fullscreen&&<p className="jv-skill-runtime-purpose">{card.subtitle||skill.purpose}</p>}
+    <main className={`jv-runtime-appbody ${appType==='places'?'jv-runtime-places-body':''}`}>
+      <div className={`jv-v3-layout ${card.layout||'stack'}`}>{components.map((c:any,i:number)=><Component key={c.id||i} c={c} result={result} inputs={inputs} setInputs={setInputs} onRun={onRun} running={running}/>)}</div>
+      {error&&<div className="jv-skill-runtime-error">{error}</div>}
+      {result&&!components.some((c:any)=>c.bind||['map','metric','kpi','list','feed','table','audio','audio-player','video','video-player'].includes(String(c.type).toLowerCase()))&&<div className="jv-skill-generic-result"><small>RESULTADO</small><pre>{typeof result==='string'?result:JSON.stringify(result,null,2)}</pre></div>}
+    </main>
    </section>
  </div>;
 }
