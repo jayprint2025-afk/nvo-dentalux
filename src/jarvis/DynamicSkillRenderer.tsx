@@ -30,6 +30,24 @@ function instructionEs(step:any){
  if(type==='fork')return `Mantente ${dir}${road}`;
  return `${dir?'Continúa '+dir:'Continúa'}${road}`;
 }
+declare global { interface Window { L?: any; } }
+
+let leafletPromise:Promise<any>|null=null;
+function loadLeaflet(){
+ if(window.L)return Promise.resolve(window.L);
+ if(leafletPromise)return leafletPromise;
+ leafletPromise=new Promise((resolve,reject)=>{
+   if(!document.querySelector('link[data-jv-leaflet]')){
+     const css=document.createElement('link');css.rel='stylesheet';css.href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';css.setAttribute('data-jv-leaflet','1');document.head.appendChild(css);
+   }
+   const existing=document.querySelector('script[data-jv-leaflet]') as HTMLScriptElement|null;
+   if(existing){existing.addEventListener('load',()=>resolve(window.L));existing.addEventListener('error',reject);return;}
+   const js=document.createElement('script');js.src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';js.async=true;js.setAttribute('data-jv-leaflet','1');
+   js.onload=()=>resolve(window.L);js.onerror=()=>reject(new Error('No pude cargar el motor del mapa.'));
+   document.head.appendChild(js);
+ });
+ return leafletPromise;
+}
 function MapView({c,result,inputs}:{c:any,result:any;inputs:any}){
  const lat=Number(val({bind:c.lat_bind||c.latitude_bind},result,inputs) ?? c.lat ?? c.latitude);
  const lon=Number(val({bind:c.lon_bind||c.longitude_bind},result,inputs) ?? c.lon ?? c.longitude);
@@ -37,49 +55,106 @@ function MapView({c,result,inputs}:{c:any,result:any;inputs:any}){
  const [nav,setNav]=React.useState<any>(null);
  const [navError,setNavError]=React.useState('');
  const [voice,setVoice]=React.useState(true);
+ const [mapReady,setMapReady]=React.useState(false);
+ const mapEl=React.useRef<HTMLDivElement|null>(null);
+ const mapRef=React.useRef<any>(null);
+ const routeRef=React.useRef<any>(null);
+ const userRef=React.useRef<any>(null);
+ const destRef=React.useRef<any>(null);
  const watchRef=React.useRef<number|null>(null);
+ const lastSpokenRef=React.useRef(-1);
+
+ const makeArrow=(heading=0)=>{
+   const L=window.L;if(!L)return undefined;
+   return L.divIcon({className:'jv-nav-arrow-wrap',html:`<div class="jv-nav-arrow" style="transform:rotate(${Number.isFinite(heading)?heading:0}deg)"><svg viewBox="0 0 64 64" aria-hidden="true"><path d="M32 3 L54 57 L32 46 L10 57 Z"/></svg></div>`,iconSize:[48,48],iconAnchor:[24,24]});
+ };
+ const updateUser=(here:{lat:number;lon:number},heading?:number|null)=>{
+   const L=window.L,map=mapRef.current;if(!L||!map)return;
+   const h=Number.isFinite(Number(heading))?Number(heading):0;
+   if(!userRef.current) userRef.current=L.marker([here.lat,here.lon],{icon:makeArrow(h),zIndexOffset:1000}).addTo(map);
+   else {userRef.current.setLatLng([here.lat,here.lon]);userRef.current.setIcon(makeArrow(h));}
+   if(nav?.following!==false) map.panTo([here.lat,here.lon],{animate:true,duration:.5});
+ };
+ React.useEffect(()=>{
+   let dead=false;
+   loadLeaflet().then(L=>{
+     if(dead||!mapEl.current||mapRef.current)return;
+     const map=L.map(mapEl.current,{zoomControl:true,attributionControl:true,preferCanvas:true}).setView(
+       Number.isFinite(lat)&&Number.isFinite(lon)?[lat,lon]:[32.6927,-114.6277],zoom
+     );
+     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
+       maxZoom:19,attribution:'© OpenStreetMap contributors'
+     }).addTo(map);
+     mapRef.current=map;setMapReady(true);
+     setTimeout(()=>map.invalidateSize(),60);
+   }).catch((e:any)=>setNavError(e?.message||'No pude cargar el mapa interactivo.'));
+   return ()=>{dead=true;if(mapRef.current){mapRef.current.remove();mapRef.current=null;}};
+ },[]);
+ React.useEffect(()=>{
+   const L=window.L,map=mapRef.current;if(!L||!mapReady||!Number.isFinite(lat)||!Number.isFinite(lon))return;
+   if(destRef.current)destRef.current.setLatLng([lat,lon]);
+   else destRef.current=L.marker([lat,lon]).addTo(map).bindPopup(c.title||'Destino');
+   if(!nav)map.setView([lat,lon],zoom);
+ },[lat,lon,zoom,mapReady]);
  React.useEffect(()=>()=>{if(watchRef.current!=null&&navigator.geolocation)navigator.geolocation.clearWatch(watchRef.current);window.speechSynthesis?.cancel?.();},[]);
- if(!Number.isFinite(lat)||!Number.isFinite(lon)) return <div className="jv-v3-placeholder"><MapPin/><b>Mapa listo</b><span>Busca un destino para visualizarlo.</span></div>;
- const d=0.08*Math.pow(2,13-zoom); const bbox=[lon-d,lat-d,lon+d,lat+d].join('%2C');
- const src=`https://www.openstreetmap.org/export/embed.html?bbox=${bbox}&layer=mapnik&marker=${lat}%2C${lon}`;
- const stopNav=()=>{if(watchRef.current!=null)navigator.geolocation.clearWatch(watchRef.current);watchRef.current=null;setNav(null);window.speechSynthesis?.cancel?.();};
+
+ const stopNav=()=>{
+   if(watchRef.current!=null)navigator.geolocation.clearWatch(watchRef.current);watchRef.current=null;
+   if(routeRef.current){routeRef.current.remove();routeRef.current=null;}
+   if(userRef.current){userRef.current.remove();userRef.current=null;}
+   lastSpokenRef.current=-1;setNav(null);window.speechSynthesis?.cancel?.();
+   if(mapRef.current&&Number.isFinite(lat)&&Number.isFinite(lon))mapRef.current.setView([lat,lon],zoom);
+ };
  const startNav=()=>{
    setNavError('');
+   if(!Number.isFinite(lat)||!Number.isFinite(lon)){setNavError('Primero busca un destino.');return;}
    if(!navigator.geolocation){setNavError('Este dispositivo no permite obtener la ubicación.');return;}
    navigator.geolocation.getCurrentPosition(async pos=>{
      try{
        const slat=pos.coords.latitude,slon=pos.coords.longitude;
-       const url=`https://router.project-osrm.org/route/v1/driving/${slon},${slat};${lon},${lat}?steps=true&overview=false&geometries=geojson`;
+       const url=`https://router.project-osrm.org/route/v1/driving/${slon},${slat};${lon},${lat}?steps=true&overview=full&geometries=geojson`;
        const r=await fetch(url);if(!r.ok)throw new Error(`Ruta ${r.status}`);
        const data=await r.json(),route=data?.routes?.[0];
        if(!route)throw new Error('No encontré una ruta manejable.');
        const steps=(route.legs||[]).flatMap((l:any)=>l.steps||[]);
+       const coords=route?.geometry?.coordinates||[];
        const first=instructionEs(steps[0]);
-       setNav({distance:route.distance,duration:route.duration,steps,current:0,instruction:first});
-       if(voice)speak(first);
+       const L=window.L,map=mapRef.current;
+       if(L&&map&&coords.length){
+         if(routeRef.current)routeRef.current.remove();
+         const line=coords.map((xy:any)=>[Number(xy[1]),Number(xy[0])]);
+         routeRef.current=L.polyline(line,{className:'jv-live-route-line',weight:7,opacity:.92,lineCap:'round',lineJoin:'round'}).addTo(map);
+         map.fitBounds(routeRef.current.getBounds(),{padding:[42,42]});
+       }
+       updateUser({lat:slat,lon:slon},pos.coords.heading);
+       setNav({distance:route.distance,duration:route.duration,steps,current:0,instruction:first,following:true});
+       lastSpokenRef.current=0;if(voice)speak(first);
        watchRef.current=navigator.geolocation.watchPosition(p=>{
          const here={lat:p.coords.latitude,lon:p.coords.longitude};
+         updateUser(here,p.coords.heading);
          let best=0,bestD=Infinity;
-         steps.forEach((s:any,i:number)=>{const loc=s?.maneuver?.location;if(Array.isArray(loc)){const dm=distanceMeters(here,{lat:Number(loc[1]),lon:Number(loc[0])});if(dm<bestD){bestD=dm;best=i;}}});
+         steps.forEach((st:any,i:number)=>{const loc=st?.maneuver?.location;if(Array.isArray(loc)){const dm=distanceMeters(here,{lat:Number(loc[1]),lon:Number(loc[0])});if(dm<bestD){bestD=dm;best=i;}}});
          const next=Math.min(best+(bestD<45?1:0),Math.max(steps.length-1,0));
          setNav((old:any)=>{
            if(!old)return old;
-           if(next!==old.current){const ins=instructionEs(steps[next]);if(voice)speak(ins);return {...old,current:next,instruction:ins};}
-           return old;
+           const ins=instructionEs(steps[next]);
+           if(next!==lastSpokenRef.current&&voice){lastSpokenRef.current=next;speak(ins);}
+           return {...old,current:next,instruction:ins,lastAccuracy:p.coords.accuracy};
          });
-       },()=>{}, {enableHighAccuracy:true,maximumAge:3000,timeout:12000});
+       },e=>setNavError(e.code===1?'Se perdió el permiso de ubicación.':'No pude actualizar tu ubicación.'),{enableHighAccuracy:true,maximumAge:1000,timeout:12000});
      }catch(e:any){setNavError(e?.message||'No pude calcular la ruta.');}
    },e=>setNavError(e.code===1?'Permite el acceso a tu ubicación para iniciar la navegación.':'No pude obtener tu ubicación.'),{enableHighAccuracy:true,timeout:12000});
  };
- return <div className="jv-v3-map-shell">
-   <div className="jv-v3-map"><iframe title={c.title||'Mapa'} src={src} loading="lazy" referrerPolicy="no-referrer"/><small>© OpenStreetMap contributors</small></div>
+ return <div className="jv-v3-map-shell jv-live-map-shell">
+   <div className="jv-v3-map jv-live-map" ref={mapEl}/>
+   {!mapReady&&<div className="jv-map-loading"><Navigation/><span>Cargando mapa interactivo…</span></div>}
    <div className="jv-nav-actions">
      {!nav?<button type="button" onClick={startNav}><Navigation/>Cómo llegar desde mi ubicación</button>:<>
        <button type="button" onClick={()=>{setVoice(v=>{if(v)window.speechSynthesis?.cancel?.();else if(nav?.instruction)speak(nav.instruction);return !v;});}}>{voice?<Volume2/>:<VolumeX/>}{voice?'Voz activada':'Voz desactivada'}</button>
        <button type="button" onClick={stopNav}><X/>Terminar ruta</button>
      </>}
    </div>
-   {nav&&<div className="jv-nav-panel"><div><Navigation/><strong>{nav.instruction}</strong></div><span>{(nav.distance/1609.344).toFixed(1)} mi · {Math.max(1,Math.round(nav.duration/60))} min aprox.</span><small>La guía usa tu GPS mientras esta pantalla permanezca abierta.</small></div>}
+   {nav&&<div className="jv-nav-panel"><div><Navigation/><strong>{nav.instruction}</strong></div><span>{(nav.distance/1609.344).toFixed(1)} mi · {Math.max(1,Math.round(nav.duration/60))} min aprox.</span><small>La flecha azul sigue tu GPS sobre la ruta mientras esta pantalla permanezca abierta.</small></div>}
    {navError&&<div className="jv-skill-runtime-error">{navError}</div>}
  </div>;
 }
