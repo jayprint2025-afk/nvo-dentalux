@@ -3150,3 +3150,90 @@ button{font:inherit;color:inherit}
  .jv-runtime-window-actions{gap:5px}
  .jv-runtime-window-actions button{width:38px!important;height:38px!important}
 }
+
+
+/* ===== JARVIS APP MODE V5.2 — FULLSCREEN IS AN APPLICATION, NOT A BIG CARD ===== */
+.jv-runtime-fullscreen.jv-runtime-app{
+ position:fixed!important;inset:0!important;z-index:10050!important;
+ width:100vw!important;height:100dvh!important;max-width:none!important;max-height:none!important;
+ margin:0!important;padding:0!important;border:0!important;border-radius:0!important;
+ background:#00131f!important;box-shadow:none!important;overflow:hidden!important;
+ display:grid!important;grid-template-rows:auto minmax(0,1fr)!important;
+}
+.jv-runtime-app .jv-runtime-appbar{
+ min-height:64px;padding:max(10px,env(safe-area-inset-top)) max(14px,env(safe-area-inset-right)) 10px max(14px,env(safe-area-inset-left));
+ background:linear-gradient(180deg,rgba(0,27,42,.98),rgba(0,20,33,.94));
+ border-bottom:1px solid rgba(95,231,255,.28);backdrop-filter:blur(18px);z-index:40;
+}
+.jv-runtime-app .jv-runtime-appbar h2{font-size:clamp(18px,2.5vw,24px);margin:1px 0 0}
+.jv-runtime-app .jv-runtime-appbar small{font-size:10px;letter-spacing:.18em}
+.jv-runtime-app .jv-runtime-appbody{min-height:0;overflow:auto;padding:16px;box-sizing:border-box}
+.jv-runtime-app .jv-v3-layout{width:100%!important;max-width:none!important;margin:0!important}
+
+/* Places / navigation behaves like a map application */
+.jv-runtime-app-places .jv-runtime-appbody{padding:0!important;overflow:hidden!important;position:relative}
+.jv-runtime-app-places .jv-v3-layout{height:100%;display:flex!important;flex-direction:column!important;position:relative}
+.jv-runtime-app-places .jv-v3-field,
+.jv-runtime-app-places .jv-v3-search{
+ position:absolute!important;z-index:25;top:14px;left:14px;right:92px;margin:0!important;
+ background:rgba(0,20,31,.94)!important;border:1px solid rgba(112,234,255,.46)!important;
+ border-radius:18px!important;box-shadow:0 12px 35px rgba(0,0,0,.38)!important;
+ backdrop-filter:blur(18px);padding:7px 12px!important;
+}
+.jv-runtime-app-places .jv-v3-field label,
+.jv-runtime-app-places .jv-v3-search label{display:none!important}
+.jv-runtime-app-places .jv-v3-field input,
+.jv-runtime-app-places .jv-v3-search input{
+ min-height:50px!important;border:0!important;background:transparent!important;font-size:17px!important;padding:0 8px!important
+}
+.jv-runtime-app-places .jv-v3-layout>.jv-v3-action{
+ position:absolute!important;z-index:26;top:14px;right:14px;width:66px!important;height:66px!important;
+ min-height:66px!important;margin:0!important;border-radius:18px!important;padding:0!important;font-size:0!important;
+ box-shadow:0 12px 35px rgba(0,0,0,.38)!important;
+}
+.jv-runtime-app-places .jv-v3-layout>.jv-v3-action svg{width:27px!important;height:27px!important;margin:0!important}
+.jv-runtime-app-places .jv-v3-map-shell{height:100%!important;min-height:0!important;display:block!important;position:relative!important}
+.jv-runtime-app-places .jv-v3-map{
+ position:absolute!important;inset:0!important;height:100%!important;border:0!important;border-radius:0!important;margin:0!important;
+}
+.jv-runtime-app-places .jv-v3-map iframe{width:100%!important;height:100%!important;min-height:100%!important;border:0!important;border-radius:0!important}
+.jv-runtime-app-places .jv-v3-map>small{
+ position:absolute;left:8px;bottom:8px;z-index:4;background:rgba(0,15,24,.72);padding:4px 7px;border-radius:8px;font-size:10px
+}
+.jv-runtime-app-places .jv-nav-actions{
+ position:absolute!important;z-index:30;right:14px;bottom:max(20px,env(safe-area-inset-bottom));left:14px;
+ display:flex!important;gap:8px!important;pointer-events:none;
+}
+.jv-runtime-app-places .jv-nav-actions button{
+ pointer-events:auto;min-height:54px!important;flex:1 1 auto!important;border-radius:18px!important;
+ background:rgba(0,86,108,.96)!important;box-shadow:0 10px 30px rgba(0,0,0,.42)!important;
+}
+.jv-runtime-app-places .jv-nav-panel{
+ position:absolute!important;z-index:31;left:14px;right:14px;top:92px;margin:0!important;
+ background:rgba(0,24,37,.95)!important;backdrop-filter:blur(18px);border-radius:18px!important;
+ box-shadow:0 12px 34px rgba(0,0,0,.42)!important;
+}
+.jv-runtime-app-places .jv-skill-runtime-error{position:absolute;z-index:35;left:14px;right:14px;bottom:88px}
+.jv-runtime-app-places .jv-v3-list,
+.jv-runtime-app-places .jv-v3-table,
+.jv-runtime-app-places .jv-v3-feed{
+ position:absolute!important;z-index:20;left:14px;right:14px;bottom:86px;max-height:32dvh;overflow:auto;
+ background:rgba(0,22,34,.94)!important;border-radius:18px!important;box-shadow:0 12px 34px rgba(0,0,0,.4)!important;
+}
+@media(max-width:760px){
+ .jv-runtime-app .jv-runtime-appbar{min-height:58px}
+ .jv-runtime-app .jv-runtime-appbar .jv-skill-runtime-icon{display:none}
+ .jv-runtime-app-places .jv-v3-field,.jv-runtime-app-places .jv-v3-search{left:10px;right:76px;top:10px}
+ .jv-runtime-app-places .jv-v3-layout>.jv-v3-action{right:10px;top:10px;width:58px!important;height:58px!important;min-height:58px!important}
+ .jv-runtime-app-places .jv-nav-panel{left:10px;right:10px;top:78px}
+ .jv-runtime-app-places .jv-nav-actions{left:10px;right:10px;bottom:max(10px,env(safe-area-inset-bottom))}
+}
+
+/* Existing native modules (WhatsApp etc.) also use the whole viewport when maximized. */
+.jv-module-fullscreen{
+ position:fixed!important;inset:0!important;z-index:10040!important;width:100vw!important;height:100dvh!important;
+ max-width:none!important;max-height:none!important;margin:0!important;border-radius:0!important;
+ display:grid!important;grid-template-rows:auto minmax(0,1fr)!important;overflow:hidden!important;
+}
+.jv-module-fullscreen-body{min-height:0!important;height:100%!important;overflow:hidden!important}
+.jv-module-fullscreen .jv-wa-full{height:100%!important;max-height:none!important;border-radius:0!important}
