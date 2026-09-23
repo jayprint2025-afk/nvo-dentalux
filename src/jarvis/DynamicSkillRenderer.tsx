@@ -75,7 +75,7 @@ function MapView({c,result,inputs}:{c:any,result:any;inputs:any}){
    <div className="jv-v3-map"><iframe title={c.title||'Mapa'} src={src} loading="lazy" referrerPolicy="no-referrer"/><small>© OpenStreetMap contributors</small></div>
    <div className="jv-nav-actions">
      {!nav?<button type="button" onClick={startNav}><Navigation/>Cómo llegar desde mi ubicación</button>:<>
-       <button type="button" onClick={()=>{setVoice(v=>{if(v)window.speechSynthesis?.cancel?.();else if(nav?.instruction)speak(nav.instruction);return !v;})}>{voice?<Volume2/>:<VolumeX/>}{voice?'Voz activada':'Voz desactivada'}</button>
+       <button type="button" onClick={()=>{setVoice(v=>{if(v)window.speechSynthesis?.cancel?.();else if(nav?.instruction)speak(nav.instruction);return !v;});}}>{voice?<Volume2/>:<VolumeX/>}{voice?'Voz activada':'Voz desactivada'}</button>
        <button type="button" onClick={stopNav}><X/>Terminar ruta</button>
      </>}
    </div>
