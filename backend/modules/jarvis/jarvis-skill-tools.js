@@ -4,14 +4,14 @@ const skillTools = [
   {
     type:'function',
     name:'skill_create_draft',
-    description:'Crea SOLO una propuesta/borrador de una nueva habilidad o tarjeta para JARVIS. Diseña también su interfaz declarativa completa para Dynamic UI Engine V3 usando proposed_card cuando la habilidad necesite UI. No inventes integraciones: la interfaz puede existir, pero datos/acciones requieren un runtime real.  NO instala, NO modifica código, NO hace commit, NO hace push y NO despliega. Prioriza capacidades existentes, fuentes gratuitas y costo cero. Si detecta un servicio de pago debe declararlo en estimated_cost/required_services.',
+    description:'Crea SOLO una propuesta/borrador de una nueva habilidad o tarjeta para JARVIS. NO instala, NO modifica código, NO hace commit, NO hace push y NO despliega. Prioriza capacidades existentes, fuentes gratuitas y costo cero. Si detecta un servicio de pago debe declararlo en estimated_cost/required_services.',
     parameters:{
       type:'object',
       properties:{
         name:{type:'string',description:'Nombre corto de la habilidad'},
         request:{type:'string',description:'Petición original o descripción precisa de lo que debe poder hacer'},
         purpose:{type:'string',description:'Objetivo y beneficio de la habilidad'},
-        proposed_card:{type:'object',description:'Manifest declarativo Dynamic UI Engine V3. NO JavaScript/HTML arbitrario. Preferir {version:3,title,subtitle,layout,components:[...]}. Componentes soportados: stack,row,grid,section,panel,group,tabs,input,text-input,search,number,date,time,email,url,textarea,select,toggle,checkbox,button,action,text,heading,badge,metric,kpi,progress,meter,list,feed,playlist,timeline,cards,table,image,gallery-image,audio,audio-player,video,video-player,player-controls,map,link,external-link. Los componentes pueden usar bind como result.current.temperature_c o result.items. Para map usar lat_bind/lon_bind o lat/lon. Para multimedia usar src o bind. Diseña la interfaz completa de la habilidad usando estos bloques reutilizables.'},
+        proposed_card:{type:'object',description:'Propuesta de tarjeta/UI; solo diseño lógico, no código ejecutable'},
         proposed_tools:{type:'array',items:{type:'object'},description:'Herramientas/acciones que harían falta'},
         required_services:{type:'array',items:{type:['string','object']},description:'Servicios, APIs o fuentes requeridas. Indicar si son existentes/gratuitas/de pago.'},
         estimated_cost:{type:'string',enum:['free','unknown','paid'],description:'free si no agrega costo; unknown si debe verificarse; paid si requiere pago'},
