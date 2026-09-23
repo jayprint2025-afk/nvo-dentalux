@@ -3261,3 +3261,73 @@ button{font:inherit;color:inherit}
  .jv-runtime-app-places .leaflet-control-zoom{margin-top:82px!important;margin-right:10px!important}
  .jv-runtime-app-places .jv-nav-panel{font-size:.95rem}
 }
+
+/* ===== JARVIS MAP FOLLOW + LAYER ISOLATION V5.4 ===== */
+/* Fullscreen app must be an opaque isolated top layer so dashboard/ads never bleed through Leaflet zoom. */
+.jv-skill-card-backdrop.is-fullscreen{
+ position:fixed!important;
+ inset:0!important;
+ width:100vw!important;
+ height:100dvh!important;
+ z-index:2147483000!important;
+ overflow:hidden!important;
+ isolation:isolate!important;
+ contain:paint!important;
+ background:#00131f!important;
+ opacity:1!important;
+}
+.jv-runtime-fullscreen.jv-runtime-app{
+ z-index:2147483001!important;
+ isolation:isolate!important;
+ contain:layout paint!important;
+ background:#00131f!important;
+ opacity:1!important;
+}
+.jv-runtime-app-places .jv-runtime-appbody,
+.jv-runtime-app-places .jv-v3-layout,
+.jv-runtime-app-places .jv-live-map-shell{
+ background:#d9e5df!important;
+ opacity:1!important;
+ isolation:isolate!important;
+ overflow:hidden!important;
+}
+.jv-runtime-app-places .jv-live-map{
+ z-index:1!important;
+ background:#d9e5df!important;
+ overflow:hidden!important;
+ transform:translateZ(0);
+ backface-visibility:hidden;
+}
+.jv-runtime-app-places .leaflet-container{
+ position:absolute!important;
+ inset:0!important;
+ z-index:1!important;
+ background:#d9e5df!important;
+ overflow:hidden!important;
+ transform:translateZ(0);
+}
+.jv-runtime-app-places .leaflet-map-pane,
+.jv-runtime-app-places .leaflet-tile-pane{
+ z-index:200!important;
+}
+.jv-runtime-app-places .leaflet-overlay-pane{z-index:400!important}
+.jv-runtime-app-places .leaflet-marker-pane{z-index:600!important}
+.jv-runtime-app-places .leaflet-tooltip-pane{z-index:650!important}
+.jv-runtime-app-places .leaflet-popup-pane{z-index:700!important}
+.jv-runtime-app-places .leaflet-control-container{position:relative!important;z-index:900!important}
+.jv-runtime-app-places .jv-runtime-appbar{position:relative!important;z-index:1200!important}
+.jv-runtime-app-places .jv-v3-field,
+.jv-runtime-app-places .jv-v3-search,
+.jv-runtime-app-places .jv-v3-layout>.jv-v3-action{z-index:1100!important}
+.jv-runtime-app-places .jv-nav-panel{z-index:1150!important}
+.jv-runtime-app-places .jv-nav-actions{z-index:1160!important}
+.jv-nav-center.is-following{
+ border-color:rgba(89,235,255,.95)!important;
+ box-shadow:0 0 0 2px rgba(20,190,230,.14),0 10px 30px rgba(0,0,0,.42)!important;
+}
+.jv-nav-center svg{width:20px!important;height:20px!important}
+@media(max-width:760px){
+ .jv-runtime-app-places .jv-nav-actions{gap:6px!important}
+ .jv-runtime-app-places .jv-nav-actions button{min-width:0!important;padding:0 10px!important;font-size:12px!important}
+}
+
