@@ -11,7 +11,7 @@ const skillTools = [
         name:{type:'string',description:'Nombre corto de la habilidad'},
         request:{type:'string',description:'Petición original o descripción precisa de lo que debe poder hacer'},
         purpose:{type:'string',description:'Objetivo y beneficio de la habilidad'},
-        proposed_card:{type:'object',description:'Propuesta de tarjeta/UI; solo diseño lógico, no código ejecutable'},
+        proposed_card:{type:'object',description:'Contrato UI declarativo de la habilidad. Debe diseñarse en dos modos: compact (tarjeta pequeña) y app/fullscreen (aplicación profesional de pantalla completa). En fullscreen las funciones principales deben usar el viewport completo y no quedar encerradas dentro de una tarjeta grande. Incluye version, type/runtime_type, title, subtitle, components, compact_mode y fullscreen_mode cuando aplique. Solo diseño lógico; no código ejecutable.'},
         proposed_tools:{type:'array',items:{type:'object'},description:'Herramientas/acciones que harían falta'},
         required_services:{type:'array',items:{type:['string','object']},description:'Servicios, APIs o fuentes requeridas. Indicar si son existentes/gratuitas/de pago.'},
         estimated_cost:{type:'string',enum:['free','unknown','paid'],description:'free si no agrega costo; unknown si debe verificarse; paid si requiere pago'},
