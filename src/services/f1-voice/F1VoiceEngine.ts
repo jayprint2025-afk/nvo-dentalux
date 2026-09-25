@@ -103,45 +103,98 @@ this.core = new EngineBuilder()
     await this.core.dispose();
   }
 
-  private bindEvents(): void {
-    this.core.on("statechange", ({ current }) => {
-      this.options.onStatus?.(this.mapStatus(current));
-    });
+private bindEvents(): void {
+  this.core.on("statechange", ({ current }) => {
+    this.options.onStatus?.(this.mapStatus(current));
+  });
 
-    this.core.on("score", ({ score, threshold, detected }) => {
-      console.debug("[F1 Voice Engine]", {
-        score: Number(score.toFixed(3)),
-        threshold,
-        detected,
-      });
+  this.core.on("score", ({ score, threshold, detected }) => {
+    console.debug("[F1 Voice Engine]", {
+      score: Number(score.toFixed(3)),
+      threshold,
+      detected,
     });
+  });
 
-    this.core.on("wake", ({ score, timestampMs, audioWindow, sampleRate }) => {
-      const event: F1WakeEvent = {
-        phrase: this.options.phrase || "Hanna",
-        confidence: score,
-        detectedAt: timestampMs,
-        audioWindow,
-        sampleRate,
+  this.core.on("wake", ({ score, timestampMs, audioWindow, sampleRate }) => {
+    // Hanna fue reconocida: reproducir aviso ANTES de activar F1.
+    try {
+      const AudioCtx =
+        window.AudioContext ||
+        (window as any).webkitAudioContext;
+
+      const ctx = new AudioCtx();
+
+      const playTone = (
+        frequency: number,
+        start: number,
+        duration: number,
+      ) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+
+        osc.type = "sine";
+        osc.frequency.value = frequency;
+
+        gain.gain.setValueAtTime(0.0001, start);
+        gain.gain.exponentialRampToValueAtTime(
+          0.16,
+          start + 0.02,
+        );
+        gain.gain.exponentialRampToValueAtTime(
+          0.0001,
+          start + duration,
+        );
+
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+
+        osc.start(start);
+        osc.stop(start + duration);
       };
 
-      this.options.onWake?.(event);
-    });
+      const now = ctx.currentTime;
 
-    this.core.on("diagnostics", (d) => {
-      console.log(
-        "[HANNA DIAG]",
-        "frames=" + d.framesReceived,
-        "speech=" + d.speechFrames,
-        "inferences=" + d.inferenceCount,
-        "wakes=" + d.wakeCount,
-        "errors=" + d.processingErrors
+      // Ding-dong estilo aviso de cabina.
+      playTone(880, now, 0.22);
+      playTone(660, now + 0.25, 0.30);
+
+      setTimeout(() => {
+        void ctx.close();
+      }, 900);
+    } catch (error) {
+      console.warn(
+        "[HANNA] No se pudo reproducir el aviso:",
+        error,
       );
-    });
-    this.core.on("error", ({ message }) => {
-      this.options.onStatus?.("error", message);
-    });
-  }
+    }
+
+    const event: F1WakeEvent = {
+      phrase: this.options.phrase || "Hanna",
+      confidence: score,
+      detectedAt: timestampMs,
+      audioWindow,
+      sampleRate,
+    };
+
+    this.options.onWake?.(event);
+  });
+
+  this.core.on("diagnostics", (d) => {
+    console.log(
+      "[HANNA DIAG]",
+      "frames=" + d.framesReceived,
+      "speech=" + d.speechFrames,
+      "inferences=" + d.inferenceCount,
+      "wakes=" + d.wakeCount,
+      "errors=" + d.processingErrors,
+    );
+  });
+
+  this.core.on("error", ({ message }) => {
+    this.options.onStatus?.("error", message);
+  });
+}
 
   private mapStatus(state: F1VoiceEngineState): F1VoiceEngineStatus {
     switch (state) {
