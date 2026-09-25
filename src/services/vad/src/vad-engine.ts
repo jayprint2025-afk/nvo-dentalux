@@ -1,4 +1,4 @@
-import { TypedEventBus, type EventListener, type Unsubscribe } from "./events/typed-event-bus.js";
+﻿import { TypedEventBus, type EventListener, type Unsubscribe } from "./events/typed-event-bus.js";
 import { PcmFeatureExtractor, type FeatureExtractor } from "./features/pcm-feature-extractor.js";
 import { AdaptiveNoiseFloor } from "./noise/adaptive-noise-floor.js";
 import { AdaptiveEnergyPolicy, type DecisionPolicy } from "./policy/adaptive-energy-policy.js";
@@ -19,7 +19,7 @@ interface ResolvedVadConfig {
 }
 
 const DEFAULTS: ResolvedVadConfig = {
-  speechThresholdDb: 10,
+  speechThresholdDb: 6,
   minimumThresholdDbfs: -50,
   initialNoiseFloorDbfs: -60,
   noiseFloorAdaptation: 0.05,
@@ -136,3 +136,4 @@ function validateFrame(frame: VadFrame): void {
   if (!Number.isFinite(frame.sampleRate) || frame.sampleRate <= 0) throw new RangeError("sampleRate must be positive.");
   if (!Number.isFinite(frame.durationMs) || frame.durationMs <= 0) throw new RangeError("durationMs must be positive.");
 }
+
