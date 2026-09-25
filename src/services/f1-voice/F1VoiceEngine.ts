@@ -38,27 +38,32 @@ export class F1VoiceEngine {
     const cooldownMs = Number(options.cooldownMs ?? 5000);
     const cooldownFrames = Math.max(1, Math.ceil(cooldownMs / 80));
 
-    this.core = new EngineBuilder()
-      .withWakeModel(wakeModel)
-      .withConfig({
-        diagnostics: true,
-        wakeDetector: {
-          featureBands: 40,
-          windowFrames: 20,
-          expectedSampleRate: 16000,
-          preEmphasis: 0.97,
-          detectionThreshold: Math.max(
-            0.10,
-            Math.min(Number(options.threshold ?? DEFAULT_WAKE_THRESHOLD), 0.9),
-          ),
-          consecutiveHits: Math.max(
-            1,
-            Math.min(Math.round(Number(options.consecutiveHits ?? 2)), 4),
-          ),
-          cooldownFrames,
-        },
-      })
-      .build();
+this.core = new EngineBuilder()
+  .withWakeModel(wakeModel)
+  .withConfig({
+    diagnostics: true,
+    wakeDetector: {
+      featureBands: 40,
+      windowFrames: 20,
+      expectedSampleRate: 16000,
+      preEmphasis: 0.97,
+
+      preRollFrames: 10,
+      vadGraceFrames: 10,
+      maxSilentFramesBeforeReset: 12,
+
+      detectionThreshold: Math.max(
+        0.10,
+        Math.min(Number(options.threshold ?? DEFAULT_WAKE_THRESHOLD), 0.9),
+      ),
+      consecutiveHits: Math.max(
+        1,
+        Math.min(Math.round(Number(options.consecutiveHits ?? 2)), 4),
+      ),
+      cooldownFrames,
+    },
+  })
+  .build();
 
     this.bindEvents();
   }
