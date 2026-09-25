@@ -1701,43 +1701,6 @@ const buildLeadReport = React.useCallback(() => {
             setLastWakeIdentity(`Hana verificada: ${heard.slice(0, 60)}`);
             wakeVerificationCooldownUntilRef.current = Date.now() + 1800;
 
-            // Aviso sonoro SOLO despues de que /f1/wake/verify confirmo "Hana".
-            // Un unico DING agudo, sostenido y limpio, antes de continuar con Owner Lock.
-            try {
-              const AudioCtx =
-                window.AudioContext ||
-                (window as any).webkitAudioContext;
-
-              const ctx = new AudioCtx();
-
-              if (ctx.state === "suspended") {
-                await ctx.resume();
-              }
-
-              const osc = ctx.createOscillator();
-              const gain = ctx.createGain();
-              const now = ctx.currentTime;
-
-              osc.type = "sine";
-              osc.frequency.setValueAtTime(1950, now);
-
-              gain.gain.setValueAtTime(0.0001, now);
-              gain.gain.exponentialRampToValueAtTime(0.30, now + 0.012);
-              gain.gain.exponentialRampToValueAtTime(0.25, now + 1.15);
-              gain.gain.exponentialRampToValueAtTime(0.0001, now + 2.15);
-
-              osc.connect(gain);
-              gain.connect(ctx.destination);
-
-              osc.start(now);
-              osc.stop(now + 2.15);
-
-              window.setTimeout(() => {
-                void ctx.close();
-              }, 2400);
-            } catch (error) {
-              console.warn("[HANNA] No se pudo reproducir el aviso:", error);
-            }
             // V18.2: la verificaciÃ³n lÃ©xica NO abre Realtime por la ruta manual.
             // La misma muestra que dijo â€œHanaâ€ debe pasar ahora por Owner Lock.
             // Forzamos confidence=1 porque /wake/verify ya autorizÃ³ la palabra;
