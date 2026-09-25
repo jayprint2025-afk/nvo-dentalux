@@ -1,4 +1,4 @@
-import {
+﻿import {
   EngineBuilder,
   type F1VoiceEngine as CoreF1VoiceEngine,
   type F1VoiceEngineState,
@@ -41,7 +41,7 @@ export class F1VoiceEngine {
     this.core = new EngineBuilder()
       .withWakeModel(wakeModel)
       .withConfig({
-        diagnostics: false,
+        diagnostics: true,
         wakeDetector: {
           featureBands: 40,
           windowFrames: 20,
@@ -123,6 +123,16 @@ export class F1VoiceEngine {
       this.options.onWake?.(event);
     });
 
+    this.core.on("diagnostics", (d) => {
+      console.log(
+        "[HANNA DIAG]",
+        "frames=" + d.framesReceived,
+        "speech=" + d.speechFrames,
+        "inferences=" + d.inferenceCount,
+        "wakes=" + d.wakeCount,
+        "errors=" + d.processingErrors
+      );
+    });
     this.core.on("error", ({ message }) => {
       this.options.onStatus?.("error", message);
     });
@@ -145,3 +155,4 @@ export class F1VoiceEngine {
     }
   }
 }
+
