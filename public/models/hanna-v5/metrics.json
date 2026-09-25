@@ -1,0 +1,25 @@
+{
+  "version": "0.5.0-mel-v5",
+  "threshold": 0.8499999999999996,
+  "validation": {
+    "roc_auc": 0.8909090909090909,
+    "tn": 11,
+    "fp": 0,
+    "fn": 2,
+    "tp": 8,
+    "recall": 0.8,
+    "false_accept_rate": 0.0,
+    "accuracy": 0.9047619047619048
+  },
+  "test": {
+    "roc_auc": 0.6703296703296704,
+    "tn": 13,
+    "fp": 1,
+    "fn": 10,
+    "tp": 3,
+    "recall": 0.23076923076923078,
+    "false_accept_rate": 0.07142857142857142,
+    "accuracy": 0.5925925925925926
+  },
+  "deployment_gate": "REVIEW"
+}

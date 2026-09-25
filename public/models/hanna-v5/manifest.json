@@ -1,0 +1,31 @@
+{
+  "id": "hanna",
+  "version": "0.5.0-mel-v5",
+  "format": "onnx",
+  "sampleRate": 16000,
+  "frameDurationMs": 80,
+  "frameSamples": 1280,
+  "windowFrames": 20,
+  "featureBands": 40,
+  "featureSize": 42,
+  "featureExtractor": "mel-v1",
+  "nFft": 2048,
+  "fMin": 80,
+  "fMax": 7600,
+  "preEmphasis": 0.97,
+  "inputName": "features",
+  "inputShape": [
+    1,
+    20,
+    42
+  ],
+  "outputName": "score",
+  "outputShape": [
+    1,
+    1
+  ],
+  "threshold": 0.8499999999999996,
+  "sha256": "42522015f45f13a36e32e63b04c3bb3a784fa84f902d7923563091a0b1d6fe06",
+  "status": "review",
+  "warning": "V5 provisional: validar en dispositivo real antes de producci\u00f3n permanente."
+}

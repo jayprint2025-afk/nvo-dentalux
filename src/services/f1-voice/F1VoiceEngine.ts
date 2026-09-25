@@ -11,8 +11,8 @@ import type {
   F1WakeEvent,
 } from "./types";
 
-const DEFAULT_MODEL_ROOT = "/models/hola-f1";
-const DEFAULT_WAKE_THRESHOLD = 0.55;
+const DEFAULT_MODEL_ROOT = "/models/hanna-v5";
+const DEFAULT_WAKE_THRESHOLD = 0.30;
 
 export class F1VoiceEngine {
   private readonly options: F1VoiceEngineOptions;
@@ -24,14 +24,14 @@ export class F1VoiceEngine {
 
     const configuredModelUrl = String(options.modelUrl || "").trim();
     const modelRoot = configuredModelUrl
-      ? configuredModelUrl.replace(/\/hola-f1\.onnx(?:\?.*)?$/, "")
+      ? configuredModelUrl.replace(/\/hanna\.onnx(?:\?.*)?$/, "")
       : DEFAULT_MODEL_ROOT;
 
     const wakeModel = new OnnxWakeModel({
-      modelUrl: `${modelRoot}/hola-f1.onnx`,
+      modelUrl: `${modelRoot}/hanna.onnx`,
       manifestUrl: `${modelRoot}/manifest.json`,
-      externalDataUrl: `${modelRoot}/hola-f1.onnx.data`,
-      externalDataPath: "hola-f1.onnx.data",
+      externalDataUrl: `${modelRoot}/hanna.onnx.data`,
+      externalDataPath: "hanna.onnx.data",
       executionProviders: ["wasm"],
     });
 
@@ -43,12 +43,12 @@ export class F1VoiceEngine {
       .withConfig({
         diagnostics: false,
         wakeDetector: {
-          featureBands: 16,
-          windowFrames: 12,
+          featureBands: 40,
+          windowFrames: 20,
           expectedSampleRate: 16000,
           preEmphasis: 0.97,
           detectionThreshold: Math.max(
-            0.45,
+            0.10,
             Math.min(Number(options.threshold ?? DEFAULT_WAKE_THRESHOLD), 0.9),
           ),
           consecutiveHits: Math.max(
@@ -113,7 +113,7 @@ export class F1VoiceEngine {
 
     this.core.on("wake", ({ score, timestampMs, audioWindow, sampleRate }) => {
       const event: F1WakeEvent = {
-        phrase: this.options.phrase || "Hola F1",
+        phrase: this.options.phrase || "Hanna",
         confidence: score,
         detectedAt: timestampMs,
         audioWindow,
