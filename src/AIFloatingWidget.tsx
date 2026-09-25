@@ -1,4 +1,4 @@
-import React from "react";
+﻿import React from "react";
 import { MessagesSquare, Send, X, Trash2, Mic, MicOff, Bell, CalendarDays, Volume2, Settings2,
   Search, Filter, Lock, Unlock, MessageCircle, Instagram, RefreshCw, User, Inbox } from "lucide-react";
 import { api } from "./lib/api";
@@ -13,12 +13,12 @@ import {
 
 /**
  * AIFloatingWidget
- * - Robot flotante 3D (draggable) que actúa como botón (sin círculo/CTA extra)
- * - Panel de chat con pestañas: Conversaciones | Responder | Ventas
+ * - Robot flotante 3D (draggable) que actÃºa como botÃ³n (sin cÃ­rculo/CTA extra)
+ * - Panel de chat con pestaÃ±as: Conversaciones | Responder | Ventas
  * - Polling ligero para ver mensajes en tiempo real (WhatsApp/web)
  *
  * Requiere en FRONTEND:
- *  - Colocar el robot en /public/robot-ia.png  (sin compresión, tal cual)
+ *  - Colocar el robot en /public/robot-ia.png  (sin compresiÃ³n, tal cual)
  *
  * Backend:
  *  - GET  /api/ai/conversations
@@ -84,14 +84,14 @@ type F1WakeSettings = {
 
 const LEGACY_F1_WAKE_SETTINGS_KEYS = ["f1_wake_settings_v2", "f1_wake_settings_v3", "f1_wake_settings_v4"] as const;
 const F1_WAKE_SETTINGS_KEY = "f1_wake_settings_v6_hana";
-// V14: el detector local es solo PREFILTRO DE VOZ. La activación final exige
+// V14: el detector local es solo PREFILTRO DE VOZ. La activaciÃ³n final exige
 // que el backend transcriba exactamente la palabra "Hana" al inicio.
 // El modelo ONNX anterior ya no decide la palabra clave.
 const F1_MIN_WAKE_CONFIDENCE = 0.0;
 const F1_MAX_WAKE_THRESHOLD = 0.20;
 const DEFAULT_F1_WAKE_SETTINGS: F1WakeSettings = {
   // V14: el ONNX deja de autorizar la palabra clave. Solo genera candidatos
-  // cuando existe voz; la autorización final es la transcripción exacta "Hana".
+  // cuando existe voz; la autorizaciÃ³n final es la transcripciÃ³n exacta "Hana".
   // Por eso el prefiltro debe ser deliberadamente permisivo.
   threshold: 0.0,
   consecutiveHits: 1,
@@ -101,8 +101,8 @@ const DEFAULT_F1_WAKE_SETTINGS: F1WakeSettings = {
 
 function loadF1WakeSettings(): F1WakeSettings {
   try {
-    // V2 permitía 0.42 + 1 confirmación. Esa combinación hacía que voz/ruido
-    // pudiera convertirse en una activación. La descartamos deliberadamente.
+    // V2 permitÃ­a 0.42 + 1 confirmaciÃ³n. Esa combinaciÃ³n hacÃ­a que voz/ruido
+    // pudiera convertirse en una activaciÃ³n. La descartamos deliberadamente.
     for (const legacyKey of LEGACY_F1_WAKE_SETTINGS_KEYS) localStorage.removeItem(legacyKey);
 
     const parsed = JSON.parse(
@@ -430,23 +430,23 @@ function F1MultichannelCenter({
           {paused ? <Unlock className="w-3 h-3"/> : <Lock className="w-3 h-3"/>}{paused ? "Activar AI" : "Pause AI"}
         </button>
       </header>
-      {channel === "instagram" ? <div className="flex-1 grid place-items-center p-6 text-center bg-gradient-to-b from-white to-fuchsia-50"><div><Instagram className="w-10 h-10 mx-auto mb-3 text-fuchsia-500"/><b className="text-sm">Instagram AI</b><p className="text-xs text-gray-500 mt-1">Sin configurar</p><p className="text-[11px] text-gray-400 mt-3">Portal preparado para conectarse más adelante.</p></div></div> : <div className="flex-1 min-h-0 grid grid-cols-[42%_58%] max-[720px]:grid-cols-1">
+      {channel === "instagram" ? <div className="flex-1 grid place-items-center p-6 text-center bg-gradient-to-b from-white to-fuchsia-50"><div><Instagram className="w-10 h-10 mx-auto mb-3 text-fuchsia-500"/><b className="text-sm">Instagram AI</b><p className="text-xs text-gray-500 mt-1">Sin configurar</p><p className="text-[11px] text-gray-400 mt-3">Portal preparado para conectarse mÃ¡s adelante.</p></div></div> : <div className="flex-1 min-h-0 grid grid-cols-[42%_58%] max-[720px]:grid-cols-1">
         <div className={`border-r min-w-0 flex flex-col min-h-0 ${showMobileChat ? "max-[720px]:hidden" : ""}`}>
           <div className="p-2 border-b"><div className="relative"><Search className="absolute left-2 top-2 w-3.5 h-3.5 text-gray-400"/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder={`Buscar en ${theme.label}...`} className="w-full pl-7 pr-2 py-1.5 border rounded-md text-[10px]"/></div></div>
           <div className="flex-1 overflow-auto">
             {rows.map(row => { const rowPaused=Boolean(row.ai_paused ?? row.state?.ai_paused); return <button key={row.id} onClick={()=>{ setSelected(c=>({...c,[channel]:row})); pendingScrollRefs.current[channel]=true; if(isMobile) setMobileView(v=>({...v,[channel]:"chat"})); }} className={`w-full text-left p-2 border-b hover:${theme.soft} ${current?.id===row.id?theme.soft:""}`}>
-              <div className="flex gap-2"><div className={`w-7 h-7 rounded-full ${theme.strong} text-white grid place-items-center text-[10px] shrink-0`}><User className="w-3.5 h-3.5"/></div><div className="min-w-0 flex-1"><div className="flex justify-between gap-1"><b className="text-[10px] truncate">{row.title || `Conversación #${row.id}`}</b><span className="text-[8px] text-gray-400">{row.last_message_at ? new Date(row.last_message_at).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"}) : ""}</span></div><p className="text-[9px] text-gray-500 truncate">{row.last_message || "Sin mensajes"}</p><span className={`text-[8px] ${rowPaused?"text-amber-600":"text-emerald-600"}`}>● {rowPaused?"AI en pausa":"AI activa"}</span></div>{Number(row.unread_count)>0&&<span className={`${theme.strong} text-white text-[8px] rounded-full min-w-4 h-4 grid place-items-center`}>{row.unread_count}</span>}</div>
+              <div className="flex gap-2"><div className={`w-7 h-7 rounded-full ${theme.strong} text-white grid place-items-center text-[10px] shrink-0`}><User className="w-3.5 h-3.5"/></div><div className="min-w-0 flex-1"><div className="flex justify-between gap-1"><b className="text-[10px] truncate">{row.title || `ConversaciÃ³n #${row.id}`}</b><span className="text-[8px] text-gray-400">{row.last_message_at ? new Date(row.last_message_at).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"}) : ""}</span></div><p className="text-[9px] text-gray-500 truncate">{row.last_message || "Sin mensajes"}</p><span className={`text-[8px] ${rowPaused?"text-amber-600":"text-emerald-600"}`}>â— {rowPaused?"AI en pausa":"AI activa"}</span></div>{Number(row.unread_count)>0&&<span className={`${theme.strong} text-white text-[8px] rounded-full min-w-4 h-4 grid place-items-center`}>{row.unread_count}</span>}</div>
             </button>})}
             {!rows.length && <div className="p-4 text-center text-[10px] text-gray-400">Sin conversaciones</div>}
           </div>
         </div>
         <div className={`min-w-0 flex flex-col min-h-0 bg-gray-50/40 ${isMobile && !showMobileChat ? "max-[720px]:hidden" : ""}`}>
           <div className="px-2 py-1.5 border-b bg-white flex justify-between items-center gap-2">
-            <div className="min-w-0 flex items-center gap-2">{isMobile && <button type="button" onClick={()=>setMobileView(v=>({...v,[channel]:"list"}))} className="border rounded-md px-2 py-1 text-[10px]">← Chats</button>}<span className="text-[10px] font-semibold truncate">{current?.title || "Selecciona una conversación"}</span></div>{current&&<span className={`text-[8px] px-2 py-0.5 rounded-full ${paused?"bg-amber-100 text-amber-700":"bg-emerald-100 text-emerald-700"}`}>{paused?"AI en pausa":"AI activa"}</span>}</div>
+            <div className="min-w-0 flex items-center gap-2">{isMobile && <button type="button" onClick={()=>setMobileView(v=>({...v,[channel]:"list"}))} className="border rounded-md px-2 py-1 text-[10px]">â† Chats</button>}<span className="text-[10px] font-semibold truncate">{current?.title || "Selecciona una conversaciÃ³n"}</span></div>{current&&<span className={`text-[8px] px-2 py-0.5 rounded-full ${paused?"bg-amber-100 text-amber-700":"bg-emerald-100 text-emerald-700"}`}>{paused?"AI en pausa":"AI activa"}</span>}</div>
           <div ref={el => { chatScrollRefs.current[channel] = el; }} className="flex-1 min-h-0 overflow-y-auto overscroll-contain touch-pan-y p-2" style={{ WebkitOverflowScrolling: "touch", touchAction: "pan-y" }}>
             {(messages[channel]||[]).map(m=><div key={m.id} className={`mb-1.5 flex ${m.role==="user"?"justify-start":"justify-end"}`}><div className={`max-w-[88%] px-2 py-1.5 rounded-xl text-[10px] shadow-sm ${m.role==="user"?"bg-white border text-gray-700":`${theme.strong} text-white`}`}><div className="whitespace-pre-wrap">{stripInternalJson(m.content)}</div><div className={`text-[8px] mt-1 ${m.role==="user"?"text-gray-400":"text-white/70"}`}>{new Date(m.created_at).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"})}</div></div></div>)}
           </div>
-          <div className="shrink-0 p-2 border-t bg-white sticky bottom-0 z-10"><div className="text-[8px] mb-1 text-emerald-600">● {paused ? "AI en pausa · respuesta manual habilitada" : "AI respondiendo"}</div><div className="flex gap-1"><input disabled={!current} value={drafts[channel]} onChange={e=>setDrafts(d=>({...d,[channel]:e.target.value}))} onKeyDown={e=>{if(e.key==="Enter") void sendManual(channel)}} placeholder="Escribe un mensaje..." className="min-w-0 flex-1 border rounded-md px-2 py-1.5 text-[10px]"/><button disabled={!current||sending===channel||!drafts[channel].trim()} onClick={()=>void sendManual(channel)} className={`${theme.strong} text-white rounded-md px-2 disabled:opacity-40`}><Send className="w-3.5 h-3.5"/></button></div></div>
+          <div className="shrink-0 p-2 border-t bg-white sticky bottom-0 z-10"><div className="text-[8px] mb-1 text-emerald-600">â— {paused ? "AI en pausa Â· respuesta manual habilitada" : "AI respondiendo"}</div><div className="flex gap-1"><input disabled={!current} value={drafts[channel]} onChange={e=>setDrafts(d=>({...d,[channel]:e.target.value}))} onKeyDown={e=>{if(e.key==="Enter") void sendManual(channel)}} placeholder="Escribe un mensaje..." className="min-w-0 flex-1 border rounded-md px-2 py-1.5 text-[10px]"/><button disabled={!current||sending===channel||!drafts[channel].trim()} onClick={()=>void sendManual(channel)} className={`${theme.strong} text-white rounded-md px-2 disabled:opacity-40`}><Send className="w-3.5 h-3.5"/></button></div></div>
         </div>
       </div>}
     </section>;
@@ -458,7 +458,7 @@ function F1MultichannelCenter({
     <div className="flex flex-1 min-h-0 gap-2 overflow-hidden">
     <aside className="w-40 shrink-0 max-[720px]:hidden rounded-xl border bg-white p-2 overflow-auto">
       <b className="text-[11px]">Todos los portales</b><div className="mt-2 space-y-1 text-[10px]"><button onClick={()=>setStatus("all")} className="w-full flex justify-between rounded px-2 py-1.5 bg-blue-50"><span>Todos</span><b>{conversations.length}</b></button><div className="flex justify-between px-2 py-1"><span>Messenger AI</span><b>{counts.messenger}</b></div><div className="flex justify-between px-2 py-1"><span>WhatsApp AI</span><b>{counts.whatsapp}</b></div><div className="flex justify-between px-2 py-1"><span>Instagram AI</span><b>0</b></div></div>
-      <div className="border-t mt-3 pt-3"><b className="text-[11px]">Estados</b><div className="mt-2 space-y-1 text-[10px]"><button onClick={()=>setStatus("active")} className="w-full flex justify-between px-2 py-1"><span className="text-emerald-600">● Activos</span><b>{activeCount}</b></button><button onClick={()=>setStatus("paused")} className="w-full flex justify-between px-2 py-1"><span className="text-amber-600">● En pausa</span><b>{pausedCount}</b></button><button onClick={()=>setStatus("unassigned")} className="w-full flex justify-between px-2 py-1"><span>● Sin asignar</span><b>{conversations.filter(c=>!c.state?.assigned_to).length}</b></button></div></div>
+      <div className="border-t mt-3 pt-3"><b className="text-[11px]">Estados</b><div className="mt-2 space-y-1 text-[10px]"><button onClick={()=>setStatus("active")} className="w-full flex justify-between px-2 py-1"><span className="text-emerald-600">â— Activos</span><b>{activeCount}</b></button><button onClick={()=>setStatus("paused")} className="w-full flex justify-between px-2 py-1"><span className="text-amber-600">â— En pausa</span><b>{pausedCount}</b></button><button onClick={()=>setStatus("unassigned")} className="w-full flex justify-between px-2 py-1"><span>â— Sin asignar</span><b>{conversations.filter(c=>!c.state?.assigned_to).length}</b></button></div></div>
       <div className="border-t mt-3 pt-3"><b className="text-[11px]">Filtros</b><select value={status} onChange={e=>setStatus(e.target.value as any)} className="w-full mt-2 border rounded px-2 py-1.5 text-[10px]"><option value="all">Todos los estados</option><option value="active">Activos</option><option value="paused">En pausa</option><option value="unassigned">Sin asignar</option></select></div>
       <button onClick={()=>void loadConversations()} className="mt-4 w-full border rounded px-2 py-1.5 text-[10px] inline-flex items-center justify-center gap-1"><RefreshCw className={`w-3 h-3 ${loading?"animate-spin":""}`}/>Actualizar</button>
     </aside>
@@ -480,7 +480,7 @@ export default function AIFloatingWidget(props: { apiBase?: string; sucursalId?:
   ).replace(/\/$/, "");
 
   if (!API_BASE) {
-    console.error('❌ Falta API_BASE. Configura VITE_API_BASE / VITE_BACKEND_URL en este static.');
+    console.error('âŒ Falta API_BASE. Configura VITE_API_BASE / VITE_BACKEND_URL en este static.');
   }
 
   const sucursalId = props.sucursalId;
@@ -556,7 +556,7 @@ export default function AIFloatingWidget(props: { apiBase?: string; sucursalId?:
     if (!robotDrag.current.dragging) return;
     robotDrag.current.dragging = false;
 
-    // Si casi no se movió, es "tap/click" → abrir/cerrar panel
+    // Si casi no se moviÃ³, es "tap/click" â†’ abrir/cerrar panel
     if (robotDrag.current.moved < 6) {
       setOpen((current) => {
         const next = !current;
@@ -570,7 +570,7 @@ export default function AIFloatingWidget(props: { apiBase?: string; sucursalId?:
   };
 
   const closeDrawer = React.useCallback(() => {
-    // Cierra con animación suave (se siente que “regresa” al robot)
+    // Cierra con animaciÃ³n suave (se siente que â€œregresaâ€ al robot)
     setClosing(true);
     window.setTimeout(() => {
       setOpen(false);
@@ -606,7 +606,7 @@ export default function AIFloatingWidget(props: { apiBase?: string; sucursalId?:
   const [sendingLead, setSendingLead] = React.useState(false);
   const [salesErr, setSalesErr] = React.useState<string | null>(null);
 
-  // ===== F1 Copilot: gestión, resumen diario y voz OpenAI Realtime =====
+  // ===== F1 Copilot: gestiÃ³n, resumen diario y voz OpenAI Realtime =====
   type F1Message = { role: "user" | "assistant"; content: string };
   const [f1Summary, setF1Summary] = React.useState<any>(null);
   const [f1Notifications, setF1Notifications] = React.useState<any[]>([]);
@@ -771,9 +771,9 @@ export default function AIFloatingWidget(props: { apiBase?: string; sucursalId?:
       const list = Array.isArray(j?.leads) ? j.leads : [];
       setLeads(list);
 
-      // Selección estable: NO cambiar el lead seleccionado en cada refresh (evita "rebote")
-      // - Si NO hay seleccionado, elegimos uno según la pestaña actual
-      // - Si SÍ hay seleccionado, solo actualizamos su referencia (si aún existe)
+      // SelecciÃ³n estable: NO cambiar el lead seleccionado en cada refresh (evita "rebote")
+      // - Si NO hay seleccionado, elegimos uno segÃºn la pestaÃ±a actual
+      // - Si SÃ hay seleccionado, solo actualizamos su referencia (si aÃºn existe)
       const isCompleteLocal = (l: any) => {
         const status = String(l?.status || "").toLowerCase();
         if (status === "completed") return true;
@@ -819,7 +819,7 @@ const filteredLeads = React.useMemo(() => {
 }, [leads, leadsTab, isLeadComplete]);
 
 
-// Si el usuario cambia de pestaña (Incompletos/Completos), limpiamos la selección
+// Si el usuario cambia de pestaÃ±a (Incompletos/Completos), limpiamos la selecciÃ³n
 // para evitar saltos visuales y dejar la pantalla lista para un nuevo lead.
 React.useEffect(() => {
   if (!selectedLead) return;
@@ -844,11 +844,11 @@ const buildLeadReport = React.useCallback(() => {
     .slice(0, 5);
 
   const lines: string[] = [];
-  lines.push("📊 REPORTE LEADS (CliniqOne)");
+  lines.push("ðŸ“Š REPORTE LEADS (CliniqOne)");
   lines.push(`Total leads: ${all.length}`);
   lines.push(`Completos: ${complete.length}`);
   lines.push(`Incompletos: ${incomplete.length}`);
-  lines.push(`Conversión: ${(conv * 100).toFixed(1)}%`);
+  lines.push(`ConversiÃ³n: ${(conv * 100).toFixed(1)}%`);
 
   if (sourcesSorted.length) {
     lines.push("");
@@ -857,22 +857,22 @@ const buildLeadReport = React.useCallback(() => {
   }
 
   lines.push("");
-  lines.push("✅ Completos (últimos 15):");
+  lines.push("âœ… Completos (Ãºltimos 15):");
   complete.slice(0, 15).forEach((l: any) => {
     const p = l?.profile || {};
-    const name = p?.name || l?.name || "—";
-    const branches = p?.branches ?? "—";
-    const doctors = p?.doctors ?? "—";
-    const contact = p?.contact_value || l?.contact || "—";
+    const name = p?.name || l?.name || "â€”";
+    const branches = p?.branches ?? "â€”";
+    const doctors = p?.doctors ?? "â€”";
+    const contact = p?.contact_value || l?.contact || "â€”";
     lines.push(`- ${name} | suc: ${branches} | docs: ${doctors} | contacto: ${contact}`);
   });
 
   lines.push("");
-  lines.push("⚠️ Incompletos (últimos 15):");
+  lines.push("âš ï¸ Incompletos (Ãºltimos 15):");
   incomplete.slice(0, 15).forEach((l: any) => {
-    const name = l?.name || `Lead #${l?.id ?? "—"}`;
+    const name = l?.name || `Lead #${l?.id ?? "â€”"}`;
     const last = new Date(l?.updated_at || l?.created_at || Date.now()).toISOString().slice(0, 10);
-    lines.push(`- ${name} | último mov: ${last}`);
+    lines.push(`- ${name} | Ãºltimo mov: ${last}`);
   });
 
   return lines.join("\n");
@@ -949,7 +949,7 @@ const buildLeadReport = React.useCallback(() => {
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`);
 
-      // ✅ v6 backend: reset por inactividad -> limpiar chat y cambiar al nuevo lead
+      // âœ… v6 backend: reset por inactividad -> limpiar chat y cambiar al nuevo lead
       if (j?.reset && j?.new_lead_id) {
         const newId = Number(j.new_lead_id);
         setLeadMsgs([]);
@@ -962,7 +962,7 @@ const buildLeadReport = React.useCallback(() => {
       await loadLeadMsgs(selectedLead.id);
       await loadLeads();
 
-      // ✅ v6 backend: conversación completada -> limpiar y crear lead nuevo tras unos segundos
+      // âœ… v6 backend: conversaciÃ³n completada -> limpiar y crear lead nuevo tras unos segundos
       if (j?.completed) {
         const secs = Number(j?.reset_after_seconds ?? 20);
         // deja la pantalla lista inmediatamente para el siguiente cliente
@@ -1020,7 +1020,7 @@ const buildLeadReport = React.useCallback(() => {
 
   const applyF1ClientActions = React.useCallback((actions: any[]) => {
     // V19: las respuestas de /f1/actions pueden envolver result/client_event
-    // en más de un nivel. Recorremos el resultado completo para no perder
+    // en mÃ¡s de un nivel. Recorremos el resultado completo para no perder
     // appointments_changed cuando Hanna ejecuta una herramienta por voz.
     const visit = (node: any, seen = new Set<any>()) => {
       if (!node || typeof node !== 'object' || seen.has(node)) return;
@@ -1093,17 +1093,17 @@ const buildLeadReport = React.useCallback(() => {
       case "appointment.created":
         return `${patient} fue agendado${time ? ` a las ${time}` : ""}.`;
       case "appointment.confirmed":
-        return `${patient} confirmó su cita${time ? ` de las ${time}` : ""}.`;
+        return `${patient} confirmÃ³ su cita${time ? ` de las ${time}` : ""}.`;
       case "appointment.cancelled":
-        return `La cita de ${patient} fue cancelada${time ? `; se liberó el horario de las ${time}` : ""}.`;
+        return `La cita de ${patient} fue cancelada${time ? `; se liberÃ³ el horario de las ${time}` : ""}.`;
       case "appointment.rescheduled":
         return `La cita de ${patient} fue reagendada${time ? ` para las ${time}` : ""}.`;
       case "appointment.updated":
         return `La cita de ${patient} fue actualizada.`;
       case "payment.created":
-        return `Se registró un pago de $${Number(payload?.amount || 0).toFixed(2)} de ${String(payload?.patient || "un paciente")} en ${String(payload?.payment_method || "Caja")}.`;
+        return `Se registrÃ³ un pago de $${Number(payload?.amount || 0).toFixed(2)} de ${String(payload?.patient || "un paciente")} en ${String(payload?.payment_method || "Caja")}.`;
       case "expense.created":
-        return `Se registró un gasto de $${Number(payload?.amount || 0).toFixed(2)} por ${String(payload?.concept || "un concepto")}.`;
+        return `Se registrÃ³ un gasto de $${Number(payload?.amount || 0).toFixed(2)} por ${String(payload?.concept || "un concepto")}.`;
       default:
         return "";
     }
@@ -1284,7 +1284,7 @@ const buildLeadReport = React.useCallback(() => {
       await sessionControllerRef.current?.beginBriefing();
 
       const token = localStorage.getItem("dentalux_auth_token") || "";
-      if (!token) throw new Error("Inicia sesión nuevamente para escuchar el resumen.");
+      if (!token) throw new Error("Inicia sesiÃ³n nuevamente para escuchar el resumen.");
 
       const branchKey = sucursalId || "sucursal_1";
       const textData: any = options?.briefingData || await api(
@@ -1293,7 +1293,7 @@ const buildLeadReport = React.useCallback(() => {
       const briefingDate = String(textData?.date || "");
       const playedKey = dailyBriefingPlayedKey(briefingDate, branchKey);
 
-      // La reproducción automática ocurre una sola vez por
+      // La reproducciÃ³n automÃ¡tica ocurre una sola vez por
       // empresa + usuario + sucursal + fecha.
       if (automatic && localStorage.getItem(playedKey) === "1") return;
 
@@ -1341,14 +1341,14 @@ const buildLeadReport = React.useCallback(() => {
 
       await audio.play();
 
-      // Marcar únicamente después de que el navegador realmente inició el audio.
+      // Marcar Ãºnicamente despuÃ©s de que el navegador realmente iniciÃ³ el audio.
       localStorage.setItem(playedKey, "1");
       setBriefingPlaying(true);
     } catch (error: any) {
       stopDailyBriefing();
 
       // El autoplay puede ser bloqueado por el navegador. En ese caso dejamos
-      // disponible el botón manual sin mostrar un error técnico molesto.
+      // disponible el botÃ³n manual sin mostrar un error tÃ©cnico molesto.
       const message = error?.message || String(error);
       if (!automatic || !/play\(\)|autoplay|user gesture|notallowed/i.test(message)) {
         setF1Error(message);
@@ -1374,8 +1374,8 @@ const buildLeadReport = React.useCallback(() => {
     });
   }, [stopDailyBriefing]);
 
-  // Intenta reproducir el briefing una sola vez al día. Debido a las reglas de
-  // Chrome/Edge, espera la primera interacción del usuario con la aplicación.
+  // Intenta reproducir el briefing una sola vez al dÃ­a. Debido a las reglas de
+  // Chrome/Edge, espera la primera interacciÃ³n del usuario con la aplicaciÃ³n.
   React.useEffect(() => {
     if (!dailyBriefingEnabled || autoBriefingAttemptedRef.current) return;
 
@@ -1400,7 +1400,7 @@ const buildLeadReport = React.useCallback(() => {
           }
         }, 450);
       } catch {
-        // No bloquear el resto de F1 si el briefing no está disponible.
+        // No bloquear el resto de F1 si el briefing no estÃ¡ disponible.
       }
     };
 
@@ -1470,9 +1470,9 @@ const buildLeadReport = React.useCallback(() => {
     });
     applyF1ClientActions([output]);
 
-    // V19: respaldo inmediato. Aunque una versión del backend no incluya
+    // V19: respaldo inmediato. Aunque una versiÃ³n del backend no incluya
     // client_event, la Agenda vuelve a consultar justo al terminar CUALQUIER
-    // herramienta de Hanna. No reproduce sonido por sí sola.
+    // herramienta de Hanna. No reproduce sonido por sÃ­ sola.
     window.dispatchEvent(new CustomEvent('cliniqone:f1-action-complete', {
       detail: { name, call_id: callId, source: 'f1' },
     }));
@@ -1532,7 +1532,7 @@ const buildLeadReport = React.useCallback(() => {
     setWakeSettingsDraft(next);
     setShowWakeSettings(false);
 
-    // La reconstrucción ocurre solamente por una acción explícita del usuario.
+    // La reconstrucciÃ³n ocurre solamente por una acciÃ³n explÃ­cita del usuario.
     await sessionControllerRef.current?.disable();
     setWakeSettingsRevision((current) => current + 1);
   }, [wakeSettingsDraft]);
@@ -1556,7 +1556,7 @@ const buildLeadReport = React.useCallback(() => {
   const recordVoiceProfileSample = React.useCallback(async () => {
     try {
       setVoiceProfileBusy(true);
-      setVoiceProfileMessage('Di “Hana” con tu voz normal…');
+      setVoiceProfileMessage('Di â€œHanaâ€ con tu voz normalâ€¦');
       setVoiceProfileVerification(null);
 
       const shouldRestart = f1VoiceEngineEnabled;
@@ -1587,7 +1587,7 @@ const buildLeadReport = React.useCallback(() => {
   const testVoiceProfile = React.useCallback(async () => {
     try {
       setVoiceProfileBusy(true);
-      setVoiceProfileMessage('Di “Hana” para comparar tu voz…');
+      setVoiceProfileMessage('Di â€œHanaâ€ para comparar tu vozâ€¦');
 
       const shouldRestart = f1VoiceEngineEnabled;
       if (shouldRestart) await sessionControllerRef.current?.disable();
@@ -1597,7 +1597,7 @@ const buildLeadReport = React.useCallback(() => {
       setVoiceProfileMessage(
         result.matched
           ? `Voz reconocida: ${voiceProfile?.displayName || voiceProfileName}.`
-          : "La muestra no coincidió con el perfil guardado.",
+          : "La muestra no coincidiÃ³ con el perfil guardado.",
       );
 
       if (shouldRestart) await sessionControllerRef.current?.enable();
@@ -1634,7 +1634,7 @@ const buildLeadReport = React.useCallback(() => {
   }, [voiceProfile, voiceProfileName]);
 
   const removeVoiceProfile = React.useCallback(async () => {
-    if (!window.confirm("¿Eliminar todas las muestras de este perfil de voz?")) {
+    if (!window.confirm("Â¿Eliminar todas las muestras de este perfil de voz?")) {
       return;
     }
 
@@ -1650,7 +1650,7 @@ const buildLeadReport = React.useCallback(() => {
   }, [unlockF1Audio]);
 
   React.useEffect(() => {
-    const modelUrl = String((import.meta as any).env?.VITE_F1_WAKE_MODEL_URL || "/models/hola-f1/hola-f1.onnx").trim(); // V14: se usa solo como generador de candidato; NO autoriza la palabra.
+    const modelUrl = String((import.meta as any).env?.VITE_F1_WAKE_MODEL_URL || "/models/hanna-v5/hanna.onnx").trim(); // V14: se usa solo como generador de candidato; NO autoriza la palabra.
     let controller: F1AudioSessionController;
     const engine = new F1VoiceEngine({
       phrase: "Hana",
@@ -1665,20 +1665,20 @@ const buildLeadReport = React.useCallback(() => {
         setF1VoiceEngineDetail(String(detail || ""));
       },
       onWake: (event) => {
-        // V13: ONNX/VAD = prefiltro; transcripción exacta = autorización final.
-        // Nunca abrir Realtime directamente desde un score acústico.
+        // V13: ONNX/VAD = prefiltro; transcripciÃ³n exacta = autorizaciÃ³n final.
+        // Nunca abrir Realtime directamente desde un score acÃºstico.
         void (async () => {
           const now = Date.now();
           if (wakeVerificationInFlightRef.current || now < wakeVerificationCooldownUntilRef.current) return;
           const audioWindow = (event as any)?.audioWindow;
           const sampleRate = Number((event as any)?.sampleRate || 0);
           if (!(audioWindow instanceof Float32Array) || !audioWindow.length || sampleRate !== 16000) {
-            setF1VoiceEngineDetail("Candidato rechazado: audio inválido");
+            setF1VoiceEngineDetail("Candidato rechazado: audio invÃ¡lido");
             return;
           }
 
           wakeVerificationInFlightRef.current = true;
-          setF1VoiceEngineDetail("Verificando ‘Hana’…");
+          setF1VoiceEngineDetail("Verificando â€˜Hanaâ€™â€¦");
           try {
             const verification: any = await api('/f1/wake/verify', {
               method: 'POST',
@@ -1691,7 +1691,7 @@ const buildLeadReport = React.useCallback(() => {
 
             if (!verification?.accepted) {
               const heard = String(verification?.transcript || '').trim();
-              setF1VoiceEngineDetail(heard ? `Ignorado: “${heard.slice(0, 48)}”` : "Ignorado: no se escuchó Hana");
+              setF1VoiceEngineDetail(heard ? `Ignorado: â€œ${heard.slice(0, 48)}â€` : "Ignorado: no se escuchÃ³ Hana");
               (f1VoiceEngineRef.current as any)?.suppressWakeFor?.(700);
               wakeVerificationCooldownUntilRef.current = Date.now() + 650;
               return;
@@ -1700,11 +1700,11 @@ const buildLeadReport = React.useCallback(() => {
             const heard = String(verification?.transcript || 'Hana').trim();
             setLastWakeIdentity(`Hana verificada: ${heard.slice(0, 60)}`);
             wakeVerificationCooldownUntilRef.current = Date.now() + 1800;
-            // V18.2: la verificación léxica NO abre Realtime por la ruta manual.
-            // La misma muestra que dijo “Hana” debe pasar ahora por Owner Lock.
-            // Forzamos confidence=1 porque /wake/verify ya autorizó la palabra;
-            // la biometría sigue usando exactamente audioWindow/sampleRate de esta emisión.
-            setF1VoiceEngineDetail("Hana verificada · autenticando voz…");
+            // V18.2: la verificaciÃ³n lÃ©xica NO abre Realtime por la ruta manual.
+            // La misma muestra que dijo â€œHanaâ€ debe pasar ahora por Owner Lock.
+            // Forzamos confidence=1 porque /wake/verify ya autorizÃ³ la palabra;
+            // la biometrÃ­a sigue usando exactamente audioWindow/sampleRate de esta emisiÃ³n.
+            setF1VoiceEngineDetail("Hana verificada Â· autenticando vozâ€¦");
             await controller.wakeDetected({
               ...(event as any),
               phrase: "Hana",
@@ -1714,9 +1714,9 @@ const buildLeadReport = React.useCallback(() => {
               sampleRate,
             });
           } catch (error) {
-            // Falla cerrada: si el verificador no está disponible no activar.
+            // Falla cerrada: si el verificador no estÃ¡ disponible no activar.
             setF1VoiceEngineDetail(
-              `Verificación no disponible: ${error instanceof Error ? error.message : String(error)}`,
+              `VerificaciÃ³n no disponible: ${error instanceof Error ? error.message : String(error)}`,
             );
             (f1VoiceEngineRef.current as any)?.suppressWakeFor?.(900);
             wakeVerificationCooldownUntilRef.current = Date.now() + 900;
@@ -1743,19 +1743,19 @@ const buildLeadReport = React.useCallback(() => {
     controller = new F1AudioSessionController({
       wakeEngine: engine,
       onSnapshot: handleSnapshot,
-      // La activación por voz no abre el panel flotante.
+      // La activaciÃ³n por voz no abre el panel flotante.
       followupTimeoutMs: 5000,
       inactivityTimeoutMs: 15000,
       maxSessionMs: 120000,
       wakeStabilizationMs: wakeSettings.stabilizationMs,
-      // Solo llegan eventos que ya superaron la verificación lexical remota.
+      // Solo llegan eventos que ya superaron la verificaciÃ³n lexical remota.
       minimumWakeConfidence: 0.99,
       verifyWakeIdentity: async (event) => {
         if (!voiceProfile?.enabled) {
           return { accepted: true };
         }
         if (!event.audioWindow || !event.sampleRate) {
-          setLastWakeIdentity("No llegó la ventana de audio del Wake Engine");
+          setLastWakeIdentity("No llegÃ³ la ventana de audio del Wake Engine");
           return { accepted: false };
         }
         const result = await voiceProfileServiceRef.current.verifyWakeSamples(
@@ -1836,13 +1836,13 @@ const buildLeadReport = React.useCallback(() => {
       if (document.visibilityState === 'visible') refreshNow();
     };
 
-    // Actualización inmediata cuando Agenda crea, confirma, cancela,
+    // ActualizaciÃ³n inmediata cuando Agenda crea, confirma, cancela,
     // reagenda o elimina una cita.
     window.addEventListener('dentalux:appointments-changed', refreshNow);
     window.addEventListener('focus', refreshNow);
     document.addEventListener('visibilitychange', onVisibility);
 
-    // Respaldo ligero por si el cambio llegó desde WhatsApp/Messenger.
+    // Respaldo ligero por si el cambio llegÃ³ desde WhatsApp/Messenger.
     const timer = window.setInterval(refreshNow, 10000);
 
     return () => {
@@ -1866,13 +1866,13 @@ const buildLeadReport = React.useCallback(() => {
       case "WAKE_STARTING": return { label: "Preparando detector", tone: "bg-amber-100 text-amber-800" };
       case "WAKE_LISTENING": return { label: "Di: Hana", tone: "bg-emerald-100 text-emerald-800" };
       case "WAKE_DETECTED": return { label: "Hana detectada", tone: "bg-indigo-100 text-indigo-800" };
-      case "REALTIME_CONNECTING": return { label: "Conectando F1…", tone: "bg-indigo-100 text-indigo-800" };
-      case "REALTIME_GREETING": return { label: remoteAudioReady ? "F1 activado · diciendo Te escucho" : "Preparando audio de F1…", tone: "bg-indigo-100 text-indigo-800" };
+      case "REALTIME_CONNECTING": return { label: "Conectando F1â€¦", tone: "bg-indigo-100 text-indigo-800" };
+      case "REALTIME_GREETING": return { label: remoteAudioReady ? "F1 activado Â· diciendo Te escucho" : "Preparando audio de F1â€¦", tone: "bg-indigo-100 text-indigo-800" };
       case "REALTIME_LISTENING": return { label: "F1 te escucha", tone: "bg-green-100 text-green-800" };
       case "REALTIME_PROCESSING": return { label: "F1 procesando", tone: "bg-violet-100 text-violet-800" };
       case "REALTIME_SPEAKING": return { label: "F1 respondiendo", tone: "bg-blue-100 text-blue-800" };
       case "REALTIME_FOLLOWUP": return { label: "Puedes continuar hablando", tone: "bg-cyan-100 text-cyan-800" };
-      case "REALTIME_DISCONNECTING": return { label: "Cerrando conversación", tone: "bg-gray-100 text-gray-700" };
+      case "REALTIME_DISCONNECTING": return { label: "Cerrando conversaciÃ³n", tone: "bg-gray-100 text-gray-700" };
       case "ERROR": return { label: "Error de voz", tone: "bg-red-100 text-red-800" };
       default: return { label: f1VoiceEngineEnabled ? "Motor activo" : "Motor desactivado", tone: f1VoiceEngineEnabled ? "bg-emerald-100 text-emerald-800" : "bg-gray-100 text-gray-700" };
     }
@@ -1920,7 +1920,7 @@ const buildLeadReport = React.useCallback(() => {
   const newConversation = async () => {
     try {
       setErr(null);
-      const title = prompt("Nombre de la conversación (opcional):") || "";
+      const title = prompt("Nombre de la conversaciÃ³n (opcional):") || "";
       const r = await fetch(`${API_BASE}/api/ai/conversations`, {
         method: "POST",
         headers,
@@ -1940,7 +1940,7 @@ const buildLeadReport = React.useCallback(() => {
     async (id: number) => {
       const c = convs.find((x) => x.id === id);
       const label = c?.title ? `"${c.title}"` : `#${id}`;
-      if (!window.confirm(`¿Eliminar la conversación ${label}?\n\nEsto borrará también sus mensajes.`)) return;
+      if (!window.confirm(`Â¿Eliminar la conversaciÃ³n ${label}?\n\nEsto borrarÃ¡ tambiÃ©n sus mensajes.`)) return;
 
       try {
         setErr(null);
@@ -1962,7 +1962,7 @@ const buildLeadReport = React.useCallback(() => {
   );
 
   const deleteAllConversations = React.useCallback(async () => {
-    if (!window.confirm("¿Eliminar TODAS las conversaciones visibles?\n\nEsta acción no se puede deshacer.")) return;
+    if (!window.confirm("Â¿Eliminar TODAS las conversaciones visibles?\n\nEsta acciÃ³n no se puede deshacer.")) return;
 
     try {
       setErr(null);
@@ -1991,7 +1991,7 @@ const buildLeadReport = React.useCallback(() => {
         const r0 = await fetch(`${API_BASE}/api/ai/conversations`, {
           method: "POST",
           headers,
-          body: JSON.stringify({ title: "Nueva conversación" }),
+          body: JSON.stringify({ title: "Nueva conversaciÃ³n" }),
         });
         const j0 = await r0.json().catch(() => ({}));
         if (!r0.ok) throw new Error(j0?.error || `HTTP ${r0.status}`);
@@ -2139,12 +2139,12 @@ const buildLeadReport = React.useCallback(() => {
             padding-top: env(safe-area-inset-top);
           }
 
-          /* Botón flotante de minimizar/cerrar SIEMPRE visible en móvil */
+          /* BotÃ³n flotante de minimizar/cerrar SIEMPRE visible en mÃ³vil */
           .aiCloseFloat{
             display: none;
           }
 
-          /* Mejor UX en móviles: pantalla completa */
+          /* Mejor UX en mÃ³viles: pantalla completa */
 
           @media (max-width: 520px){
             .aiDrawer{
@@ -2249,7 +2249,7 @@ const buildLeadReport = React.useCallback(() => {
           <div className="aiBlink" />
           {f1UnreadEvents > 0 && (
             <div
-              title={`${f1UnreadEvents} actualización${f1UnreadEvents === 1 ? "" : "es"} nueva${f1UnreadEvents === 1 ? "" : "s"}`}
+              title={`${f1UnreadEvents} actualizaciÃ³n${f1UnreadEvents === 1 ? "" : "es"} nueva${f1UnreadEvents === 1 ? "" : "s"}`}
               style={{
                 position: "absolute",
                 right: -4,
@@ -2291,14 +2291,14 @@ const buildLeadReport = React.useCallback(() => {
             onClick={(e) => e.stopPropagation()}
           >
 
-            {/* Close/minimize siempre visible (especialmente en móvil) */}
+            {/* Close/minimize siempre visible (especialmente en mÃ³vil) */}
             <button
               className="aiCloseFloat"
               onClick={closeDrawer}
               aria-label="Minimizar"
               title="Minimizar"
             >
-              ×
+              Ã—
             </button>
 
           {/* Header draggable */}
@@ -2309,7 +2309,7 @@ const buildLeadReport = React.useCallback(() => {
           >
             <div className="flex items-center gap-2">
               <img src={ROBOT_SRC} alt="IA" className="w-7 h-7 object-contain" draggable={false} />
-              <span className="text-sm font-semibold text-gray-800">F1 · Asistente CliniqOne</span>
+              <span className="text-sm font-semibold text-gray-800">F1 Â· Asistente CliniqOne</span>
             </div>
 
             <div className="flex items-center gap-2" style={{ flexShrink: 0 }}>
@@ -2322,14 +2322,14 @@ const buildLeadReport = React.useCallback(() => {
                 }}
                 title="Refrescar"
               >
-                ↻
+                â†»
               </button>
             <button
                 className="text-xs px-2 py-1 rounded bg-white border hover:bg-gray-100"
                 onClick={closeDrawer}
                 title="Minimizar"
               >
-                ✕
+                âœ•
               </button>
               </div>
           </div>
@@ -2337,7 +2337,7 @@ const buildLeadReport = React.useCallback(() => {
           {/* Tabs Centro Multicanal */}
           <div className="flex border-b overflow-x-auto bg-white">
             {[
-              { id: "f1", label: "F1 Gestión", icon: <Mic className="w-4 h-4"/> },
+              { id: "f1", label: "F1 GestiÃ³n", icon: <Mic className="w-4 h-4"/> },
               { id: "portals", label: "Portales", icon: <Inbox className="w-4 h-4"/> },
               { id: "messenger", label: "Messenger AI", icon: <MessageCircle className="w-4 h-4 text-blue-600"/> },
               { id: "whatsapp", label: "WhatsApp AI", icon: <MessagesSquare className="w-4 h-4 text-emerald-600"/> },
@@ -2355,19 +2355,19 @@ const buildLeadReport = React.useCallback(() => {
               <div className="h-full flex flex-col bg-gray-50">
                 <div className="p-3 overflow-auto flex-1">
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3">
-                    <div className="bg-white border rounded-xl p-3"><div className="text-[11px] text-gray-500">Citas hoy</div><div className="text-2xl font-bold text-gray-900">{f1Summary?.counts?.total ?? '—'}</div></div>
-                    <div className="bg-white border rounded-xl p-3"><div className="text-[11px] text-gray-500">Confirmadas</div><div className="text-2xl font-bold text-emerald-700">{f1Summary?.counts?.confirmed ?? '—'}</div></div>
-                    <div className="bg-white border rounded-xl p-3"><div className="text-[11px] text-gray-500">Pendientes</div><div className="text-2xl font-bold text-amber-700">{f1Summary?.counts?.pending ?? '—'}</div></div>
-                    <div className="bg-white border rounded-xl p-3"><div className="text-[11px] text-gray-500">Canceladas</div><div className="text-2xl font-bold text-red-700">{f1Summary?.counts?.cancelled ?? '—'}</div></div>
+                    <div className="bg-white border rounded-xl p-3"><div className="text-[11px] text-gray-500">Citas hoy</div><div className="text-2xl font-bold text-gray-900">{f1Summary?.counts?.total ?? 'â€”'}</div></div>
+                    <div className="bg-white border rounded-xl p-3"><div className="text-[11px] text-gray-500">Confirmadas</div><div className="text-2xl font-bold text-emerald-700">{f1Summary?.counts?.confirmed ?? 'â€”'}</div></div>
+                    <div className="bg-white border rounded-xl p-3"><div className="text-[11px] text-gray-500">Pendientes</div><div className="text-2xl font-bold text-amber-700">{f1Summary?.counts?.pending ?? 'â€”'}</div></div>
+                    <div className="bg-white border rounded-xl p-3"><div className="text-[11px] text-gray-500">Canceladas</div><div className="text-2xl font-bold text-red-700">{f1Summary?.counts?.cancelled ?? 'â€”'}</div></div>
                   </div>
 
                   <div className="bg-white border rounded-xl p-3 mb-3">
                     <div className="flex items-center justify-between gap-2">
-                      <div className="flex items-center gap-2"><Bell className="w-4 h-4" /><span className="text-sm font-semibold">Información de hoy</span></div>
+                      <div className="flex items-center gap-2"><Bell className="w-4 h-4" /><span className="text-sm font-semibold">InformaciÃ³n de hoy</span></div>
                       <button className="text-xs px-2 py-1 rounded border" onClick={loadF1Dashboard}>Actualizar</button>
                     </div>
                     {f1Notifications.length ? f1Notifications.map(n => <div key={n.id} className="mt-2 text-xs text-gray-700"><b>{n.title}:</b> {n.message}</div>) : <div className="mt-2 text-xs text-gray-500">Sin avisos pendientes.</div>}
-                    {f1Summary?.first_appointment && <div className="mt-2 text-xs text-gray-600">Primera cita: {String(f1Summary.first_appointment.start_time || '').slice(0,5)} · {f1Summary.first_appointment.patient}</div>}
+                    {f1Summary?.first_appointment && <div className="mt-2 text-xs text-gray-600">Primera cita: {String(f1Summary.first_appointment.start_time || '').slice(0,5)} Â· {f1Summary.first_appointment.patient}</div>}
                   </div>
 
                   <div className="sticky top-0 z-20 mb-3 flex justify-center pointer-events-none">
@@ -2393,7 +2393,7 @@ const buildLeadReport = React.useCallback(() => {
                   <div className="mb-3 flex items-center justify-between rounded-xl border bg-white px-3 py-2">
                     <div className="min-w-0">
                       <div className="text-xs font-semibold">
-                        Actualización en tiempo real
+                        ActualizaciÃ³n en tiempo real
                         {f1UnreadEvents > 0 && (
                           <span className="ml-2 rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-bold text-red-700">
                             {f1UnreadEvents} nuevas
@@ -2403,7 +2403,7 @@ const buildLeadReport = React.useCallback(() => {
                       <div className="truncate text-[11px] text-gray-500">
                         {f1LiveEvent
                           ? describeF1Event(f1LiveEvent) || String(f1LiveEvent?.name || "")
-                          : "Esperando movimientos de la clínica…"}
+                          : "Esperando movimientos de la clÃ­nicaâ€¦"}
                       </div>
                     </div>
                     <span className={`ml-3 h-2.5 w-2.5 rounded-full ${f1StreamConnected ? "bg-emerald-500" : "bg-amber-400"}`} />
@@ -2413,14 +2413,14 @@ const buildLeadReport = React.useCallback(() => {
                     <div className="flex items-center justify-between gap-3">
                       <div>
                         <div className="text-sm font-semibold">Resumen diario por voz</div>
-                        <div className="text-[11px] text-gray-500">Escucha el reporte operativo sin encender el micrófono.</div>
+                        <div className="text-[11px] text-gray-500">Escucha el reporte operativo sin encender el micrÃ³fono.</div>
                         <label className="mt-1 inline-flex items-center gap-2 text-[11px] text-gray-600 cursor-pointer">
                           <input
                             type="checkbox"
                             checked={dailyBriefingEnabled}
                             onChange={toggleDailyBriefing}
                           />
-                          Reproducir automáticamente una vez al día
+                          Reproducir automÃ¡ticamente una vez al dÃ­a
                         </label>
                       </div>
                       <button
@@ -2429,7 +2429,7 @@ const buildLeadReport = React.useCallback(() => {
                         className={`inline-flex items-center gap-2 px-3 py-2 rounded-xl text-white ${briefingPlaying ? 'bg-red-600' : 'bg-emerald-600'} disabled:opacity-60`}
                       >
                         <Volume2 className="w-4 h-4" />
-                        {briefingLoading ? 'Preparando…' : briefingPlaying ? 'Detener' : 'Escuchar resumen'}
+                        {briefingLoading ? 'Preparandoâ€¦' : briefingPlaying ? 'Detener' : 'Escuchar resumen'}
                       </button>
                     </div>
                     {!!briefingText && (
@@ -2444,17 +2444,17 @@ const buildLeadReport = React.useCallback(() => {
                       <div className="min-w-0">
                         <div className="text-sm font-semibold">F1 Voice Engine</div>
                         <div className="text-[11px] text-gray-500">
-                          Prefiltro local de voz. La activación final exige la palabra “Hana”.
+                          Prefiltro local de voz. La activaciÃ³n final exige la palabra â€œHanaâ€.
                         </div>
                         <div className="mt-1 text-[11px] text-gray-600">
                           Estado: {f1VoiceEngineStatus}
-                          {f1VoiceEngineDetail ? ` · ${f1VoiceEngineDetail}` : ""}
+                          {f1VoiceEngineDetail ? ` Â· ${f1VoiceEngineDetail}` : ""}
                         </div>
                         <div className="mt-1 text-[10px] text-gray-500">
                           Prefiltro: {wakeSettings.threshold.toFixed(2)}
-                          {" · "}
+                          {" Â· "}
                           Confirmaciones: {wakeSettings.consecutiveHits}
-                          {" · "}
+                          {" Â· "}
                           Palabra clave: obligatoria
                         </div>
                       </div>
@@ -2485,7 +2485,7 @@ const buildLeadReport = React.useCallback(() => {
                     {showWakeSettings && (
                       <div className="mt-3 rounded-xl border bg-gray-50 p-3">
                         <div className="mb-2 text-xs font-semibold">
-                          Calibración para tu voz
+                          CalibraciÃ³n para tu voz
                         </div>
 
                         <div className="mb-3 flex flex-wrap gap-2">
@@ -2494,7 +2494,7 @@ const buildLeadReport = React.useCallback(() => {
                             onClick={() => applyWakePreset("sensitive")}
                             className="rounded-lg border bg-white px-2 py-1 text-xs"
                           >
-                            Más sensible
+                            MÃ¡s sensible
                           </button>
                           <button
                             type="button"
@@ -2513,7 +2513,7 @@ const buildLeadReport = React.useCallback(() => {
                         </div>
 
                         <label className="block text-[11px] text-gray-600">
-                          Prefiltro acústico: {wakeSettingsDraft.threshold.toFixed(2)}
+                          Prefiltro acÃºstico: {wakeSettingsDraft.threshold.toFixed(2)}
                           <input
                             type="range"
                             min={F1_MIN_WAKE_CONFIDENCE}
@@ -2529,7 +2529,7 @@ const buildLeadReport = React.useCallback(() => {
                             className="mt-1 w-full"
                           />
                           <span className="text-[10px] text-gray-500">
-                            Este control solo decide cuándo enviar un segmento de voz a verificación. La activación final exige que la transcripción empiece exactamente con “Hana”.
+                            Este control solo decide cuÃ¡ndo enviar un segmento de voz a verificaciÃ³n. La activaciÃ³n final exige que la transcripciÃ³n empiece exactamente con â€œHanaâ€.
                           </span>
                         </label>
 
@@ -2545,14 +2545,14 @@ const buildLeadReport = React.useCallback(() => {
                             }
                             className="mt-1 w-full rounded-lg border bg-white px-2 py-1"
                           >
-                            <option value={1}>1 — recomendado para Hana</option>
-                            <option value={2}>2 — más conservador</option>
+                            <option value={1}>1 â€” recomendado para Hana</option>
+                            <option value={2}>2 â€” mÃ¡s conservador</option>
                           </select>
                         </label>
 
                         <div className="mt-3 grid grid-cols-2 gap-2">
                           <label className="text-[11px] text-gray-600">
-                            Espera después de una activación
+                            Espera despuÃ©s de una activaciÃ³n
                             <input
                               type="number"
                               min={1000}
@@ -2569,7 +2569,7 @@ const buildLeadReport = React.useCallback(() => {
                             />
                           </label>
                           <label className="text-[11px] text-gray-600">
-                            Estabilización del micrófono
+                            EstabilizaciÃ³n del micrÃ³fono
                             <input
                               type="number"
                               min={500}
@@ -2611,7 +2611,7 @@ const buildLeadReport = React.useCallback(() => {
                           <div className="mt-3 rounded-lg border bg-white p-2 text-[11px] text-gray-600">
                             Muestras registradas: {voiceProfile?.samples.length ?? 0}
                             {voiceProfile?.updatedAt
-                              ? ` · Actualizado ${new Date(
+                              ? ` Â· Actualizado ${new Date(
                                   voiceProfile.updatedAt,
                                 ).toLocaleDateString()}`
                               : ""}
@@ -2625,8 +2625,8 @@ const buildLeadReport = React.useCallback(() => {
                               className="rounded-lg bg-emerald-600 px-2 py-2 text-xs text-white disabled:opacity-50"
                             >
                               {voiceProfileBusy
-                                ? "Grabando…"
-                                : 'Grabar “Hana”'}
+                                ? "Grabandoâ€¦"
+                                : 'Grabar â€œHanaâ€'}
                             </button>
                             <button
                               type="button"
@@ -2735,10 +2735,10 @@ const buildLeadReport = React.useCallback(() => {
 
                   <div className="bg-white border rounded-xl p-3 mb-3">
                     <div className="flex items-center justify-between gap-2">
-                      <div><div className="text-sm font-semibold">Voz OpenAI Realtime</div><div className="text-[11px] text-gray-500">Habla naturalmente: “F1, agenda a Juan Pérez mañana a las 2”.</div></div>
+                      <div><div className="text-sm font-semibold">Voz OpenAI Realtime</div><div className="text-[11px] text-gray-500">Habla naturalmente: â€œF1, agenda a Juan PÃ©rez maÃ±ana a las 2â€.</div></div>
                       <button onClick={connectVoice} disabled={voiceConnecting} className={`inline-flex items-center gap-2 px-3 py-2 rounded-xl text-white ${voiceConnected ? 'bg-red-600' : 'bg-indigo-600'} disabled:opacity-60`}>
                         {voiceConnected ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
-                        {voiceConnecting ? 'Conectando…' : voiceConnected ? 'Terminar' : 'Hablar con F1'}
+                        {voiceConnecting ? 'Conectandoâ€¦' : voiceConnected ? 'Terminar' : 'Hablar con F1'}
                       </button>
                     </div>
                     {!!voiceTranscript && <div className="mt-2 rounded-lg bg-gray-50 border p-2 text-xs text-gray-700 whitespace-pre-wrap">{voiceTranscript}</div>}
@@ -2753,7 +2753,7 @@ const buildLeadReport = React.useCallback(() => {
                 </div>
                 <div className="p-2 border-t bg-white">
                   <div className="flex gap-2">
-                    <input value={f1Input} onChange={e => setF1Input(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') sendF1Text(); }} placeholder="Escribe una orden para F1…" className="flex-1 border rounded-xl px-3 py-2 text-sm" disabled={f1Sending} />
+                    <input value={f1Input} onChange={e => setF1Input(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') sendF1Text(); }} placeholder="Escribe una orden para F1â€¦" className="flex-1 border rounded-xl px-3 py-2 text-sm" disabled={f1Sending} />
                     <button onClick={sendF1Text} disabled={f1Sending || !f1Input.trim()} className="px-3 py-2 rounded-xl bg-indigo-600 text-white disabled:opacity-60"><Send className="w-4 h-4" /></button>
                   </div>
                 </div>
@@ -2789,13 +2789,13 @@ const buildLeadReport = React.useCallback(() => {
                           setTab("chat");
                         }}
                       >
-                        <div className="text-sm font-medium text-gray-800 truncate">{c.title || `Conversación #${c.id}`}</div>
+                        <div className="text-sm font-medium text-gray-800 truncate">{c.title || `ConversaciÃ³n #${c.id}`}</div>
                         <div className="text-[11px] text-gray-500">{new Date(c.updated_at || c.created_at).toLocaleString()}</div>
                       </button>
 
                       <button
                         className="p-2 rounded-lg border bg-white hover:bg-gray-100"
-                        title="Eliminar conversación"
+                        title="Eliminar conversaciÃ³n"
                         onClick={(e) => {
                           e.preventDefault();
                           e.stopPropagation();
@@ -2814,7 +2814,7 @@ const buildLeadReport = React.useCallback(() => {
               <div className="h-full flex flex-col">
                 <div className="flex items-center justify-between px-3 py-2 border-b">
                   <div className="text-xs text-gray-700 truncate">
-                    {selectedConv ? selectedConv.title || `Conversación #${selectedConv.id}` : "Sin conversación"}
+                    {selectedConv ? selectedConv.title || `ConversaciÃ³n #${selectedConv.id}` : "Sin conversaciÃ³n"}
                   </div>
                   <button className="text-xs px-2 py-1 rounded bg-white border hover:bg-gray-100" onClick={newConversation}>
                     + Nueva
@@ -2848,7 +2848,7 @@ const buildLeadReport = React.useCallback(() => {
                     <input
                       value={input}
                       onChange={(e) => setInput(e.target.value)}
-                      placeholder="Escribe aquí..."
+                      placeholder="Escribe aquÃ­..."
                       className="flex-1 border rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-200"
                       onKeyDown={(e) => {
                         if (e.key === "Enter") send();
@@ -2902,7 +2902,7 @@ const buildLeadReport = React.useCallback(() => {
                       onClick={loadLeads}
                       title="Actualizar leads"
                     >
-                      ↻
+                      â†»
                     </button>
                   </div>
 
@@ -2954,7 +2954,7 @@ const buildLeadReport = React.useCallback(() => {
                         </button>
                       );
                     })}
-                    {!loadingLeads && leads.length === 0 && <div className="text-xs text-gray-500 mt-4">Sin leads aún.</div>}
+                    {!loadingLeads && leads.length === 0 && <div className="text-xs text-gray-500 mt-4">Sin leads aÃºn.</div>}
                   </div>
                 </div>
 
@@ -2969,7 +2969,7 @@ const buildLeadReport = React.useCallback(() => {
                         onClick={() => loadLeadMsgs(selectedLead.id)}
                         title="Actualizar mensajes"
                       >
-                        ↻
+                        â†»
                       </button>
                     )}
                   </div>
@@ -2991,7 +2991,7 @@ const buildLeadReport = React.useCallback(() => {
                     ))}
 
                     {!loadingLeadMsgs && selectedLead && leadMsgs.length === 0 && (
-                      <div className="text-xs text-gray-500 mt-6 text-center">Escribe para iniciar la conversación de ventas.</div>
+                      <div className="text-xs text-gray-500 mt-6 text-center">Escribe para iniciar la conversaciÃ³n de ventas.</div>
                     )}
 
                     {!selectedLead && <div className="text-xs text-gray-500 mt-6 text-center">Selecciona un lead.</div>}
@@ -3001,7 +3001,7 @@ const buildLeadReport = React.useCallback(() => {
                     <input
                       value={leadInput}
                       onChange={(e) => setLeadInput(e.target.value)}
-                      placeholder="Escribe para vender…"
+                      placeholder="Escribe para venderâ€¦"
                       className="flex-1 border rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-200"
                       onKeyDown={(e) => {
                         if (e.key === "Enter") sendLead();
@@ -3085,3 +3085,4 @@ const buildLeadReport = React.useCallback(() => {
     </>
   );
 }
+
