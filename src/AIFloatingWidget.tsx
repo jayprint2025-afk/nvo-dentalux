@@ -1678,8 +1678,49 @@ const buildLeadReport = React.useCallback(() => {
           }
 
           wakeVerificationInFlightRef.current = true;
-          setF1VoiceEngineDetail("Verificando â€˜Hanaâ€™â€¦");
+          setF1VoiceEngineDetail("Verificando voz del propietario…");
           try {
+            // V28 COST GUARD: Owner Voice Lock runs LOCALLY before cloud transcription.
+            // TV/other voices die here and never call gpt-4o-mini-transcribe.
+            // We intentionally keep the existing lexical verification and the controller
+            // Owner Lock afterwards (defense in depth) so activation behavior stays safe.
+            if (!voiceProfile?.enabled || (voiceProfile?.samples?.length ?? 0) < 3) {
+              setLastWakeIdentity("Owner Voice Lock: registra y activa al menos 3 muestras de tu voz");
+              setF1VoiceEngineDetail("Ignorado: perfil de propietario no disponible");
+              (f1VoiceEngineRef.current as any)?.suppressWakeFor?.(700);
+              wakeVerificationCooldownUntilRef.current = Date.now() + 650;
+              return;
+            }
+
+            const ownerPrefilter = await voiceProfileServiceRef.current.verifyWakeSamples(
+              voiceProfileScope,
+              audioWindow,
+              sampleRate,
+            );
+            const ownerSimilarity = Number(ownerPrefilter?.similarity || 0);
+            const ownerThreshold = Math.max(0.88, Number(voiceProfile.acceptanceThreshold || 0));
+            const ownerAccepted = Boolean(ownerPrefilter?.accepted) && ownerSimilarity >= ownerThreshold;
+
+            console.log("[HANNA COST GUARD V28]", {
+              ownerAccepted,
+              similarity: ownerSimilarity,
+              required: ownerThreshold,
+              cloudTranscription: ownerAccepted ? "allowed" : "blocked",
+            });
+
+            if (!ownerAccepted) {
+              const pct = Math.round(ownerSimilarity * 100);
+              const requiredPct = Math.round(ownerThreshold * 100);
+              setLastWakeIdentity(`Owner prefilter rechazo la voz (${pct}% / minimo ${requiredPct}%)`);
+              setF1VoiceEngineDetail("Ignorado localmente · sin costo de transcripción");
+              (f1VoiceEngineRef.current as any)?.suppressWakeFor?.(700);
+              // Keep this short: if the TV triggers first, the owner can still say Hanna
+              // almost immediately without waiting several seconds.
+              wakeVerificationCooldownUntilRef.current = Date.now() + 650;
+              return;
+            }
+
+            setF1VoiceEngineDetail("Voz reconocida · verificando ‘Hana’…");
             const verification: any = await api('/f1/wake/verify', {
               method: 'POST',
               body: JSON.stringify({
@@ -3140,4 +3181,3 @@ const buildLeadReport = React.useCallback(() => {
     </>
   );
 }
-
