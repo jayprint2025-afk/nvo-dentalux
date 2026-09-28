@@ -1729,9 +1729,21 @@ const buildLeadReport = React.useCallback(() => {
 
             if (!verification?.accepted) {
               const heard = String(verification?.transcript || '').trim();
-              setF1VoiceEngineDetail(heard ? `Ignorado: “${heard.slice(0, 48)}”` : "Ignorado: no se escucho Hana");
-              (f1VoiceEngineRef.current as any)?.suppressWakeFor?.(700);
-              wakeVerificationCooldownUntilRef.current = Date.now() + 650;
+              setF1VoiceEngineDetail(
+                heard
+                  ? `V30 · no era Hana: “${heard.slice(0, 48)}” · pausa ahorro 4 s`
+                  : "V30 · no se escucho Hana · pausa ahorro 4 s",
+              );
+              // V30 COST GUARD: if the owner is simply talking, do not pay for a
+              // new cloud transcription every ~650 ms. One rejected lexical
+              // verification opens a 4 s local-only window. This does not change
+              // Owner Voice Lock or the final Hanna/Realtime authorization path.
+              (f1VoiceEngineRef.current as any)?.suppressWakeFor?.(4000);
+              wakeVerificationCooldownUntilRef.current = Date.now() + 4000;
+              console.log("[HANNA COST GUARD V30] remote reject cooldown", {
+                heard: heard.slice(0, 48),
+                cooldown_ms: 4000,
+              });
               return;
             }
 
