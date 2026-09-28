@@ -15,6 +15,11 @@ import type {
 const DEFAULT_MODEL_ROOT = "/models/hanna-v5";
 const DEFAULT_WAKE_THRESHOLD = 0.30;
 
+// Hanna V27 Wake Isolation: keep the final wake-word region instead of
+// forwarding the entire rolling window (which may contain TV/background speech).
+const WAKE_ISOLATION_MS = 1400;
+const DEFAULT_COOLDOWN_MS = 1800;
+
 export class F1VoiceEngine {
   private readonly options: F1VoiceEngineOptions;
   private readonly core: CoreF1VoiceEngine;
@@ -37,7 +42,9 @@ export class F1VoiceEngine {
       executionProviders: ["wasm"],
     });
 
-    const cooldownMs = Number(options.cooldownMs ?? 5000);
+    // V27: 5 s allowed a false TV candidate to suppress the owner wake word.
+    // 1.8 s still prevents rapid duplicate wakes without leaving Hanna deaf for 5 s.
+    const cooldownMs = Number(options.cooldownMs ?? DEFAULT_COOLDOWN_MS);
     const cooldownFrames = Math.max(
       1,
       Math.ceil(cooldownMs / 80),
@@ -181,11 +188,30 @@ export class F1VoiceEngine {
         audioWindow,
         sampleRate,
       }) => {
+        // V27 Wake Isolation
+        // The local model fires at/near the end of the wake word. Keep only the
+        // most recent ~1.4 s so continuous TV speech before "Hanna" does not
+        // contaminate the server transcription. Do not alter the samples or gain.
+        const isolatedAudioWindow = this.isolateWakeWindow(
+          audioWindow,
+          sampleRate,
+        );
+
+        console.debug("[HANNA V27 WAKE ISOLATION]", {
+          score: Number(score.toFixed(3)),
+          sampleRate,
+          originalSamples: audioWindow.length,
+          isolatedSamples: isolatedAudioWindow.length,
+          isolatedMs: Math.round(
+            (isolatedAudioWindow.length / Math.max(1, sampleRate)) * 1000,
+          ),
+        });
+
         const event: F1WakeEvent = {
           phrase: this.options.phrase || "Hanna",
           confidence: score,
           detectedAt: timestampMs,
-          audioWindow,
+          audioWindow: isolatedAudioWindow,
           sampleRate,
         };
 
@@ -213,6 +239,25 @@ export class F1VoiceEngine {
         );
       },
     );
+  }
+
+  private isolateWakeWindow(
+    audioWindow: Float32Array,
+    sampleRate: number,
+  ): Float32Array {
+    if (!(audioWindow instanceof Float32Array)) return audioWindow;
+    if (!Number.isFinite(sampleRate) || sampleRate <= 0) return audioWindow;
+
+    const keepSamples = Math.max(
+      1,
+      Math.round((sampleRate * WAKE_ISOLATION_MS) / 1000),
+    );
+
+    if (audioWindow.length <= keepSamples) return audioWindow;
+
+    // slice() creates an independent buffer; this avoids retaining/mutating the
+    // engine's rolling buffer while the async verifier is using the candidate.
+    return audioWindow.slice(audioWindow.length - keepSamples);
   }
 
   private mapStatus(
