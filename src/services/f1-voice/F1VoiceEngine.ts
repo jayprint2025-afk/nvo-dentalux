@@ -24,6 +24,9 @@ export class F1VoiceEngine {
   private readonly options: F1VoiceEngineOptions;
   private readonly core: CoreF1VoiceEngine;
   private disposed = false;
+  // V32 Cost Guard: local suppression window. This prevents wake candidates
+  // from reaching the widget while a negative verification cooldown is active.
+  private wakeSuppressedUntil = 0;
 
   constructor(options: F1VoiceEngineOptions = {}) {
     this.options = options;
@@ -136,6 +139,16 @@ export class F1VoiceEngine {
     this.core.resume();
   }
 
+  /**
+   * V32 Cost Guard: suppress candidate delivery locally for a short period.
+   * The ONNX engine may continue listening, but no candidate leaves this class,
+   * so the widget cannot call the paid /f1/wake/verify endpoint during the window.
+   */
+  suppressWakeFor(durationMs: number): void {
+    const ms = Math.max(0, Math.round(Number(durationMs) || 0));
+    this.wakeSuppressedUntil = Math.max(this.wakeSuppressedUntil, Date.now() + ms);
+  }
+
   async stop(): Promise<void> {
     await this.core.stop();
   }
@@ -188,6 +201,15 @@ export class F1VoiceEngine {
         audioWindow,
         sampleRate,
       }) => {
+        // V32 Cost Guard: honor local suppression before creating/delivering a candidate.
+        if (Date.now() < this.wakeSuppressedUntil) {
+          console.debug("[HANNA COST GUARD V32] candidate suppressed locally", {
+            remainingMs: Math.max(0, this.wakeSuppressedUntil - Date.now()),
+            score: Number(score.toFixed(3)),
+          });
+          return;
+        }
+
         // V27 Wake Isolation
         // The local model fires at/near the end of the wake word. Keep only the
         // most recent ~1.4 s so continuous TV speech before "Hanna" does not
