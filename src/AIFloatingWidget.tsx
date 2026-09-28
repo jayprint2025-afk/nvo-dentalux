@@ -1752,25 +1752,51 @@ const buildLeadReport = React.useCallback(() => {
       // Solo llegan eventos que ya superaron la verificaciÃ³n lexical remota.
       minimumWakeConfidence: 0.99,
       verifyWakeIdentity: async (event) => {
-        if (!voiceProfile?.enabled) {
-          return { accepted: true };
+        // V26 OWNER VOICE LOCK: fail-closed. A voice wake may never open Realtime
+        // unless an enabled owner profile with >= 3 enrollment samples exists.
+        if (!voiceProfile?.enabled || (voiceProfile?.samples?.length ?? 0) < 3) {
+          setLastWakeIdentity("Owner Voice Lock: registra y activa al menos 3 muestras de tu voz");
+          return { accepted: false, reason: "owner_voice_profile_required" };
         }
         if (!event.audioWindow || !event.sampleRate) {
-          setLastWakeIdentity("No llegÃ³ la ventana de audio del Wake Engine");
-          return { accepted: false };
+          setLastWakeIdentity("Owner Voice Lock: no llego audio para verificar al propietario");
+          return { accepted: false, reason: "owner_voice_audio_missing" };
         }
+
         const result = await voiceProfileServiceRef.current.verifyWakeSamples(
           voiceProfileScope,
           event.audioWindow,
           event.sampleRate,
         );
-        const pct = Math.round(result.similarity * 100);
+
+        // Never allow an old/loose profile threshold below 88% to authorize a wake.
+        // The service result is still honored, so both checks must pass.
+        const similarity = Number(result?.similarity || 0);
+        const ownerThreshold = Math.max(0.88, Number(voiceProfile.acceptanceThreshold || 0));
+        const ownerAccepted = Boolean(result?.accepted) && similarity >= ownerThreshold;
+        const pct = Math.round(similarity * 100);
+        const requiredPct = Math.round(ownerThreshold * 100);
+
+        console.log("[HANNA OWNER LOCK V26]", {
+          accepted: ownerAccepted,
+          similarity,
+          required: ownerThreshold,
+          samples: voiceProfile.samples.length,
+          displayName: result?.displayName || voiceProfile.displayName,
+        });
+
         setLastWakeIdentity(
-          result.accepted
-            ? `Voz reconocida: ${result.displayName} (${pct}%)`
-            : `Voz no reconocida (${pct}%)`,
+          ownerAccepted
+            ? `Propietario reconocido: ${result?.displayName || voiceProfile.displayName} (${pct}%)`
+            : `Owner Voice Lock rechazo la voz (${pct}% / minimo ${requiredPct}%)`,
         );
-        return result;
+
+        return {
+          ...result,
+          accepted: ownerAccepted,
+          similarity,
+          reason: ownerAccepted ? "owner_voice_verified" : "owner_voice_mismatch",
+        };
       },
       createRealtimeClient: ({ greetingText, speakerName }) => new F1RealtimeClient({
         greetingText,
@@ -2679,7 +2705,7 @@ const buildLeadReport = React.useCallback(() => {
                               %
                               <input
                                 type="range"
-                                min="0.75"
+                                min="0.88"
                                 max="0.98"
                                 step="0.01"
                                 value={voiceProfile.acceptanceThreshold}
