@@ -1,8 +1,9 @@
-﻿import {
+import {
   EngineBuilder,
   type F1VoiceEngine as CoreF1VoiceEngine,
   type F1VoiceEngineState,
 } from "@cliniqone/f1-voice-engine";
+import { AudioEngine, BrowserMicrophoneCapture } from "@cliniqone/audio-engine";
 import { OnnxWakeModel } from "@cliniqone/onnx-runtime";
 
 import type {
@@ -42,8 +43,18 @@ export class F1VoiceEngine {
       Math.ceil(cooldownMs / 80),
     );
 
+    const capture = new BrowserMicrophoneCapture({
+      // External module avoids blob: AudioWorklet failures on stricter mobile browsers/CSP.
+      workletModuleUrl: options.workletUrl || "/f1-voice/f1-audio-processor.js",
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+    });
+    const audio = new AudioEngine({ capture });
+
     this.core = new EngineBuilder()
       .withWakeModel(wakeModel)
+      .withDependencies({ audio })
       .withConfig({
         diagnostics: true,
 

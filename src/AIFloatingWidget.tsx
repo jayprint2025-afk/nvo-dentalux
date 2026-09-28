@@ -1,4 +1,4 @@
-﻿import React from "react";
+import React from "react";
 import { MessagesSquare, Send, X, Trash2, Mic, MicOff, Bell, CalendarDays, Volume2, Settings2,
   Search, Filter, Lock, Unlock, MessageCircle, Instagram, RefreshCw, User, Inbox } from "lucide-react";
 import { api } from "./lib/api";
@@ -87,16 +87,16 @@ const F1_WAKE_SETTINGS_KEY = "f1_wake_settings_v6_hana";
 // V14: el detector local es solo PREFILTRO DE VOZ. La activaciÃ³n final exige
 // que el backend transcriba exactamente la palabra "Hana" al inicio.
 // El modelo ONNX anterior ya no decide la palabra clave.
-const F1_MIN_WAKE_CONFIDENCE = 0.0;
-const F1_MAX_WAKE_THRESHOLD = 0.20;
+const F1_MIN_WAKE_CONFIDENCE = 0.15;
+const F1_MAX_WAKE_THRESHOLD = 0.70;
 const DEFAULT_F1_WAKE_SETTINGS: F1WakeSettings = {
   // V14: el ONNX deja de autorizar la palabra clave. Solo genera candidatos
   // cuando existe voz; la autorizaciÃ³n final es la transcripciÃ³n exacta "Hana".
   // Por eso el prefiltro debe ser deliberadamente permisivo.
-  threshold: 0.0,
-  consecutiveHits: 1,
-  cooldownMs: 1800,
-  stabilizationMs: 900,
+  threshold: 0.32,
+  consecutiveHits: 2,
+  cooldownMs: 2200,
+  stabilizationMs: 1000,
 };
 
 function loadF1WakeSettings(): F1WakeSettings {
@@ -1486,23 +1486,23 @@ const buildLeadReport = React.useCallback(() => {
       const next: F1WakeSettings =
         preset === "sensitive"
           ? {
-              threshold: 0.0,
+              threshold: 0.22,
               consecutiveHits: 1,
-              cooldownMs: 1500,
-              stabilizationMs: 700,
+              cooldownMs: 1800,
+              stabilizationMs: 800,
             }
           : preset === "strict"
             ? {
-                threshold: 0.10,
-                consecutiveHits: 1,
-                cooldownMs: 2200,
+                threshold: 0.48,
+                consecutiveHits: 2,
+                cooldownMs: 2800,
                 stabilizationMs: 1200,
               }
             : {
-                threshold: 0.0,
-                consecutiveHits: 1,
-                cooldownMs: 1800,
-                stabilizationMs: 900,
+                threshold: 0.32,
+                consecutiveHits: 2,
+                cooldownMs: 2200,
+                stabilizationMs: 1000,
               };
       setWakeSettingsDraft(next);
     },
@@ -1657,8 +1657,8 @@ const buildLeadReport = React.useCallback(() => {
       modelUrl,
       // V14: cualquier segmento de voz suficientemente claro puede convertirse
       // en CANDIDATO. Solo /f1/wake/verify puede autorizar "Hana".
-      threshold: 0.0,
-      consecutiveHits: 1,
+      threshold: wakeSettings.threshold,
+      consecutiveHits: wakeSettings.consecutiveHits,
       cooldownMs: wakeSettings.cooldownMs,
       onStatus: (status, detail) => {
         setF1VoiceEngineStatus(status);
@@ -1802,9 +1802,37 @@ const buildLeadReport = React.useCallback(() => {
       }),
     });
     sessionControllerRef.current = controller;
-    if (f1VoiceEngineEnabled) void controller.enable();
+
+    // V20 MOBILE ARM:
+    // Desktop can usually start immediately. Mobile Safari/Chrome may require
+    // a real user gesture before WebAudio/microphone capture can remain active.
+    // We try immediately, then retry ONCE on the first pointer/touch interaction.
+    let gestureRetryArmed = false;
+    const retryWakeOnGesture = () => {
+      if (!f1VoiceEngineEnabled) return;
+      gestureRetryArmed = false;
+      window.removeEventListener("pointerdown", retryWakeOnGesture, true);
+      window.removeEventListener("touchend", retryWakeOnGesture, true);
+      void controller.enable().catch((error) => {
+        setF1VoiceEngineDetail(
+          `No pude activar el micrófono: ${error instanceof Error ? error.message : String(error)}`
+        );
+      });
+    };
+
+    if (f1VoiceEngineEnabled) {
+      void controller.enable().catch(() => {
+        gestureRetryArmed = true;
+        window.addEventListener("pointerdown", retryWakeOnGesture, { capture: true, once: true });
+        window.addEventListener("touchend", retryWakeOnGesture, { capture: true, once: true });
+      });
+    }
 
     return () => {
+      if (gestureRetryArmed) {
+        window.removeEventListener("pointerdown", retryWakeOnGesture, true);
+        window.removeEventListener("touchend", retryWakeOnGesture, true);
+      }
       sessionControllerRef.current = null;
       f1VoiceEngineRef.current = null;
       void controller.dispose();

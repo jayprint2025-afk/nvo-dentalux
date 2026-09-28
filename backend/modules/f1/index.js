@@ -35,16 +35,28 @@ function matchWakePhrase(value) {
   const text = normalizeWakeTranscript(value);
   if (!text) return { accepted: false, normalized: text, phrase: '' };
 
-  // V14: la única palabra de activación es "Hana" y debe aparecer al INICIO.
-  // No aceptamos "Ana" como alias: en una clínica puede ser un nombre real y
-  // causaría falsos positivos. El prompt del transcriptor sesga la ortografía
-  // correcta hacia "Hana" cuando esa es realmente la palabra pronunciada.
-  const match = /^hana\b/.test(text);
+  // V20: admite "Hana", "Hanna", "Oye Hana" y "Oye Hanna".
+  // "Ana" continúa rechazazada para evitar activaciones por nombres reales.
+  const match = /^(?:oye\s+)?hanna?\b/.test(text);
   return {
     accepted: match,
     normalized: text,
     phrase: match ? 'hana' : '',
   };
+}
+
+function wakePcmStats(base64) {
+  const pcm = Buffer.from(String(base64 || ''), 'base64');
+  if (!pcm.length || pcm.length % 2 !== 0) return { rms: 0, peak: 0, samples: 0 };
+  let energy = 0;
+  let peak = 0;
+  const samples = pcm.length / 2;
+  for (let i = 0; i < pcm.length; i += 2) {
+    const value = pcm.readInt16LE(i) / 32768;
+    energy += value * value;
+    peak = Math.max(peak, Math.abs(value));
+  }
+  return { rms: Math.sqrt(energy / Math.max(1, samples)), peak, samples };
 }
 
 function pcm16Base64ToWav(base64, sampleRate) {
@@ -102,7 +114,7 @@ async function transcribeWakeCandidate(wavBuffer) {
   const body = Buffer.concat([
     field('model', model),
     field('language', 'es'),
-    field('prompt', 'Transcribe literalmente en español. La palabra clave posible es “Hana”, escrita H-A-N-A. Si realmente escuchas esa palabra al inicio, escríbela exactamente como Hana. No conviertas otros sonidos en Hana y no completes ni inventes palabras si el audio contiene ruido, respiración, golpes o silencio.'),
+    field('prompt', 'Transcribe únicamente lo que realmente se escucha en el audio, literalmente y sin completar palabras. Si hay silencio, ruido, respiración, golpes o audio ininteligible, devuelve texto vacío. No inventes nombres ni palabras por contexto.'),
     Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="wake.wav"\r\nContent-Type: audio/wav\r\n\r\n`, 'utf8'),
     wavBuffer,
     Buffer.from(`\r\n--${boundary}--\r\n`, 'utf8'),
@@ -529,7 +541,28 @@ function setupF1Routes(app, q, deps) {
       if (!allowWakeVerifyAttempt(ctx)) {
         return res.status(429).json({ ok: false, accepted: false, reason: 'rate_limited' });
       }
-      const wav = pcm16Base64ToWav(req.body?.pcm16_base64, req.body?.sample_rate || 16000);
+      const pcmBase64 = req.body?.pcm16_base64;
+      const localScore = Number(req.body?.local_score || 0);
+      const stats = wakePcmStats(pcmBase64);
+
+      // V20 fail-closed gates: reject silence/near-silence and extremely weak
+      // local candidates BEFORE transcription. This cuts hallucinated wake words.
+      if (stats.samples < 3200 || stats.rms < 0.006 || stats.peak < 0.025) {
+        return res.json({
+          ok: true, accepted: false, transcript: '', normalized: '',
+          phrase: null, reason: 'audio_too_weak',
+          diagnostics: { rms: stats.rms, peak: stats.peak, local_score: localScore },
+        });
+      }
+      if (!Number.isFinite(localScore) || localScore < 0.18) {
+        return res.json({
+          ok: true, accepted: false, transcript: '', normalized: '',
+          phrase: null, reason: 'local_score_too_low',
+          diagnostics: { rms: stats.rms, peak: stats.peak, local_score: localScore },
+        });
+      }
+
+      const wav = pcm16Base64ToWav(pcmBase64, req.body?.sample_rate || 16000);
       const transcript = await transcribeWakeCandidate(wav);
       const match = matchWakePhrase(transcript);
       res.json({

@@ -39,17 +39,26 @@ export class BrowserMicrophoneCapture implements AudioCapturePort {
     try {
       const audioConstraints: MediaTrackConstraints = {
         channelCount: { ideal: 1 },
-        echoCancellation: this.#options.echoCancellation ?? false,
-        noiseSuppression: this.#options.noiseSuppression ?? false,
-        autoGainControl: this.#options.autoGainControl ?? false,
+        echoCancellation: this.#options.echoCancellation ?? true,
+        noiseSuppression: this.#options.noiseSuppression ?? true,
+        autoGainControl: this.#options.autoGainControl ?? true,
         ...(this.#options.deviceId
           ? { deviceId: { exact: this.#options.deviceId } }
           : {}),
       };
 
-      this.#stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints, video: false });
+      // MOBILE: create/resume WebAudio while the initiating user gesture is still active.
+      // Creating it only after awaiting getUserMedia can lose the gesture on iOS Safari.
       this.#context = new AudioContext({ latencyHint: "interactive" });
-      await this.#context.resume();
+      if (this.#context.state === "suspended") {
+        await this.#context.resume();
+      }
+
+      this.#stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints, video: false });
+
+      if (this.#context.state === "suspended") {
+        await this.#context.resume();
+      }
 
       const moduleUrl = this.#options.workletModuleUrl ?? this.#createWorkletUrl();
       await this.#context.audioWorklet.addModule(moduleUrl);
