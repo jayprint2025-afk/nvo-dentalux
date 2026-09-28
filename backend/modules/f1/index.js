@@ -134,6 +134,14 @@ async function transcribeWakeCandidate(wavBuffer) {
   let parsed = {};
   try { parsed = JSON.parse(text); } catch {}
   const transcript = String(parsed?.text || '').trim();
+  // V22 diagnóstico seguro: registra únicamente metadatos y la transcripción
+  // devuelta por el verificador. Nunca registra el audio PCM/WAV ni credenciales.
+  console.log('[HANNA WAKE V22] transcription', {
+    model,
+    wav_bytes: wavBuffer.length,
+    transcript,
+    normalized: normalizeWakeTranscript(transcript),
+  });
   // Algunos modelos pueden ecoar el prompt/contexto ante silencio o audio vacío.
   // Eso nunca debe mostrarse ni considerarse una emisión del usuario.
   const normalized = normalizeWakeTranscript(transcript);
@@ -545,6 +553,20 @@ function setupF1Routes(app, q, deps) {
       const localScore = Number(req.body?.local_score || 0);
       const stats = wakePcmStats(pcmBase64);
 
+      // V22 diagnóstico: confirma qué candidato llega desde el navegador sin
+      // persistir ni imprimir el audio. Útil para distinguir captura truncada,
+      // score local incorrecto y fallo de transcripción.
+      console.log('[HANNA WAKE V22] candidate', {
+        tenant_id: ctx.tenant_id,
+        branch_key: ctx.branch_key,
+        sample_rate: Number(req.body?.sample_rate || 16000),
+        samples: stats.samples,
+        duration_ms: Math.round((stats.samples / Number(req.body?.sample_rate || 16000)) * 1000),
+        rms: Number(stats.rms.toFixed(6)),
+        peak: Number(stats.peak.toFixed(6)),
+        local_score: localScore,
+      });
+
       // V20 fail-closed gates: reject silence/near-silence and extremely weak
       // local candidates BEFORE transcription. This cuts hallucinated wake words.
       if (stats.samples < 3200 || stats.rms < 0.006 || stats.peak < 0.025) {
@@ -565,6 +587,15 @@ function setupF1Routes(app, q, deps) {
       const wav = pcm16Base64ToWav(pcmBase64, req.body?.sample_rate || 16000);
       const transcript = await transcribeWakeCandidate(wav);
       const match = matchWakePhrase(transcript);
+      console.log('[HANNA WAKE V22] verdict', {
+        accepted: match.accepted,
+        transcript,
+        normalized: match.normalized,
+        phrase: match.phrase || null,
+        local_score: localScore,
+        rms: Number(stats.rms.toFixed(6)),
+        peak: Number(stats.peak.toFixed(6)),
+      });
       res.json({
         ok: true,
         accepted: match.accepted,
