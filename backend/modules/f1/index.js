@@ -14,7 +14,7 @@ const { realtimeVoiceProfile } = require('./voice-profile');
 const actionExecutions = new Map();
 
 
-// ===== Wake phrase verifier (V24: HANA) =====
+// ===== Wake phrase verifier (V14: HANA) =====
 // El ONNX/VAD solo propone candidatos. La activación final se confirma
 // transcribiendo una ventana corta y exigiendo que la frase EMPIECE con la
 // palabra clave. Así podemos mantener un prefiltro sensible sin despertar por
@@ -35,20 +35,15 @@ function matchWakePhrase(value) {
   const text = normalizeWakeTranscript(value);
   if (!text) return { accepted: false, normalized: text, phrase: '' };
 
-  // V24: comparación explícita y fail-closed. Evita depender de una regex
-  // para la decisión final y mantiene "Ana" rechazada para reducir falsos positivos.
-  const acceptedPhrases = new Set(['hana', 'hanna', 'oye hana', 'oye hanna']);
-  const words = text.split(' ').filter(Boolean);
-  const candidate = words[0] === 'oye'
-    ? words.slice(0, 2).join(' ')
-    : words[0] || '';
-  const accepted = acceptedPhrases.has(candidate);
-
+  // V25: coincidencia ESTRICTA. No basta con que una frase cualquiera empiece
+  // con Hana/Hanna; el verificador solo autoriza las variantes de wake word.
+  // Esto evita que TV/conversaciones como 'Hana dijo...' abran F1 por accidente.
+  const allowed = new Set(['hana', 'hanna', 'oye hana', 'oye hanna', 'hey hana', 'hey hanna']);
+  const match = allowed.has(text);
   return {
-    accepted,
+    accepted: match,
     normalized: text,
-    phrase: accepted ? 'hana' : '',
-    candidate,
+    phrase: match ? 'hana' : '',
   };
 }
 
@@ -101,8 +96,12 @@ function allowWakeVerifyAttempt(ctx) {
     state.windowStart = now;
     state.count = 0;
   }
-  if (now - state.lastAt < 250) return false;
-  if (state.count >= 40) return false;
+  // V25: evita ráfagas del detector local (TV/ruido) que antes podían generar
+  // hasta 40 transcripciones por minuto. Una verificación cada 1.2 s y máximo
+  // 12/min limita costo sin depender del score local, que en pruebas reales
+  // resultó alto para TV y bajo incluso cuando el usuario dijo 'Hana'.
+  if (now - state.lastAt < 1200) return false;
+  if (state.count >= 12) return false;
   state.lastAt = now;
   state.count += 1;
   wakeVerifyRate.set(key, state);
@@ -143,7 +142,7 @@ async function transcribeWakeCandidate(wavBuffer) {
   const transcript = String(parsed?.text || '').trim();
   // V22 diagnóstico seguro: registra únicamente metadatos y la transcripción
   // devuelta por el verificador. Nunca registra el audio PCM/WAV ni credenciales.
-  console.log('[HANNA WAKE V22] transcription', {
+  console.log('[HANNA WAKE V25] transcription', {
     model,
     wav_bytes: wavBuffer.length,
     transcript,
@@ -563,7 +562,7 @@ function setupF1Routes(app, q, deps) {
       // V22 diagnóstico: confirma qué candidato llega desde el navegador sin
       // persistir ni imprimir el audio. Útil para distinguir captura truncada,
       // score local incorrecto y fallo de transcripción.
-      console.log('[HANNA WAKE V22] candidate', {
+      console.log('[HANNA WAKE V25] candidate', {
         tenant_id: ctx.tenant_id,
         branch_key: ctx.branch_key,
         sample_rate: Number(req.body?.sample_rate || 16000),
@@ -583,6 +582,9 @@ function setupF1Routes(app, q, deps) {
           diagnostics: { rms: stats.rms, peak: stats.peak, local_score: localScore },
         });
       }
+      // V25: conservamos 0.18 por ahora. En las pruebas, una voz real de 'Hana'
+      // llegó con ~0.249 mientras voces de TV llegaron >0.95; subir este umbral
+      // empeoraría falsos negativos y no resolvería por sí solo los falsos positivos.
       if (!Number.isFinite(localScore) || localScore < 0.18) {
         return res.json({
           ok: true, accepted: false, transcript: '', normalized: '',
@@ -594,9 +596,8 @@ function setupF1Routes(app, q, deps) {
       const wav = pcm16Base64ToWav(pcmBase64, req.body?.sample_rate || 16000);
       const transcript = await transcribeWakeCandidate(wav);
       const match = matchWakePhrase(transcript);
-      console.log('[HANNA WAKE V24] verdict', {
+      console.log('[HANNA WAKE V25] verdict', {
         accepted: match.accepted,
-        candidate: match.candidate,
         transcript,
         normalized: match.normalized,
         phrase: match.phrase || null,
