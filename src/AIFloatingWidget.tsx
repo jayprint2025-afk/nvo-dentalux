@@ -1715,9 +1715,28 @@ const buildLeadReport = React.useCallback(() => {
               return;
             }
 
-            // Only an owner-like sample is allowed to incur the remote transcription cost.
+            // V32 Cost Guard: do not pay cloud transcription for weak ONNX candidates.
+            // We intentionally keep the detector threshold unchanged; this gate only affects
+            // whether a weak candidate is allowed to incur a remote transcription.
+            const localWakeScore = Number((event as any)?.confidence || 0);
+            const V32_MIN_REMOTE_SCORE = 0.70;
+            if (!Number.isFinite(localWakeScore) || localWakeScore < V32_MIN_REMOTE_SCORE) {
+              const scorePct = Math.round(Math.max(0, localWakeScore) * 100);
+              setF1VoiceEngineDetail(
+                `V32 · candidato débil (${scorePct}%) bloqueado localmente · sin OpenAI`,
+              );
+              (f1VoiceEngineRef.current as any)?.suppressWakeFor?.(1200);
+              wakeVerificationCooldownUntilRef.current = Date.now() + 1200;
+              console.log("[HANNA COST GUARD V32] weak candidate blocked", {
+                local_score: localWakeScore,
+                required: V32_MIN_REMOTE_SCORE,
+              });
+              return;
+            }
+
+            // Only an owner-like + sufficiently strong wake candidate may incur remote cost.
             setLastWakeIdentity(`Propietario reconocido (${pct}%) · verificando palabra`);
-            setF1VoiceEngineDetail("V29 · propietario reconocido · verificando ‘Hana’…");
+            setF1VoiceEngineDetail("V32 · propietario reconocido · verificando ‘Hana’…");
             const verification: any = await api('/f1/wake/verify', {
               method: 'POST',
               body: JSON.stringify({
@@ -3186,4 +3205,3 @@ const buildLeadReport = React.useCallback(() => {
     </>
   );
 }
-
