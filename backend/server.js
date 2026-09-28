@@ -422,6 +422,12 @@ app.use((req, _res, next) => {
     const safeBody = { ...(req.body || {}) };
     if ('password' in safeBody) safeBody.password = '[OCULTA]';
     if ('password_hash' in safeBody) safeBody.password_hash = '[OCULTA]';
+    // V28: never dump raw wake audio/Base64 into Render logs.
+    // Keep only useful metadata; this changes logging only, not Hanna behavior.
+    if ('pcm16_base64' in safeBody) {
+      const rawAudio = typeof safeBody.pcm16_base64 === 'string' ? safeBody.pcm16_base64 : '';
+      safeBody.pcm16_base64 = `[AUDIO OCULTO · base64_chars=${rawAudio.length}]`;
+    }
     console.log('Body received:', JSON.stringify(safeBody, null, 2));
     console.log('Sucursal detected:', getSucursal(req));
     console.log('========================\n');
