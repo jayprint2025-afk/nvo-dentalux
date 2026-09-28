@@ -1685,7 +1685,7 @@ const buildLeadReport = React.useCallback(() => {
               body: JSON.stringify({
                 pcm16_base64: float32ToPcm16Base64(audioWindow),
                 sample_rate: sampleRate,
-                local_score: Number((event as any)?.score || 0),
+                local_score: Number((event as any)?.confidence || 0),
               }),
             });
 
