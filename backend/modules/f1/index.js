@@ -14,7 +14,7 @@ const { realtimeVoiceProfile } = require('./voice-profile');
 const actionExecutions = new Map();
 
 
-// ===== Wake phrase verifier (V14: HANA) =====
+// ===== Wake phrase verifier (V24: HANA) =====
 // El ONNX/VAD solo propone candidatos. La activación final se confirma
 // transcribiendo una ventana corta y exigiendo que la frase EMPIECE con la
 // palabra clave. Así podemos mantener un prefiltro sensible sin despertar por
@@ -35,13 +35,20 @@ function matchWakePhrase(value) {
   const text = normalizeWakeTranscript(value);
   if (!text) return { accepted: false, normalized: text, phrase: '' };
 
-  // V20: admite "Hana", "Hanna", "Oye Hana" y "Oye Hanna".
-  // "Ana" continúa rechazazada para evitar activaciones por nombres reales.
-  const match = /^(?:oye\s+)?hanna?\b/.test(text);
+  // V24: comparación explícita y fail-closed. Evita depender de una regex
+  // para la decisión final y mantiene "Ana" rechazada para reducir falsos positivos.
+  const acceptedPhrases = new Set(['hana', 'hanna', 'oye hana', 'oye hanna']);
+  const words = text.split(' ').filter(Boolean);
+  const candidate = words[0] === 'oye'
+    ? words.slice(0, 2).join(' ')
+    : words[0] || '';
+  const accepted = acceptedPhrases.has(candidate);
+
   return {
-    accepted: match,
+    accepted,
     normalized: text,
-    phrase: match ? 'hana' : '',
+    phrase: accepted ? 'hana' : '',
+    candidate,
   };
 }
 
@@ -587,8 +594,9 @@ function setupF1Routes(app, q, deps) {
       const wav = pcm16Base64ToWav(pcmBase64, req.body?.sample_rate || 16000);
       const transcript = await transcribeWakeCandidate(wav);
       const match = matchWakePhrase(transcript);
-      console.log('[HANNA WAKE V22] verdict', {
+      console.log('[HANNA WAKE V24] verdict', {
         accepted: match.accepted,
+        candidate: match.candidate,
         transcript,
         normalized: match.normalized,
         phrase: match.phrase || null,
