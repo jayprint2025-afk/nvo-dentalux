@@ -120,7 +120,7 @@ async function transcribeWakeCandidate(wavBuffer) {
   const body = Buffer.concat([
     field('model', model),
     field('language', 'es'),
-    field('prompt', 'La palabra de activación esperada puede ser Hana o Hanna, normalmente en frases como: Hana, Oye Hana, Hanna u Oye Hanna. Transcribe literalmente el habla audible en español. No inventes palabras si solo hay silencio o ruido.'),
+    field('prompt', 'Transcribe literalmente solo el habla audible en español. Si no hay habla inteligible, devuelve texto vacío. No completes, sugieras ni inventes palabras.'),
     Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="wake.wav"\r\nContent-Type: audio/wav\r\n\r\n`, 'utf8'),
     wavBuffer,
     Buffer.from(`\r\n--${boundary}--\r\n`, 'utf8'),
@@ -151,7 +151,12 @@ async function transcribeWakeCandidate(wavBuffer) {
   // Algunos modelos pueden ecoar el prompt/contexto ante silencio o audio vacío.
   // Eso nunca debe mostrarse ni considerarse una emisión del usuario.
   const normalized = normalizeWakeTranscript(transcript);
-  if (normalized.includes('transcribe literalmente') || normalized.startsWith('context ')) return '';
+  if (
+    normalized.includes('transcribe literalmente') ||
+    normalized.includes('si no hay habla inteligible') ||
+    normalized.includes('no completes sugieras ni inventes palabras') ||
+    normalized.startsWith('context ')
+  ) return '';
   return transcript;
 }
 
