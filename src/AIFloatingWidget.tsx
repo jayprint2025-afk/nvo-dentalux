@@ -1665,62 +1665,59 @@ const buildLeadReport = React.useCallback(() => {
         setF1VoiceEngineDetail(String(detail || ""));
       },
       onWake: (event) => {
-        // V13: ONNX/VAD = prefiltro; transcripciÃ³n exacta = autorizaciÃ³n final.
-        // Nunca abrir Realtime directamente desde un score acÃºstico.
+        // V29 COST GUARD: Owner Voice Lock runs BEFORE paid remote transcription.
+        // ONNX/VAD stays sensitive; non-owner voices die locally and never reach /f1/wake/verify.
         void (async () => {
           const now = Date.now();
           if (wakeVerificationInFlightRef.current || now < wakeVerificationCooldownUntilRef.current) return;
           const audioWindow = (event as any)?.audioWindow;
           const sampleRate = Number((event as any)?.sampleRate || 0);
           if (!(audioWindow instanceof Float32Array) || !audioWindow.length || sampleRate !== 16000) {
-            setF1VoiceEngineDetail("Candidato rechazado: audio invÃ¡lido");
+            setF1VoiceEngineDetail("Candidato rechazado: audio invalido");
             return;
           }
 
           wakeVerificationInFlightRef.current = true;
-          setF1VoiceEngineDetail("Verificando voz del propietario…");
           try {
-            // V28 COST GUARD: Owner Voice Lock runs LOCALLY before cloud transcription.
-            // TV/other voices die here and never call gpt-4o-mini-transcribe.
-            // We intentionally keep the existing lexical verification and the controller
-            // Owner Lock afterwards (defense in depth) so activation behavior stays safe.
+            // Fail closed locally: without a valid owner profile we do not spend on transcription.
             if (!voiceProfile?.enabled || (voiceProfile?.samples?.length ?? 0) < 3) {
               setLastWakeIdentity("Owner Voice Lock: registra y activa al menos 3 muestras de tu voz");
-              setF1VoiceEngineDetail("Ignorado: perfil de propietario no disponible");
+              setF1VoiceEngineDetail("V29: candidato bloqueado localmente · falta perfil del propietario");
               (f1VoiceEngineRef.current as any)?.suppressWakeFor?.(700);
               wakeVerificationCooldownUntilRef.current = Date.now() + 650;
               return;
             }
 
-            const ownerPrefilter = await voiceProfileServiceRef.current.verifyWakeSamples(
+            setF1VoiceEngineDetail("V29 · verificando propietario localmente…");
+            const ownerResult: any = await voiceProfileServiceRef.current.verifyWakeSamples(
               voiceProfileScope,
               audioWindow,
               sampleRate,
             );
-            const ownerSimilarity = Number(ownerPrefilter?.similarity || 0);
+            const similarity = Number(ownerResult?.similarity || 0);
             const ownerThreshold = Math.max(0.88, Number(voiceProfile.acceptanceThreshold || 0));
-            const ownerAccepted = Boolean(ownerPrefilter?.accepted) && ownerSimilarity >= ownerThreshold;
+            const ownerAccepted = Boolean(ownerResult?.accepted) && similarity >= ownerThreshold;
+            const pct = Math.round(similarity * 100);
+            const requiredPct = Math.round(ownerThreshold * 100);
 
-            console.log("[HANNA COST GUARD V28]", {
-              ownerAccepted,
-              similarity: ownerSimilarity,
+            console.log("[HANNA COST GUARD V29] owner precheck", {
+              accepted: ownerAccepted,
+              similarity,
               required: ownerThreshold,
-              cloudTranscription: ownerAccepted ? "allowed" : "blocked",
+              samples: voiceProfile.samples.length,
             });
 
             if (!ownerAccepted) {
-              const pct = Math.round(ownerSimilarity * 100);
-              const requiredPct = Math.round(ownerThreshold * 100);
-              setLastWakeIdentity(`Owner prefilter rechazo la voz (${pct}% / minimo ${requiredPct}%)`);
-              setF1VoiceEngineDetail("Ignorado localmente · sin costo de transcripción");
+              setLastWakeIdentity(`Owner Voice Lock rechazo la voz (${pct}% / minimo ${requiredPct}%)`);
+              setF1VoiceEngineDetail(`V29 · voz ajena bloqueada localmente (${pct}%) · sin OpenAI`);
               (f1VoiceEngineRef.current as any)?.suppressWakeFor?.(700);
-              // Keep this short: if the TV triggers first, the owner can still say Hanna
-              // almost immediately without waiting several seconds.
               wakeVerificationCooldownUntilRef.current = Date.now() + 650;
               return;
             }
 
-            setF1VoiceEngineDetail("Voz reconocida · verificando ‘Hana’…");
+            // Only an owner-like sample is allowed to incur the remote transcription cost.
+            setLastWakeIdentity(`Propietario reconocido (${pct}%) · verificando palabra`);
+            setF1VoiceEngineDetail("V29 · propietario reconocido · verificando ‘Hana’…");
             const verification: any = await api('/f1/wake/verify', {
               method: 'POST',
               body: JSON.stringify({
@@ -1732,21 +1729,18 @@ const buildLeadReport = React.useCallback(() => {
 
             if (!verification?.accepted) {
               const heard = String(verification?.transcript || '').trim();
-              setF1VoiceEngineDetail(heard ? `Ignorado: â€œ${heard.slice(0, 48)}â€` : "Ignorado: no se escuchÃ³ Hana");
+              setF1VoiceEngineDetail(heard ? `Ignorado: “${heard.slice(0, 48)}”` : "Ignorado: no se escucho Hana");
               (f1VoiceEngineRef.current as any)?.suppressWakeFor?.(700);
               wakeVerificationCooldownUntilRef.current = Date.now() + 650;
               return;
             }
 
             const heard = String(verification?.transcript || 'Hana').trim();
-            setLastWakeIdentity(`Hana verificada: ${heard.slice(0, 60)}`);
+            setLastWakeIdentity(`Hana verificada: ${heard.slice(0, 60)} · propietario ${pct}%`);
             wakeVerificationCooldownUntilRef.current = Date.now() + 1800;
 
-            // V18.2: la verificaciÃ³n lÃ©xica NO abre Realtime por la ruta manual.
-            // La misma muestra que dijo â€œHanaâ€ debe pasar ahora por Owner Lock.
-            // Forzamos confidence=1 porque /wake/verify ya autorizÃ³ la palabra;
-            // la biometrÃ­a sigue usando exactamente audioWindow/sampleRate de esta emisiÃ³n.
-            setF1VoiceEngineDetail("Hana verificada Â· autenticando vozâ€¦");
+            // Controller keeps V26 as the final fail-closed identity check before Realtime.
+            setF1VoiceEngineDetail("Hana verificada · autenticacion final…");
             await controller.wakeDetected({
               ...(event as any),
               phrase: "Hana",
@@ -1756,9 +1750,8 @@ const buildLeadReport = React.useCallback(() => {
               sampleRate,
             });
           } catch (error) {
-            // Falla cerrada: si el verificador no estÃ¡ disponible no activar.
             setF1VoiceEngineDetail(
-              `VerificaciÃ³n no disponible: ${error instanceof Error ? error.message : String(error)}`,
+              `Verificacion no disponible: ${error instanceof Error ? error.message : String(error)}`,
             );
             (f1VoiceEngineRef.current as any)?.suppressWakeFor?.(900);
             wakeVerificationCooldownUntilRef.current = Date.now() + 900;
@@ -3181,3 +3174,4 @@ const buildLeadReport = React.useCallback(() => {
     </>
   );
 }
+
