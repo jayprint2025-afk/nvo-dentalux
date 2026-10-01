@@ -143,19 +143,6 @@ export class SherpaWasmKeywordEngine implements SherpaKeywordEngine {
       const keywords = (this.#keywordSpec ?? await fetchText(`${this.#base}/keywords.txt`)).trim();
       if (!keywords) throw new Error("Hana keywords.txt is empty.");
 
-      // IMPORTANT: sherpa-onnx-kws.js maps `config.keywords` to the native
-      // `keywords_file` field. Passing the literal keyword text here makes
-      // Sherpa interpret "▁o ye ▁ha na @oye_hana" as a filename, so the
-      // decoder runs normally but has no usable keyword graph and never wakes.
-      // Mount the keyword specification in Emscripten's VFS and pass its path.
-      const keywordsPath = `${VFS_DIR}/keywords.txt`;
-      const keywordBytes = new TextEncoder().encode(`${keywords}\n`);
-      FS.writeFile(keywordsPath, keywordBytes);
-      const keywordStat = FS.stat(keywordsPath);
-      if (!keywordStat || Number(keywordStat.size) !== keywordBytes.byteLength) {
-        throw new Error("Sherpa VFS verification failed for keywords.txt.");
-      }
-
       const config = {
         featConfig: { samplingRate: 16000, featureDim: 80 },
         modelConfig: {
@@ -176,10 +163,11 @@ export class SherpaWasmKeywordEngine implements SherpaKeywordEngine {
         numTrailingBlanks: 1,
         keywordsScore: this.#score,
         keywordsThreshold: this.#threshold,
-        // This field is a FILE PATH in the generated Sherpa JS wrapper.
-        keywords: keywordsPath,
-        keywordsBuf: "",
-        keywordsBufSize: 0,
+
+        // Use the native in-memory keyword buffer explicitly.
+        keywords: "",
+        keywordsBuf: `${keywords}\n`,
+        keywordsBufSize: new TextEncoder().encode(`${keywords}\n`).byteLength,
       };
 
       const kws = createKws(module, config);
@@ -195,14 +183,7 @@ export class SherpaWasmKeywordEngine implements SherpaKeywordEngine {
 
       this.#kws = kws;
       this.#stream = stream;
-      console.info("[HANA SHERPA] READY", {
-        base: this.#base,
-        vfs: VFS_DIR,
-        keywords,
-        keywordsPath,
-        keywordsScore: this.#score,
-        keywordsThreshold: this.#threshold,
-      });
+      console.info("[HANA SHERPA] READY", { base: this.#base, vfs: VFS_DIR, keywords });
     } catch (cause) {
       const detail = formatError(cause);
       console.error("[HANA SHERPA] INIT_FAILED", cause, detail);
