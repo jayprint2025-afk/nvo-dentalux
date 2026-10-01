@@ -1661,8 +1661,10 @@ const buildLeadReport = React.useCallback(() => {
       consecutiveHits: wakeSettings.consecutiveHits,
       cooldownMs: wakeSettings.cooldownMs,
       onStatus: (status, detail) => {
+        const normalizedDetail = String(detail || "");
+        console.info("[F1/HANA][ENGINE_STATUS]", { status, detail: normalizedDetail });
         setF1VoiceEngineStatus(status);
-        setF1VoiceEngineDetail(String(detail || ""));
+        setF1VoiceEngineDetail(normalizedDetail);
       },
       onWake: (event) => {
         // V33 SIMPLE WAKE PATH:
@@ -1744,7 +1746,12 @@ const buildLeadReport = React.useCallback(() => {
           },
           onResponseDone: () => controller.onResponseDone(),
           onToolCall: ({ name, callId, argumentsJson }) => executeRealtimeTool(name, callId, argumentsJson),
-          onError: (error) => { setF1Error(error.message); controller.onRealtimeError(error); },
+          onError: (error) => {
+            console.error("[F1/HANA][REALTIME_ERROR]", error);
+            setF1Error(error.message);
+            setF1VoiceEngineDetail(`Realtime: ${error.message}`);
+            controller.onRealtimeError(error);
+          },
           onClosed: () => controller.onRealtimeClosed(),
         },
       }),
@@ -1761,16 +1768,37 @@ const buildLeadReport = React.useCallback(() => {
       gestureRetryArmed = false;
       window.removeEventListener("pointerdown", retryWakeOnGesture, true);
       window.removeEventListener("touchend", retryWakeOnGesture, true);
-      void controller.enable().catch((error) => {
-        setF1VoiceEngineDetail(
-          `No pude activar el micrófono: ${error instanceof Error ? error.message : String(error)}`
-        );
+      console.info("[F1/HANA][GESTURE_RETRY] retrying wake engine after user gesture");
+      void controller.enable().then(() => {
+        console.info("[F1/HANA][GESTURE_RETRY_OK] wake engine enabled");
+      }).catch((error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error("[F1/HANA][GESTURE_RETRY_FAILED]", error);
+        setF1Error(message);
+        setF1VoiceEngineStatus("error");
+        setF1VoiceEngineDetail(`No pude activar el micrófono/detector: ${message}`);
       });
     };
 
     if (f1VoiceEngineEnabled) {
-      void controller.enable().catch(() => {
+      console.info("[F1/HANA][ENABLE_BEGIN]", {
+        enabled: f1VoiceEngineEnabled,
+        phrase: "Hana",
+        modelUrl,
+        threshold: wakeSettings.threshold,
+        consecutiveHits: wakeSettings.consecutiveHits,
+        cooldownMs: wakeSettings.cooldownMs,
+      });
+      void controller.enable().then(() => {
+        console.info("[F1/HANA][ENABLE_OK] controller.enable resolved");
+      }).catch((error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error("[F1/HANA][ENABLE_FAILED]", error);
+        setF1Error(message);
+        setF1VoiceEngineStatus("error");
+        setF1VoiceEngineDetail(`Fallo al preparar Hana: ${message}`);
         gestureRetryArmed = true;
+        console.warn("[F1/HANA][GESTURE_RETRY_ARMED] waiting for pointer/touch gesture");
         window.addEventListener("pointerdown", retryWakeOnGesture, { capture: true, once: true });
         window.addEventListener("touchend", retryWakeOnGesture, { capture: true, once: true });
       });
@@ -1851,9 +1879,13 @@ const buildLeadReport = React.useCallback(() => {
       case "REALTIME_FOLLOWUP": return { label: "Puedes continuar hablando", tone: "bg-cyan-100 text-cyan-800" };
       case "REALTIME_DISCONNECTING": return { label: "Cerrando conversaciÃ³n", tone: "bg-gray-100 text-gray-700" };
       case "ERROR": return { label: "Error de voz", tone: "bg-red-100 text-red-800" };
-      default: return { label: f1VoiceEngineEnabled ? "Motor activo" : "Motor desactivado", tone: f1VoiceEngineEnabled ? "bg-emerald-100 text-emerald-800" : "bg-gray-100 text-gray-700" };
+      default: {
+        const engineFailed = String(f1VoiceEngineStatus || "").toLowerCase() === "error";
+        if (engineFailed) return { label: "Error de detector", tone: "bg-red-100 text-red-800" };
+        return { label: f1VoiceEngineEnabled ? "Motor habilitado" : "Motor desactivado", tone: f1VoiceEngineEnabled ? "bg-amber-100 text-amber-800" : "bg-gray-100 text-gray-700" };
+      }
     }
-  }, [audioSessionState, f1VoiceEngineEnabled, remoteAudioReady]);
+  }, [audioSessionState, f1VoiceEngineEnabled, f1VoiceEngineStatus, remoteAudioReady]);
 
   // ===== Effects IA =====
   React.useEffect(() => {
