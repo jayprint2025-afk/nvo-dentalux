@@ -93,14 +93,46 @@ export class SherpaWasmKeywordEngine implements SherpaKeywordEngine {
 
   async acceptWaveform(samples: Float32Array, sampleRate: number): Promise<SherpaKeywordResult | null> {
     if (!this.#kws || !this.#stream) throw new Error("Sherpa KWS is not initialized.");
+
+    console.log("[SHERPA PCM]", {
+      samples: samples.length,
+      sampleRate,
+    });
+
     this.#stream.acceptWaveform(sampleRate, samples);
-    let hit: SherpaKeywordResult | null=null;
-    while (this.#kws.isReady(this.#stream)) {
+
+    let hit: SherpaKeywordResult | null = null;
+    let decodeCount = 0;
+
+    let ready = this.#kws.isReady(this.#stream);
+
+    console.log("[SHERPA READY]", ready);
+
+    while (ready) {
+      decodeCount += 1;
+
       this.#kws.decode(this.#stream);
-      const r=this.#kws.getResult(this.#stream);
-      const keyword=(r.keyword ?? r.text ?? "").trim();
-      if (keyword) hit={keyword: keyword.replace(/_/g, " ")};
+
+      const r = this.#kws.getResult(this.#stream);
+
+      console.log("[SHERPA RESULT]", {
+        decodeCount,
+        result: r,
+      });
+
+      const keyword = (r.keyword ?? r.text ?? "").trim();
+
+      if (keyword) {
+        hit = {
+          keyword: keyword.replace(/_/g, " "),
+        };
+
+        console.log("[SHERPA HIT]", hit);
+      }
+
+      ready = this.#kws.isReady(this.#stream);
     }
+
     return hit;
   }
 
