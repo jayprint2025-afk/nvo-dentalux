@@ -141,8 +141,22 @@ export class SherpaWasmKeywordEngine implements SherpaKeywordEngine {
         mountBinary(FS, `${this.#base}/tokens.txt`, `${VFS_DIR}/tokens.txt`),
       ]);
 
-      const keywords = (this.#keywordSpec ?? await fetchText(`${this.#base}/keywords.txt`)).trim();
-      if (!keywords) throw new Error("Hana keywords.txt is empty.");
+      const configuredKeywords =
+        (this.#keywordSpec ?? await fetchText(`${this.#base}/keywords.txt`)).trim();
+      if (!configuredKeywords) throw new Error("Hana keywords.txt is empty.");
+
+      // Diagnostic keyword graph:
+      // Keep the real wake phrase, but also expose its components separately.
+      // If Sherpa recognizes "oye" or "hana" but not the full phrase, the
+      // console will tell us exactly which acoustic/token path is failing.
+      // Also test the common "Hanna" (double n) pronunciation/token path.
+      const keywordLines = [
+        configuredKeywords,
+        "▁o ye @diag_oye",
+        "▁ha na @diag_hana",
+        "▁o ye ▁ha n na @diag_oye_hanna",
+      ];
+      const keywords = [...new Set(keywordLines)].join("\n");
 
       const config = {
         featConfig: { samplingRate: 16000, featureDim: 80 },
@@ -236,6 +250,7 @@ export class SherpaWasmKeywordEngine implements SherpaKeywordEngine {
       if (keyword) {
         console.info("[HANA SHERPA] KEYWORD", {
           keyword,
+          raw: result,
           tokens: result.tokens ?? [],
           timestamps: result.timestamps ?? [],
         });
