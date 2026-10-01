@@ -18,6 +18,7 @@ declare global {
   interface Window {
     Module?: any;
     createKws?: (module: any, config: any) => SherpaKws;
+    __hanaSherpaModule?: any;
   }
 }
 
@@ -64,13 +65,15 @@ export class SherpaWasmKeywordEngine implements SherpaKeywordEngine {
     const previousRuntimeInitialized = previous.onRuntimeInitialized;
     const previousAbort = previous.onAbort;
 
-    window.Module = {
-      ...previous,
+    const sharedModule: any = previous;
+    Object.assign(sharedModule, {
       locateFile: (path: string) => {
         const fileName = path.split("/").pop() || path;
         return `${assetBase}${fileName}`;
       },
       onRuntimeInitialized: () => {
+        window.__hanaSherpaModule = sharedModule;
+        (globalThis as any).__hanaSherpaModule = sharedModule;
         try {
           if (typeof previousRuntimeInitialized === "function") {
             previousRuntimeInitialized();
@@ -86,7 +89,10 @@ export class SherpaWasmKeywordEngine implements SherpaKeywordEngine {
           runtimeReject(new Error(`Sherpa WASM aborted: ${formatError(reason)}`));
         }
       },
-    };
+    });
+    window.Module = sharedModule;
+    (globalThis as any).Module = sharedModule;
+    (globalThis as any).__hanaSherpaModule = sharedModule;
 
     try {
       // sherpa-onnx-kws.js defines createKws(); the generated Emscripten main
@@ -105,12 +111,22 @@ export class SherpaWasmKeywordEngine implements SherpaKeywordEngine {
       );
 
       await waitFor(
-        () => Boolean(window.createKws && isRuntimeReady(window.Module)),
-        5000,
+        () => Boolean(resolveCreateKws() && resolveSherpaModule()),
+        10000,
         "Sherpa runtime initialized but createKws/FS is unavailable.",
       );
 
-      const module = window.Module!;
+      const createKws = resolveCreateKws();
+      const module = resolveSherpaModule();
+      if (!createKws || !module) {
+        console.error("[HANA SHERPA] GLOBALS_MISSING", {
+          windowCreateKws: typeof window.createKws,
+          globalCreateKws: typeof (globalThis as any).createKws,
+          windowModule: describeModule(window.Module),
+          sharedModule: describeModule((globalThis as any).__hanaSherpaModule),
+        });
+        throw new Error("Sherpa browser globals are unavailable after runtime initialization.");
+      }
       const FS = module.FS;
 
       ensureDir(FS, VFS_DIR);
@@ -150,7 +166,7 @@ export class SherpaWasmKeywordEngine implements SherpaKeywordEngine {
         keywords: `${keywords}\n`,
       };
 
-      const kws = window.createKws!(module, config);
+      const kws = createKws(module, config);
       if (!kws || typeof kws.createStream !== "function") {
         throw new Error("Sherpa createKws() did not return a valid KWS instance.");
       }
@@ -282,6 +298,36 @@ function isRuntimeReady(module: any): boolean {
     typeof module._malloc === "function" &&
     module.HEAPF32
   );
+}
+
+
+function resolveCreateKws(): ((module: any, config: any) => SherpaKws) | null {
+  const candidate = window.createKws ?? (globalThis as any).createKws ?? (globalThis as any).__hanaCreateKws;
+  return typeof candidate === "function" ? candidate : null;
+}
+
+function resolveSherpaModule(): any | null {
+  const candidates = [
+    (globalThis as any).__hanaSherpaModule,
+    window.__hanaSherpaModule,
+    window.Module,
+    (globalThis as any).Module,
+  ];
+  for (const candidate of candidates) {
+    if (isRuntimeReady(candidate)) return candidate;
+  }
+  return null;
+}
+
+function describeModule(module: any): Record<string, unknown> {
+  return {
+    exists: Boolean(module),
+    hasFS: Boolean(module?.FS),
+    hasWriteFile: typeof module?.FS?.writeFile === "function",
+    hasMalloc: typeof module?._malloc === "function",
+    hasHeapF32: Boolean(module?.HEAPF32),
+    calledRun: module?.calledRun,
+  };
 }
 
 function formatError(value: unknown): string {
