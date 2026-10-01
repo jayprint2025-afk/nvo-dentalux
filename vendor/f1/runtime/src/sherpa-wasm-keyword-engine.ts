@@ -44,6 +44,20 @@ export class SherpaWasmKeywordEngine implements SherpaKeywordEngine {
   }
 
   async initialize(): Promise<void> {
+    // IMPORTANT:
+    // The Emscripten loader otherwise resolves the .data/.wasm files
+    // relative to the document root. In production that causes requests like
+    // /sherpa-onnx-wasm-kws-main.data instead of /models/sherpa-hana/...
+    const assetBase = `${this.#base}/`;
+
+    window.Module = {
+      ...(window.Module ?? {}),
+      locateFile: (path: string) => {
+        const fileName = path.split("/").pop() || path;
+        return `${assetBase}${fileName}`;
+      },
+    };
+
     await loadScript(`${this.#base}/sherpa-onnx-kws.js`);
     await loadScript(`${this.#base}/sherpa-onnx-wasm-kws-main.js`);
     await waitFor(() => Boolean(window.Module && window.createKws), 30000);
@@ -121,3 +135,4 @@ async function waitFor(fn:()=>boolean, timeoutMs:number):Promise<void> {
   while(Date.now()<end){ if(fn()) return; await new Promise(r=>setTimeout(r,50)); }
   throw new Error("Sherpa WASM runtime did not initialize.");
 }
+
