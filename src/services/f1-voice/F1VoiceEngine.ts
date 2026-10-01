@@ -4,7 +4,7 @@ import {
   type F1VoiceEngineState,
 } from "@cliniqone/f1-voice-engine";
 import { AudioEngine, BrowserMicrophoneCapture } from "@cliniqone/audio-engine";
-import { OnnxWakeModel } from "@cliniqone/onnx-runtime";
+import { createHanaSherpaWakeModel } from "@cliniqone/onnx-runtime";
 
 import type {
   F1VoiceEngineOptions,
@@ -12,7 +12,6 @@ import type {
   F1WakeEvent,
 } from "./types";
 
-const DEFAULT_MODEL_ROOT = "/models/hanna-v5";
 const DEFAULT_WAKE_THRESHOLD = 0.30;
 
 // Hanna V27 Wake Isolation: keep the final wake-word region instead of
@@ -31,19 +30,8 @@ export class F1VoiceEngine {
   constructor(options: F1VoiceEngineOptions = {}) {
     this.options = options;
 
-    const configuredModelUrl = String(options.modelUrl || "").trim();
-
-    const modelRoot = configuredModelUrl
-      ? configuredModelUrl.replace(/\/hanna\.onnx(?:\?.*)?$/, "")
-      : DEFAULT_MODEL_ROOT;
-
-    const wakeModel = new OnnxWakeModel({
-      modelUrl: `${modelRoot}/hanna.onnx`,
-      manifestUrl: `${modelRoot}/manifest.json`,
-      externalDataUrl: `${modelRoot}/hanna.onnx.data`,
-      externalDataPath: "hanna.onnx.data",
-      executionProviders: ["wasm"],
-    });
+    // Sherpa-ONNX KWS local para la frase de activación "Oye Hana".
+    const wakeModel = createHanaSherpaWakeModel();
 
     // V27: 5 s allowed a false TV candidate to suppress the owner wake word.
     // 1.8 s still prevents rapid duplicate wakes without leaving Hanna deaf for 5 s.
@@ -74,7 +62,7 @@ export class F1VoiceEngine {
           expectedSampleRate: 16000,
           preEmphasis: 0.97,
 
-          // Ajustes calibrados de Hanna V5.
+          // Configuración del pipeline de activación.
           preRollFrames: 10,
           vadGraceFrames: 10,
           maxSilentFramesBeforeReset: 12,
@@ -191,7 +179,7 @@ export class F1VoiceEngine {
      *
      * NO reproducimos aquí el sonido de confirmación,
      * porque todavía falta la verificación final de
-     * que realmente se dijo "Hanna".
+     * que realmente se detectó "Oye Hana".
      */
     this.core.on(
       "wake",
@@ -230,7 +218,7 @@ export class F1VoiceEngine {
         });
 
         const event: F1WakeEvent = {
-          phrase: this.options.phrase || "Hanna",
+          phrase: this.options.phrase || "Oye Hana",
           confidence: score,
           detectedAt: timestampMs,
           audioWindow: isolatedAudioWindow,
@@ -243,7 +231,7 @@ export class F1VoiceEngine {
 
     this.core.on("diagnostics", (d) => {
       console.log(
-        "[HANNA DIAG]",
+        "[HANA SHERPA DIAG]",
         "frames=" + d.framesReceived,
         "speech=" + d.speechFrames,
         "inferences=" + d.inferenceCount,

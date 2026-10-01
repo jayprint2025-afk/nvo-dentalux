@@ -18,3 +18,6 @@ export type {
   WakeScore,
   WakeSignal,
 } from "./types/wake.js";
+
+export type { StreamingWakeModelPort } from "./model/streaming-wake-model-port.js";
+export { isStreamingWakeModelPort } from "./model/streaming-wake-model-port.js";

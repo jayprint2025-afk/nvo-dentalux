@@ -1,6 +1,7 @@
 import { TypedEventBus, type EventListener, type Unsubscribe } from "./events/typed-event-bus.js";
 import { SpectralFeatureExtractor, type WakeFeatureExtractor } from "./features/spectral-feature-extractor.js";
 import type { WakeModelPort } from "./model/wake-model-port.js";
+import { isStreamingWakeModelPort, type StreamingWakeModelPort } from "./model/streaming-wake-model-port.js";
 import { HybridConfidencePolicy, type WakeDetectionPolicy } from "./policy/wake-detection-policy.js";
 import { FrameCooldownController, type CooldownPort } from "./state/cooldown-controller.js";
 import type { WakeEventMap, WakeDetectorError } from "./types/events.js";
@@ -56,7 +57,7 @@ export interface WakeDetectorDependencies {
 
 export class WakeDetector implements WakeDetectorProcessor {
   readonly #events = new TypedEventBus<WakeEventMap>();
-  readonly #model: WakeModelPort;
+  readonly #model: WakeModelPort | StreamingWakeModelPort;
   readonly #config: ResolvedWakeConfig;
   readonly #features: WakeFeatureExtractor;
   readonly #window: FeatureWindow;
@@ -71,7 +72,7 @@ export class WakeDetector implements WakeDetectorProcessor {
   #audioFrames: Float32Array[] = [];
   #suppressedUntilMs = 0;
 
-  public constructor(model: WakeModelPort, config: WakeDetectorConfig = {}, dependencies: WakeDetectorDependencies = {}) {
+  public constructor(model: WakeModelPort | StreamingWakeModelPort, config: WakeDetectorConfig = {}, dependencies: WakeDetectorDependencies = {}) {
     this.#config = { ...DEFAULTS, ...config };
     validateConfig(this.#config);
     this.#model = model;
@@ -231,6 +232,29 @@ export class WakeDetector implements WakeDetectorProcessor {
         this.#silentFrames = this.#config.maxSilentFramesBeforeReset;
       }
       return { status: "gated", sequence: frame.sequence, timestampMs: frame.timestampMs, detected: false };
+    }
+
+    // sherpa KWS consumes raw 16 kHz PCM. Bypass the legacy MEL feature window.
+    if (isStreamingWakeModelPort(this.#model)) {
+      try {
+        const output = await this.#model.acceptFrame(frame);
+        if (!output) return { status: "warming", sequence: frame.sequence, timestampMs: frame.timestampMs, detected: false };
+        const detected = output.score >= this.#config.detectionThreshold;
+        const scoreEvent = { score: output.score, ...(output.keyword === undefined ? {} : { keyword: output.keyword }),
+          sequence: frame.sequence, timestampMs: frame.timestampMs, threshold: this.#config.detectionThreshold, detected };
+        this.#events.emit("score", scoreEvent);
+        if (detected) {
+          this.#cooldown.enter();
+          if (this.#cooldown.active) this.#setState("cooldown");
+          this.#events.emit("wake", { ...scoreEvent, cooldownFrames: this.#config.cooldownFrames,
+            audioWindow: concatenateFrames(this.#audioFrames), sampleRate: frame.sampleRate });
+          this.#model.reset();
+        }
+        return { status: "scored", sequence: frame.sequence, timestampMs: frame.timestampMs, score: output.score, detected };
+      } catch (cause) {
+        this.#fail({ code: "MODEL_INFERENCE_FAILED", message: "Streaming wake model inference failed.", cause });
+        throw cause;
+      }
     }
 
     if (!this.#window.isReady) {

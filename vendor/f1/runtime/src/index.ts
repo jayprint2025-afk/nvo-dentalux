@@ -10,3 +10,11 @@ export type {
   RuntimeTensor,
   WakeModelCompatibility,
 } from "./types.js";
+
+export { SherpaKeywordModel } from "./sherpa-keyword-model.js";
+export type { SherpaKeywordEngine, SherpaKeywordModelConfig, SherpaKeywordResult } from "./sherpa-keyword-model.js";
+
+export { SherpaWasmKeywordEngine } from "./sherpa-wasm-keyword-engine.js";
+export type { SherpaWasmKeywordEngineConfig } from "./sherpa-wasm-keyword-engine.js";
+
+export { createHanaSherpaWakeModel } from "./create-hana-sherpa-wake-model.js";
