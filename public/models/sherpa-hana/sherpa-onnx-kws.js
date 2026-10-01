@@ -366,3 +366,14 @@ if (typeof process == 'object' && typeof process.versions == 'object' &&
     createKws,
   };
 }
+
+// CliniqOne/Hana browser export.
+// The upstream file only exposes createKws through module.exports in Node.
+// Hana loads this file as a browser script, so publish the factory globally.
+if (typeof globalThis !== 'undefined') {
+  globalThis.createKws = createKws;
+}
+
+if (typeof window !== 'undefined') {
+  window.createKws = createKws;
+}
