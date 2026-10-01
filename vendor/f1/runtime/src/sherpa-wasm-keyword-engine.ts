@@ -67,12 +67,13 @@ export class SherpaWasmKeywordEngine implements SherpaKeywordEngine {
       () => Boolean(
         window.Module &&
         window.createKws &&
-        window.Module.calledRun &&
         window.Module.FS &&
-        typeof window.Module.FS.writeFile === "function",
+        typeof window.Module.FS.writeFile === "function" &&
+        typeof window.Module._malloc === "function" &&
+        window.Module.HEAPF32,
       ),
       30000,
-      "Sherpa WASM runtime/filesystem did not initialize.",
+      "Sherpa WASM runtime/filesystem did not initialize. Check CSP (WebAssembly), .wasm/.data assets and locateFile paths.",
     );
 
     const module = window.Module!;
@@ -194,18 +195,45 @@ async function mountBinary(FS: any, url: string, vfsPath: string): Promise<void>
   }
 }
 
+const scriptLoads = new Map<string, Promise<void>>();
+
 function loadScript(src: string): Promise<void> {
   const absolute = new URL(src, location.href).href;
+  const pending = scriptLoads.get(absolute);
+  if (pending) return pending;
+
   const existing = [...document.scripts].find((script) => script.src === absolute);
-  if (existing) return Promise.resolve();
-  return new Promise((resolve, reject) => {
-    const script = document.createElement("script");
-    script.src = src;
-    script.async = false;
-    script.onload = () => resolve();
-    script.onerror = () => reject(new Error(`Unable to load ${src}`));
-    document.head.appendChild(script);
+  if (existing?.dataset.hanaLoaded === "1") return Promise.resolve();
+
+  const promise = new Promise<void>((resolve, reject) => {
+    const script = existing ?? document.createElement("script");
+    const onLoad = () => {
+      script.dataset.hanaLoaded = "1";
+      cleanup();
+      resolve();
+    };
+    const onError = () => {
+      cleanup();
+      scriptLoads.delete(absolute);
+      reject(new Error(`Unable to load ${src}`));
+    };
+    const cleanup = () => {
+      script.removeEventListener("load", onLoad);
+      script.removeEventListener("error", onError);
+    };
+
+    script.addEventListener("load", onLoad, { once: true });
+    script.addEventListener("error", onError, { once: true });
+
+    if (!existing) {
+      script.src = src;
+      script.async = false;
+      document.head.appendChild(script);
+    }
   });
+
+  scriptLoads.set(absolute, promise);
+  return promise;
 }
 
 async function waitFor(
