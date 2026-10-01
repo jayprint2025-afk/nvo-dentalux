@@ -39,6 +39,8 @@ export class SherpaWasmKeywordEngine implements SherpaKeywordEngine {
   #kws: SherpaKws | null = null;
   #stream: SherpaStream | null = null;
   #pcmDiagFrames = 0;
+  #pendingSamples = new Float32Array(0);
+  static readonly #KWS_CHUNK_SAMPLES = 1600;
 
   constructor(config: SherpaWasmKeywordEngineConfig = {}) {
     this.#base = (config.assetBaseUrl ?? "/models/sherpa-hana").replace(/\/$/, "");
@@ -145,18 +147,8 @@ export class SherpaWasmKeywordEngine implements SherpaKeywordEngine {
         (this.#keywordSpec ?? await fetchText(`${this.#base}/keywords.txt`)).trim();
       if (!configuredKeywords) throw new Error("Hana keywords.txt is empty.");
 
-      // Diagnostic keyword graph:
-      // Keep the real wake phrase, but also expose its components separately.
-      // If Sherpa recognizes "oye" or "hana" but not the full phrase, the
-      // console will tell us exactly which acoustic/token path is failing.
-      // Also test the common "Hanna" (double n) pronunciation/token path.
-      const keywordLines = [
-        configuredKeywords,
-        "▁o ye @diag_oye",
-        "▁ha na @diag_hana",
-        "▁o ye ▁ha n na @diag_oye_hanna",
-      ];
-      const keywords = [...new Set(keywordLines)].join("\n");
+      // Use only the production wake phrase from keywords.txt.
+      const keywords = configuredKeywords;
 
       const config = {
         featConfig: { samplingRate: 16000, featureDim: 80 },
@@ -171,7 +163,7 @@ export class SherpaWasmKeywordEngine implements SherpaKeywordEngine {
           modelType: "",
           numThreads: 1,
           debug: 1,
-          modelingUnit: "bpe",
+          modelingUnit: "cjkchar",
           bpeVocab: "",
         },
         maxActivePaths: 4,
@@ -236,37 +228,46 @@ export class SherpaWasmKeywordEngine implements SherpaKeywordEngine {
       });
     }
 
-    this.#stream.acceptWaveform(sampleRate, samples);
+    // Preserve continuity across BrowserMicrophoneCapture callbacks.
+    // 1280 samples = 80 ms at 16 kHz. Accumulate them and feed stable 100 ms
+    // chunks into the SAME Sherpa stream.
+    this.#pendingSamples = concatFloat32(this.#pendingSamples, samples);
 
     let hit: SherpaKeywordResult | null = null;
-    let guard = 0;
-    while (this.#kws.isReady(this.#stream)) {
-      // Protect the UI from a malformed runtime that never clears isReady().
-      if (++guard > 128) throw new Error("Sherpa KWS decode loop exceeded safety limit.");
-      this.#kws.decode(this.#stream);
-      const result = this.#kws.getResult(this.#stream);
-      const keyword = (result.keyword ?? result.text ?? "").trim();
 
-      if (keyword) {
-        console.info("[HANA SHERPA] KEYWORD", {
-          keyword,
-          raw: result,
-          tokens: result.tokens ?? [],
-          timestamps: result.timestamps ?? [],
-        });
-        hit = { keyword: keyword.replace(/_/g, " ") };
+    while (this.#pendingSamples.length >= SherpaWasmKeywordEngine.#KWS_CHUNK_SAMPLES) {
+      const chunk = this.#pendingSamples.slice(0, SherpaWasmKeywordEngine.#KWS_CHUNK_SAMPLES);
+      this.#pendingSamples = this.#pendingSamples.slice(SherpaWasmKeywordEngine.#KWS_CHUNK_SAMPLES);
+      this.#stream.acceptWaveform(sampleRate, chunk);
 
-        // Sherpa's KWS API requires reset immediately after a detection.
-        this.#kws.reset(this.#stream);
-        break;
-      }
+      let guard = 0;
+      while (this.#kws.isReady(this.#stream)) {
+        if (++guard > 128) throw new Error("Sherpa KWS decode loop exceeded safety limit.");
 
-      // Only log partial decoder activity; avoid flooding the console with empty results.
-      if (Array.isArray(result.tokens) && result.tokens.length > 0) {
-        console.debug("[HANA SHERPA] PARTIAL", {
-          tokens: result.tokens,
-          timestamps: result.timestamps ?? [],
-        });
+        this.#kws.decode(this.#stream);
+        const result = this.#kws.getResult(this.#stream);
+        const keyword = (result.keyword ?? result.text ?? "").trim();
+
+        if (Array.isArray(result.tokens) && result.tokens.length > 0) {
+          console.debug("[HANA SHERPA] PARTIAL", {
+            tokens: result.tokens,
+            timestamps: result.timestamps ?? [],
+          });
+        }
+
+        if (keyword) {
+          console.info("[HANA SHERPA] KEYWORD", {
+            keyword,
+            raw: result,
+            tokens: result.tokens ?? [],
+            timestamps: result.timestamps ?? [],
+          });
+
+          hit = { keyword: keyword.replace(/_/g, " ") };
+          this.#kws.reset(this.#stream);
+          this.#pendingSamples = new Float32Array(0);
+          return hit;
+        }
       }
     }
 
@@ -274,16 +275,27 @@ export class SherpaWasmKeywordEngine implements SherpaKeywordEngine {
   }
 
   reset(): void {
+    this.#pendingSamples = new Float32Array(0);
     if (this.#kws && this.#stream) this.#kws.reset(this.#stream);
   }
 
   async dispose(): Promise<void> {
     try { this.#stream?.free(); } finally {
       this.#stream = null;
+      this.#pendingSamples = new Float32Array(0);
       this.#kws?.free();
       this.#kws = null;
     }
   }
+}
+
+
+function concatFloat32(a: Float32Array, b: Float32Array): Float32Array {
+  if (a.length === 0) return b.slice();
+  const out = new Float32Array(a.length + b.length);
+  out.set(a, 0);
+  out.set(b, a.length);
+  return out;
 }
 
 async function fetchText(url: string): Promise<string> {
