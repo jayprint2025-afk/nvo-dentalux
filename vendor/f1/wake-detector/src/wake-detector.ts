@@ -225,14 +225,6 @@ export class WakeDetector implements WakeDetectorProcessor {
     }
 
     const speechGateOpen = currentSpeech || this.#recentSpeechFrames > 0;
-    if (!speechGateOpen) {
-      if (this.#silentFrames >= this.#config.maxSilentFramesBeforeReset) {
-        this.#policy.reset();
-        this.#window.reset();
-        this.#silentFrames = this.#config.maxSilentFramesBeforeReset;
-      }
-      return { status: "gated", sequence: frame.sequence, timestampMs: frame.timestampMs, detected: false };
-    }
 
     // sherpa KWS consumes raw 16 kHz PCM. Bypass the legacy MEL feature window.
     if (isStreamingWakeModelPort(this.#model)) {
@@ -256,7 +248,14 @@ export class WakeDetector implements WakeDetectorProcessor {
         throw cause;
       }
     }
-
+    if (!speechGateOpen) {
+      if (this.#silentFrames >= this.#config.maxSilentFramesBeforeReset) {
+        this.#policy.reset();
+        this.#window.reset();
+        this.#silentFrames = this.#config.maxSilentFramesBeforeReset;
+      }
+      return { status: "gated", sequence: frame.sequence, timestampMs: frame.timestampMs, detected: false };
+    }
     if (!this.#window.isReady) {
       return { status: "warming", sequence: frame.sequence, timestampMs: frame.timestampMs, detected: false };
     }
