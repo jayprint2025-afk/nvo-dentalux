@@ -53,11 +53,11 @@ export class SherpaWasmKeywordEngine implements SherpaKeywordEngine {
       featConfig: { samplingRate: 16000, featureDim: 80 },
       modelConfig: {
         transducer: {
-          encoder: `${this.#base}/encoder.onnx`,
-          decoder: `${this.#base}/decoder.onnx`,
-          joiner: `${this.#base}/joiner.onnx`,
+          encoder: "./encoder-epoch-12-avg-2-chunk-16-left-64.onnx",
+          decoder: "./decoder-epoch-12-avg-2-chunk-16-left-64.onnx",
+          joiner: "./joiner-epoch-12-avg-2-chunk-16-left-64.onnx",
         },
-        tokens: `${this.#base}/tokens.txt`,
+        tokens: "./tokens.txt",
         provider: "cpu",
         modelType: "",
         numThreads: 1,
