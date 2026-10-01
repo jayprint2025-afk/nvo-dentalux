@@ -58,20 +58,30 @@ export class SherpaWasmKeywordEngine implements SherpaKeywordEngine {
       },
     };
 
+    // Load the JS wrapper first, then the Emscripten runtime/data package.
     await loadScript(`${this.#base}/sherpa-onnx-kws.js`);
     await loadScript(`${this.#base}/sherpa-onnx-wasm-kws-main.js`);
-    await waitFor(() => Boolean(window.Module && window.createKws), 30000);
+
+    // createKws can exist before Emscripten has finished mounting the .data
+    // package. Wait for calledRun as well, otherwise the first start can fail
+    // and a second manual restart appears to "fix" Hana.
+    await waitFor(
+      () => Boolean(window.Module && window.createKws && window.Module.calledRun),
+      30000,
+    );
 
     const keywords = this.#keywordSpec ?? await fetchText(`${this.#base}/keywords.txt`);
     const config = {
       featConfig: { samplingRate: 16000, featureDim: 80 },
       modelConfig: {
         transducer: {
-          encoder: "/models/sherpa-hana/encoder.onnx",
-          decoder: "/models/sherpa-hana/decoder.onnx",
-          joiner: "/models/sherpa-hana/joiner.onnx",
+          // These are the exact filenames mounted by
+          // sherpa-onnx-wasm-kws-main.data into Emscripten's virtual FS.
+          encoder: "./encoder-epoch-12-avg-2-chunk-16-left-64.onnx",
+          decoder: "./decoder-epoch-12-avg-2-chunk-16-left-64.onnx",
+          joiner: "./joiner-epoch-12-avg-2-chunk-16-left-64.onnx",
         },
-        tokens: "/models/sherpa-hana/tokens.txt",
+        tokens: "./tokens.txt",
         provider: "cpu",
         modelType: "",
         numThreads: 1,
