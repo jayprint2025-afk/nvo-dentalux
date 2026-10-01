@@ -38,6 +38,7 @@ export class SherpaWasmKeywordEngine implements SherpaKeywordEngine {
   readonly #keywordSpec?: string;
   #kws: SherpaKws | null = null;
   #stream: SherpaStream | null = null;
+  #pcmDiagFrames = 0;
 
   constructor(config: SherpaWasmKeywordEngineConfig = {}) {
     this.#base = (config.assetBaseUrl ?? "/models/sherpa-hana").replace(/\/$/, "");
@@ -200,6 +201,26 @@ export class SherpaWasmKeywordEngine implements SherpaKeywordEngine {
 
   async acceptWaveform(samples: Float32Array, sampleRate: number): Promise<SherpaKeywordResult | null> {
     if (!this.#kws || !this.#stream) throw new Error("Sherpa KWS is not initialized.");
+
+    // Diagnostic only: measure the exact normalized PCM entering Sherpa.
+    let sumSq = 0;
+    let peak = 0;
+    for (let i = 0; i < samples.length; i += 1) {
+      const v = Number(samples[i]) || 0;
+      sumSq += v * v;
+      peak = Math.max(peak, Math.abs(v));
+    }
+    const rms = samples.length ? Math.sqrt(sumSq / samples.length) : 0;
+    this.#pcmDiagFrames += 1;
+    if (this.#pcmDiagFrames <= 5 || this.#pcmDiagFrames % 10 === 0) {
+      console.info("[HANA SHERPA PCM]", {
+        frame: this.#pcmDiagFrames,
+        sampleRate,
+        samples: samples.length,
+        rms: Number(rms.toFixed(6)),
+        peak: Number(peak.toFixed(6)),
+      });
+    }
 
     this.#stream.acceptWaveform(sampleRate, samples);
 
