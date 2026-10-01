@@ -377,3 +377,11 @@ if (typeof globalThis !== 'undefined') {
 if (typeof window !== 'undefined') {
   window.createKws = createKws;
 }
+
+// Stable Hana aliases used by the runtime loader.
+if (typeof globalThis !== 'undefined') {
+  globalThis.__hanaCreateKws = createKws;
+}
+if (typeof window !== 'undefined') {
+  window.__hanaCreateKws = createKws;
+}
