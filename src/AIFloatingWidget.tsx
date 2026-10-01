@@ -1477,7 +1477,10 @@ const buildLeadReport = React.useCallback(() => {
       detail: { name, call_id: callId, source: 'f1' },
     }));
 
-    await loadF1Dashboard();
+    // V35 Professional Voice: the Realtime tool result must go back to Hanna
+    // immediately. Refreshing dashboard data is UI maintenance and must never
+    // sit on the critical voice-response path.
+    void loadF1Dashboard().catch(() => undefined);
     return output;
   }, [sucursalId, loadF1Dashboard, applyF1ClientActions]);
 

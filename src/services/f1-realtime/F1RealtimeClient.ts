@@ -603,10 +603,14 @@ export class F1RealtimeClient {
             turn_detection: {
               type: "server_vad",
               threshold: 0.5,
-              prefix_padding_ms: 300,
-              silence_duration_ms: 750,
+              // V35 Professional Voice: end the user turn sooner while keeping
+              // enough leading audio for natural Spanish commands.
+              prefix_padding_ms: 240,
+              silence_duration_ms: 450,
               create_response: true,
-              interrupt_response: true,
+              // Speaker echo / room noise must not cancel an answer already
+              // playing. The user can speak again as soon as playback ends.
+              interrupt_response: false,
             },
           },
         },
@@ -617,9 +621,9 @@ export class F1RealtimeClient {
   private async enableMicrophoneAfterGreeting(): Promise<void> {
     if (!this.greetingPending || this.closed) return;
 
-    // Pequeña guarda contra eco físico, después de que OpenAI confirmó la
-    // configuración conversacional. No se solicita ni repite otro saludo.
-    await new Promise((resolve) => window.setTimeout(resolve, 450));
+    // V35: short post-greeting guard. 180 ms is enough to avoid feeding the
+    // tail of the greeting back into VAD without making Hanna feel sluggish.
+    await new Promise((resolve) => window.setTimeout(resolve, 180));
     if (this.closed) return;
 
     const microphoneTrack = this.stream?.getAudioTracks()[0];
