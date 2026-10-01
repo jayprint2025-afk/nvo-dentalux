@@ -14,26 +14,10 @@ type SherpaKws = {
   free(): void;
 };
 
-type EmscriptenModule = {
-  calledRun?: boolean;
-  locateFile?: (path: string, prefix?: string) => string;
-  onRuntimeInitialized?: () => void;
-  FS_createDataFile?: (
-    parent: string,
-    name: string | null,
-    data: ArrayLike<number>,
-    canRead: boolean,
-    canWrite: boolean,
-    canOwn?: boolean,
-  ) => unknown;
-  FS_unlink?: (path: string) => void;
-  [key: string]: any;
-};
-
 declare global {
   interface Window {
-    Module?: EmscriptenModule;
-    createKws?: (module: EmscriptenModule, config: any) => SherpaKws;
+    Module?: any;
+    createKws?: (module: any, config: any) => SherpaKws;
   }
 }
 
@@ -44,12 +28,7 @@ export interface SherpaWasmKeywordEngineConfig {
   readonly keywordSpec?: string;
 }
 
-const VFS = {
-  encoder: "/hana-es-encoder.onnx",
-  decoder: "/hana-es-decoder.onnx",
-  joiner: "/hana-es-joiner.onnx",
-  tokens: "/hana-es-tokens.txt",
-} as const;
+const VFS_DIR = "/hana-kws";
 
 export class SherpaWasmKeywordEngine implements SherpaKeywordEngine {
   readonly #base: string;
@@ -70,51 +49,59 @@ export class SherpaWasmKeywordEngine implements SherpaKeywordEngine {
     if (this.#kws && this.#stream) return;
 
     const assetBase = `${this.#base}/`;
-    const previousModule = window.Module ?? {};
-    let resolveRuntime!: () => void;
-    const runtimeReady = new Promise<void>((resolve) => { resolveRuntime = resolve; });
-    const previousOnRuntimeInitialized = previousModule.onRuntimeInitialized;
-
+    const previous = window.Module ?? {};
     window.Module = {
-      ...previousModule,
+      ...previous,
       locateFile: (path: string) => {
         const fileName = path.split("/").pop() || path;
         return `${assetBase}${fileName}`;
-      },
-      onRuntimeInitialized: () => {
-        previousOnRuntimeInitialized?.();
-        resolveRuntime();
       },
     };
 
     await loadScript(`${this.#base}/sherpa-onnx-kws.js`);
     await loadScript(`${this.#base}/sherpa-onnx-wasm-kws-main.js`);
-    await waitFor(() => Boolean(window.Module && window.createKws), 30000);
 
-    if (!window.Module!.calledRun) {
-      await withTimeout(runtimeReady, 30000, "Sherpa WASM runtime did not finish initialization.");
-    }
+    // createKws can appear before Emscripten has mounted its filesystem.
+    // Do not construct Sherpa until both the runtime and FS are really ready.
     await waitFor(
-      () => Boolean(window.Module?.calledRun && window.Module?.FS_createDataFile),
+      () => Boolean(
+        window.Module &&
+        window.createKws &&
+        window.Module.calledRun &&
+        window.Module.FS &&
+        typeof window.Module.FS.writeFile === "function",
+      ),
       30000,
+      "Sherpa WASM runtime/filesystem did not initialize.",
     );
 
-    // The .data shipped by the browser build contains the upstream demo model.
-    // Hana uses the Spanish model files in public/models/sherpa-hana instead.
-    // Native sherpa-onnx opens model paths through Emscripten's virtual FS, not
-    // through HTTP URLs, so copy the Spanish assets into that FS before createKws.
-    await installSpanishAssetsIntoVfs(window.Module!, this.#base);
+    const module = window.Module!;
+    const FS = module.FS;
 
-    const keywords = this.#keywordSpec ?? await fetchText(`${this.#base}/keywords.txt`);
+    ensureDir(FS, VFS_DIR);
+
+    // Sherpa native code cannot read browser URLs such as
+    // /models/sherpa-hana/encoder.onnx. Put the real browser assets into the
+    // Emscripten virtual filesystem and pass native VFS paths to createKws().
+    await Promise.all([
+      mountBinary(FS, `${this.#base}/encoder.onnx`, `${VFS_DIR}/encoder.onnx`),
+      mountBinary(FS, `${this.#base}/decoder.onnx`, `${VFS_DIR}/decoder.onnx`),
+      mountBinary(FS, `${this.#base}/joiner.onnx`, `${VFS_DIR}/joiner.onnx`),
+      mountBinary(FS, `${this.#base}/tokens.txt`, `${VFS_DIR}/tokens.txt`),
+    ]);
+
+    const keywords = (this.#keywordSpec ?? await fetchText(`${this.#base}/keywords.txt`)).trim();
+    if (!keywords) throw new Error("Hana keywords.txt is empty.");
+
     const config = {
       featConfig: { samplingRate: 16000, featureDim: 80 },
       modelConfig: {
         transducer: {
-          encoder: VFS.encoder,
-          decoder: VFS.decoder,
-          joiner: VFS.joiner,
+          encoder: `${VFS_DIR}/encoder.onnx`,
+          decoder: `${VFS_DIR}/decoder.onnx`,
+          joiner: `${VFS_DIR}/joiner.onnx`,
         },
-        tokens: VFS.tokens,
+        tokens: `${VFS_DIR}/tokens.txt`,
         provider: "cpu",
         modelType: "",
         numThreads: 1,
@@ -126,37 +113,41 @@ export class SherpaWasmKeywordEngine implements SherpaKeywordEngine {
       numTrailingBlanks: 1,
       keywordsScore: this.#score,
       keywordsThreshold: this.#threshold,
-      keywords,
+      keywords: `${keywords}\n`,
     };
 
-    const kws = window.createKws!(window.Module!, config);
-    if (!kws) throw new Error("Sherpa createKws returned no keyword spotter.");
+    const kws = window.createKws!(module, config);
+    if (!kws || typeof kws.createStream !== "function") {
+      throw new Error("Sherpa createKws() did not return a valid KWS instance.");
+    }
+
     const stream = kws.createStream();
-    if (!stream) {
-      kws.free();
-      throw new Error("Sherpa could not create a keyword stream.");
+    if (!stream || typeof stream.acceptWaveform !== "function") {
+      try { kws.free(); } catch { /* ignore cleanup failure */ }
+      throw new Error("Sherpa KWS did not create a valid stream.");
     }
 
     this.#kws = kws;
     this.#stream = stream;
-    console.info("[HANA SHERPA] Spanish KWS initialized", {
-      keyword: keywords.trim(),
-      encoder: VFS.encoder,
-      tokens: VFS.tokens,
-    });
+    console.info("[HANA SHERPA] READY", { base: this.#base, vfs: VFS_DIR, keywords });
   }
 
   async acceptWaveform(samples: Float32Array, sampleRate: number): Promise<SherpaKeywordResult | null> {
     if (!this.#kws || !this.#stream) throw new Error("Sherpa KWS is not initialized.");
+
     this.#stream.acceptWaveform(sampleRate, samples);
 
     let hit: SherpaKeywordResult | null = null;
+    let guard = 0;
     while (this.#kws.isReady(this.#stream)) {
+      // Protect the UI from a malformed runtime that never clears isReady().
+      if (++guard > 128) throw new Error("Sherpa KWS decode loop exceeded safety limit.");
       this.#kws.decode(this.#stream);
       const result = this.#kws.getResult(this.#stream);
       const keyword = (result.keyword ?? result.text ?? "").trim();
       if (keyword) hit = { keyword: keyword.replace(/_/g, " ") };
     }
+
     return hit;
   }
 
@@ -165,9 +156,7 @@ export class SherpaWasmKeywordEngine implements SherpaKeywordEngine {
   }
 
   async dispose(): Promise<void> {
-    try {
-      this.#stream?.free();
-    } finally {
+    try { this.#stream?.free(); } finally {
       this.#stream = null;
       this.#kws?.free();
       this.#kws = null;
@@ -175,33 +164,34 @@ export class SherpaWasmKeywordEngine implements SherpaKeywordEngine {
   }
 }
 
-async function installSpanishAssetsIntoVfs(Module: EmscriptenModule, base: string): Promise<void> {
-  const createDataFile = Module.FS_createDataFile;
-  if (!createDataFile) throw new Error("Sherpa Emscripten filesystem is unavailable.");
+async function fetchText(url: string): Promise<string> {
+  const response = await fetch(url, { cache: "no-store" });
+  if (!response.ok) throw new Error(`Unable to load ${url}: ${response.status}`);
+  return await response.text();
+}
 
-  const assets: ReadonlyArray<readonly [string, string]> = [
-    [VFS.encoder, `${base}/encoder.onnx`],
-    [VFS.decoder, `${base}/decoder.onnx`],
-    [VFS.joiner, `${base}/joiner.onnx`],
-    [VFS.tokens, `${base}/tokens.txt`],
-  ];
+async function fetchBinary(url: string): Promise<Uint8Array> {
+  const response = await fetch(url, { cache: "no-store" });
+  if (!response.ok) throw new Error(`Unable to load ${url}: ${response.status}`);
+  return new Uint8Array(await response.arrayBuffer());
+}
 
-  const loaded = await Promise.all(assets.map(async ([vfsPath, url]) => {
-    const response = await fetch(url, { cache: "no-cache" });
-    if (!response.ok) throw new Error(`Unable to load ${url}: ${response.status}`);
-    return [vfsPath, new Uint8Array(await response.arrayBuffer())] as const;
-  }));
-
-  for (const [vfsPath, bytes] of loaded) {
-    try { Module.FS_unlink?.(vfsPath); } catch { /* file did not exist */ }
-    createDataFile("/", vfsPath.slice(1), bytes, true, false, true);
+function ensureDir(FS: any, path: string): void {
+  try { FS.mkdir(path); } catch (error: any) {
+    // EEXIST is fine. stat() is more portable across Emscripten versions than
+    // relying on a numeric errno value.
+    try { FS.stat(path); } catch { throw error; }
   }
 }
 
-async function fetchText(url: string): Promise<string> {
-  const response = await fetch(url, { cache: "no-cache" });
-  if (!response.ok) throw new Error(`Unable to load ${url}: ${response.status}`);
-  return await response.text();
+async function mountBinary(FS: any, url: string, vfsPath: string): Promise<void> {
+  const bytes = await fetchBinary(url);
+  if (bytes.byteLength === 0) throw new Error(`Empty Sherpa asset: ${url}`);
+  FS.writeFile(vfsPath, bytes);
+  const stat = FS.stat(vfsPath);
+  if (!stat || Number(stat.size) !== bytes.byteLength) {
+    throw new Error(`Sherpa VFS verification failed for ${vfsPath}.`);
+  }
 }
 
 function loadScript(src: string): Promise<void> {
@@ -218,18 +208,15 @@ function loadScript(src: string): Promise<void> {
   });
 }
 
-async function waitFor(fn: () => boolean, timeoutMs: number): Promise<void> {
+async function waitFor(
+  fn: () => boolean,
+  timeoutMs: number,
+  message: string,
+): Promise<void> {
   const end = Date.now() + timeoutMs;
   while (Date.now() < end) {
     if (fn()) return;
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
-  throw new Error("Sherpa WASM runtime did not initialize.");
-}
-
-async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
-  return await Promise.race([
-    promise,
-    new Promise<T>((_, reject) => setTimeout(() => reject(new Error(message)), timeoutMs)),
-  ]);
+  throw new Error(message);
 }
