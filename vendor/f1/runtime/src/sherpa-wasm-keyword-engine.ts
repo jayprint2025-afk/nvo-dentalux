@@ -9,7 +9,7 @@ type SherpaKws = {
   createStream(): SherpaStream;
   isReady(stream: SherpaStream): boolean;
   decode(stream: SherpaStream): void;
-  getResult(stream: SherpaStream): { keyword?: string; text?: string };
+  getResult(stream: SherpaStream): { keyword?: string; text?: string; tokens?: string[]; timestamps?: number[] };
   reset(stream: SherpaStream): void;
   free(): void;
 };
@@ -155,19 +155,19 @@ export class SherpaWasmKeywordEngine implements SherpaKeywordEngine {
           provider: "cpu",
           modelType: "",
           numThreads: 1,
-          debug: 0,
+          debug: 1,
           modelingUnit: "bpe",
           bpeVocab: "",
         },
         maxActivePaths: 4,
         numTrailingBlanks: 1,
-        keywordsScore: this.#score,
-        keywordsThreshold: this.#threshold,
-
-        // Use the native in-memory keyword buffer explicitly.
-        keywords: "",
-        keywordsBuf: `${keywords}\n`,
-        keywordsBufSize: new TextEncoder().encode(`${keywords}\n`).byteLength,
+        // Stronger context boost + lower acoustic trigger threshold for Hana.
+        // The WASM-KWS build parses `keywords` directly as keyword text.
+        keywordsScore: Math.max(this.#score, 3.0),
+        keywordsThreshold: Math.min(this.#threshold, 0.05),
+        keywords: `${keywords}\n`,
+        keywordsBuf: "",
+        keywordsBufSize: 0,
       };
 
       const kws = createKws(module, config);
@@ -183,7 +183,14 @@ export class SherpaWasmKeywordEngine implements SherpaKeywordEngine {
 
       this.#kws = kws;
       this.#stream = stream;
-      console.info("[HANA SHERPA] READY", { base: this.#base, vfs: VFS_DIR, keywords });
+      console.info("[HANA SHERPA] READY", {
+        base: this.#base,
+        vfs: VFS_DIR,
+        keywords,
+        keywordTransport: "wasm-keywords-text",
+        keywordsScore: Math.max(this.#score, 3.0),
+        keywordsThreshold: Math.min(this.#threshold, 0.05),
+      });
     } catch (cause) {
       const detail = formatError(cause);
       console.error("[HANA SHERPA] INIT_FAILED", cause, detail);
@@ -204,7 +211,27 @@ export class SherpaWasmKeywordEngine implements SherpaKeywordEngine {
       this.#kws.decode(this.#stream);
       const result = this.#kws.getResult(this.#stream);
       const keyword = (result.keyword ?? result.text ?? "").trim();
-      if (keyword) hit = { keyword: keyword.replace(/_/g, " ") };
+
+      if (keyword) {
+        console.info("[HANA SHERPA] KEYWORD", {
+          keyword,
+          tokens: result.tokens ?? [],
+          timestamps: result.timestamps ?? [],
+        });
+        hit = { keyword: keyword.replace(/_/g, " ") };
+
+        // Sherpa's KWS API requires reset immediately after a detection.
+        this.#kws.reset(this.#stream);
+        break;
+      }
+
+      // Only log partial decoder activity; avoid flooding the console with empty results.
+      if (Array.isArray(result.tokens) && result.tokens.length > 0) {
+        console.debug("[HANA SHERPA] PARTIAL", {
+          tokens: result.tokens,
+          timestamps: result.timestamps ?? [],
+        });
+      }
     }
 
     return hit;
