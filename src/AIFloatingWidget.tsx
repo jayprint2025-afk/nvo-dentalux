@@ -1678,15 +1678,15 @@ const buildLeadReport = React.useCallback(() => {
           const audioWindow = (event as any)?.audioWindow;
           const sampleRate = Number((event as any)?.sampleRate || 0);
           if (!(audioWindow instanceof Float32Array) || !audioWindow.length || sampleRate !== 16000) {
-            setF1VoiceEngineDetail("V43 · candidato Sherpa sin audio válido");
+            setF1VoiceEngineDetail("V43B · candidato Sherpa sin audio válido");
             return;
           }
 
           wakeVerificationInFlightRef.current = true;
           try {
             if (!voiceProfile?.enabled || (voiceProfile?.samples?.length ?? 0) < 5) {
-              setLastWakeIdentity("V43: registra 5 muestras activas diciendo Oye Hana");
-              setF1VoiceEngineDetail("V43 · Sherpa detectó frase · bloqueado: faltan 5 muestras V43");
+              setLastWakeIdentity("V43B: registra 5 muestras activas diciendo Oye Hana");
+              setF1VoiceEngineDetail("V43B · Sherpa detectó frase · bloqueado: faltan 5 muestras V43");
               (f1VoiceEngineRef.current as any)?.suppressWakeFor?.(450);
               wakeVerificationCooldownUntilRef.current = Date.now() + 400;
               return;
@@ -1704,7 +1704,7 @@ const buildLeadReport = React.useCallback(() => {
             const pct = Math.round(similarity * 100);
             const requiredPct = Math.round(required * 100);
 
-            console.info("[HANA V43][SHERPA_OWNER_GATE]", {
+            console.info("[HANA V43B][SHERPA_OWNER_GATE]", {
               sherpa: true,
               ownerAccepted: accepted,
               similarity,
@@ -1720,14 +1720,14 @@ const buildLeadReport = React.useCallback(() => {
 
             if (!accepted) {
               setLastWakeIdentity(`Oye Hana detectado · voz rechazada ${pct}%/${requiredPct}%`);
-              setF1VoiceEngineDetail(`V43 · voz no autorizada (${pct}%) · 0 llamadas OpenAI`);
+              setF1VoiceEngineDetail(`V43B · voz no autorizada (${pct}%) · 0 llamadas OpenAI`);
               (f1VoiceEngineRef.current as any)?.suppressWakeFor?.(450);
               wakeVerificationCooldownUntilRef.current = Date.now() + 400;
               return;
             }
 
             setLastWakeIdentity(`Oye Hana · propietario ${pct}%`);
-            setF1VoiceEngineDetail("V43 · frase + propietario aprobados · iniciando…");
+            setF1VoiceEngineDetail("V43B · frase + propietario aprobados · iniciando…");
 
             await controller.wakeDetected({
               ...(event as any),
@@ -1738,7 +1738,7 @@ const buildLeadReport = React.useCallback(() => {
             });
           } catch (error) {
             setF1VoiceEngineDetail(
-              `V43 · verificación local falló: ${error instanceof Error ? error.message : String(error)}`,
+              `V43B · verificación local falló: ${error instanceof Error ? error.message : String(error)}`,
             );
           } finally {
             wakeVerificationInFlightRef.current = false;
