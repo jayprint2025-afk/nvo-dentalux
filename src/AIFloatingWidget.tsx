@@ -83,7 +83,7 @@ type F1WakeSettings = {
 };
 
 const LEGACY_F1_WAKE_SETTINGS_KEYS = ["f1_wake_settings_v2", "f1_wake_settings_v3", "f1_wake_settings_v4"] as const;
-const F1_WAKE_SETTINGS_KEY = "f1_wake_settings_v41_sherpa_owner_gate";
+const F1_WAKE_SETTINGS_KEY = "f1_wake_settings_v42_one_shot_owner_consistency";
 // V14: el detector local es solo PREFILTRO DE VOZ. La activaciÃ³n final exige
 // que el backend transcriba exactamente la palabra "Hana" al inicio.
 // El modelo ONNX anterior ya no decide la palabra clave.
@@ -1678,7 +1678,7 @@ const buildLeadReport = React.useCallback(() => {
           const audioWindow = (event as any)?.audioWindow;
           const sampleRate = Number((event as any)?.sampleRate || 0);
           if (!(audioWindow instanceof Float32Array) || !audioWindow.length || sampleRate !== 16000) {
-            setF1VoiceEngineDetail("V41 · candidato Sherpa sin audio válido");
+            setF1VoiceEngineDetail("V42 · candidato Sherpa sin audio válido");
             return;
           }
 
@@ -1686,7 +1686,7 @@ const buildLeadReport = React.useCallback(() => {
           try {
             if (!voiceProfile?.enabled || (voiceProfile?.samples?.length ?? 0) < 3) {
               setLastWakeIdentity("V41: falta perfil de voz registrado");
-              setF1VoiceEngineDetail("V41 · Sherpa detectó frase · bloqueado: falta perfil");
+              setF1VoiceEngineDetail("V42 · Sherpa detectó frase · bloqueado: falta perfil");
               (f1VoiceEngineRef.current as any)?.suppressWakeFor?.(450);
               wakeVerificationCooldownUntilRef.current = Date.now() + 400;
               return;
@@ -1704,25 +1704,29 @@ const buildLeadReport = React.useCallback(() => {
             const pct = Math.round(similarity * 100);
             const requiredPct = Math.round(required * 100);
 
-            console.info("[HANA V41][SHERPA_OWNER_GATE]", {
+            console.info("[HANA V42][SHERPA_OWNER_GATE]", {
               sherpa: true,
               ownerAccepted: accepted,
               similarity,
               required,
               sherpaConfidence: Number((event as any)?.confidence || 0),
               samples: voiceProfile.samples.length,
+              medianSimilarity: Number(result?.medianSimilarity || 0),
+              matchingSamples: Number(result?.matchingSamples || 0),
+              requiredMatches: Number(result?.requiredMatches || 0),
+              sampleSimilarities: result?.sampleSimilarities || [],
             });
 
             if (!accepted) {
               setLastWakeIdentity(`Oye Hana detectado · voz rechazada ${pct}%/${requiredPct}%`);
-              setF1VoiceEngineDetail(`V41 · voz no autorizada (${pct}%) · 0 llamadas OpenAI`);
+              setF1VoiceEngineDetail(`V42 · voz no autorizada (${pct}%) · 0 llamadas OpenAI`);
               (f1VoiceEngineRef.current as any)?.suppressWakeFor?.(450);
               wakeVerificationCooldownUntilRef.current = Date.now() + 400;
               return;
             }
 
             setLastWakeIdentity(`Oye Hana · propietario ${pct}%`);
-            setF1VoiceEngineDetail("V41 · frase + propietario aprobados · iniciando…");
+            setF1VoiceEngineDetail("V42 · frase + propietario aprobados · iniciando…");
 
             await controller.wakeDetected({
               ...(event as any),
@@ -1733,7 +1737,7 @@ const buildLeadReport = React.useCallback(() => {
             });
           } catch (error) {
             setF1VoiceEngineDetail(
-              `V41 · verificación local falló: ${error instanceof Error ? error.message : String(error)}`,
+              `V42 · verificación local falló: ${error instanceof Error ? error.message : String(error)}`,
             );
           } finally {
             wakeVerificationInFlightRef.current = false;

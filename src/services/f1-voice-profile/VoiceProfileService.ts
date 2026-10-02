@@ -87,13 +87,64 @@ export class VoiceProfileService {
     }
     const fingerprint = this.extractor.fromSamples(samples, sampleRate);
     const similarity = this.extractor.similarity(fingerprint.values, profile.centroid);
+
+    // V42 CONSISTENT OWNER:
+    // The old gate trusted only centroid similarity. In our real tests an
+    // unregistered WAV reached ~88.23%, while the owner ranged ~89-95%.
+    // Add a second LOCAL identity signal: consistency against the individual
+    // enrollment samples. This does not call OpenAI.
+    const sampleSimilarities = profile.samples
+      .map((sample) => this.extractor.similarity(
+        fingerprint.values,
+        sample.fingerprint.values,
+      ))
+      .filter((value) => Number.isFinite(value))
+      .sort((a, b) => b - a);
+
+    const sortedAscending = [...sampleSimilarities].sort((a, b) => a - b);
+    const middle = Math.floor(sortedAscending.length / 2);
+    const medianSimilarity = sortedAscending.length
+      ? (sortedAscending.length % 2
+        ? sortedAscending[middle]
+        : (sortedAscending[middle - 1] + sortedAscending[middle]) / 2)
+      : 0;
+
+    const required = profile.acceptanceThreshold;
+    // Allow normal owner variation around the centroid, but require that the
+    // candidate resembles a majority of the actual registered samples.
+    const perSampleFloor = Math.max(0.84, required - 0.025);
+    const requiredMatches = Math.max(2, Math.ceil(sampleSimilarities.length * 0.60));
+    const matchingSamples = sampleSimilarities.filter(
+      (value) => value >= perSampleFloor,
+    ).length;
+
+    const accepted =
+      similarity >= required &&
+      medianSimilarity >= perSampleFloor &&
+      matchingSamples >= requiredMatches;
+
+    console.info("[HANA V42][OWNER_CONSISTENCY]", {
+      accepted,
+      centroidSimilarity: similarity,
+      required,
+      medianSimilarity,
+      perSampleFloor,
+      matchingSamples,
+      requiredMatches,
+      sampleSimilarities,
+    });
+
     return {
-      accepted: similarity >= profile.acceptanceThreshold,
+      accepted,
       displayName: profile.displayName,
       similarity,
-      requiredSimilarity: profile.acceptanceThreshold,
+      requiredSimilarity: required,
       profileRequired: true,
-    };
+      medianSimilarity,
+      matchingSamples,
+      requiredMatches,
+      sampleSimilarities,
+    } as any;
   }
 
   async update(

@@ -149,7 +149,14 @@ export class SherpaWasmKeywordEngine implements SherpaKeywordEngine {
       // Only the complete phrase from keywords.txt can trigger. Partial
       // diagnostic keywords are deliberately excluded to protect against
       // false positives while making the full phrase easier to detect.
-      const keywords = configuredKeywords;
+      // V42 ONE-SHOT: keep the canonical trained phrase and add the common
+      // "Hanna" tokenization as an alias to the SAME wake tag. Neither "oye"
+      // nor "hana" alone is a valid keyword.
+      const keywordLines = [
+        configuredKeywords,
+        "▁o ye ▁ha n na @oye_hana",
+      ];
+      const keywords = [...new Set(keywordLines)].join("\n");
 
       const config = {
         featConfig: { samplingRate: 16000, featureDim: 80 },
@@ -167,12 +174,12 @@ export class SherpaWasmKeywordEngine implements SherpaKeywordEngine {
           modelingUnit: "bpe",
           bpeVocab: "",
         },
-        maxActivePaths: 16,
-        numTrailingBlanks: 2,
+        maxActivePaths: 24,
+        numTrailingBlanks: 1,
         // Stronger context boost + lower acoustic trigger threshold for Hana.
         // The WASM-KWS build parses `keywords` directly as keyword text.
-        keywordsScore: Math.max(this.#score, 4.0),
-        keywordsThreshold: Math.min(this.#threshold, 0.012),
+        keywordsScore: Math.max(this.#score, 6.0),
+        keywordsThreshold: Math.min(this.#threshold, 0.008),
         keywords: `${keywords}\n`,
         keywordsBuf: "",
         keywordsBufSize: 0,
@@ -196,8 +203,8 @@ export class SherpaWasmKeywordEngine implements SherpaKeywordEngine {
         vfs: VFS_DIR,
         keywords,
         keywordTransport: "wasm-keywords-text",
-        keywordsScore: Math.max(this.#score, 4.0),
-        keywordsThreshold: Math.min(this.#threshold, 0.012),
+        keywordsScore: Math.max(this.#score, 6.0),
+        keywordsThreshold: Math.min(this.#threshold, 0.008),
       });
     } catch (cause) {
       const detail = formatError(cause);
