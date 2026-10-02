@@ -17,6 +17,7 @@ export class F1AudioSessionController {
   private operation: Promise<void> = Promise.resolve();
   private wakeAcceptAfter = 0;
   private sessionGeneration = 0;
+  private closingPromptAsked = false;
   private activeSpeakerName: string | undefined;
   private activeGreetingText = "Te escucho";
 
@@ -194,6 +195,7 @@ export class F1AudioSessionController {
   }
 
   onUserSpeechStarted(): void {
+    this.closingPromptAsked = false;
     if (
       this.sm.state !== "REALTIME_LISTENING" &&
       this.sm.state !== "REALTIME_FOLLOWUP"
@@ -277,6 +279,7 @@ export class F1AudioSessionController {
     if (this.realtime || this.isRealtimeState()) return;
 
     this.clearTimers();
+    this.closingPromptAsked = false;
     this.sessionGeneration += 1;
     this.move("REALTIME_CONNECTING", "Conectando con F1");
 
@@ -364,7 +367,7 @@ export class F1AudioSessionController {
 
     this.wakeAcceptAfter =
       Date.now() + (this.options.wakeStabilizationMs ?? 2500);
-    this.move("WAKE_LISTENING", "Esperando “Hana”");
+    this.move("WAKE_LISTENING", "Esperando “Oye Hana”");
   }
 
   private async stopWakeAndVerify(): Promise<void> {
@@ -391,10 +394,18 @@ export class F1AudioSessionController {
   private armFollowup(): void {
     this.clearFollowupTimer();
     const generation = this.sessionGeneration;
+    const waitMs = this.closingPromptAsked ? 7_000 : (this.options.followupTimeoutMs ?? 15_000);
     this.followupTimer = window.setTimeout(() => {
       if (generation !== this.sessionGeneration) return;
+      if (!this.closingPromptAsked && this.realtime && this.sm.state === "REALTIME_FOLLOWUP") {
+        this.closingPromptAsked = true;
+        console.info("[F1/V37][SMART_CLOSE_PROMPT]", { at: Date.now() });
+        this.realtime.requestClosingPrompt();
+        // Playback lifecycle will re-arm followup when the prompt audio stops.
+        return;
+      }
       void this.enqueue(() => this.finishConversation("followup-timeout"));
-    }, this.options.followupTimeoutMs ?? 15_000);
+    }, waitMs);
   }
 
   private armInactivity(): void {

@@ -50,8 +50,15 @@ const tools = [
     },
   },
   {
-    type: 'function', name: 'find_appointments', description: 'Busca citas por paciente o fecha.',
-    parameters: { type: 'object', properties: { patient: { type: 'string' }, date: { type: 'string' }, branch_key: { type: 'string' } } },
+    type: 'function', name: 'find_appointments', description: 'Busca citas por paciente, fecha o rango. Para esta semana/próxima semana usa period y evita hacer una consulta por cada día.',
+    parameters: { type: 'object', properties: {
+      patient: { type: 'string' },
+      date: { type: 'string', description: 'Fecha única YYYY-MM-DD.' },
+      from_date: { type: 'string', description: 'Inicio inclusivo YYYY-MM-DD.' },
+      to_date: { type: 'string', description: 'Fin inclusivo YYYY-MM-DD.' },
+      period: { type: 'string', enum: ['today','tomorrow','current_week','next_week'], description: 'Periodo relativo resuelto por el backend con la zona horaria de la clínica.' },
+      branch_key: { type: 'string' }
+    } },
   },
   {
     type: 'function', name: 'cancel_appointment', description: 'Cancela una cita por su identificador. Debe confirmar verbalmente con el usuario antes de usarla.',

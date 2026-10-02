@@ -203,11 +203,34 @@ async function findAppointments(q, ctx, args = {}) {
   const branch = text(args.branch_key || ctx.branch_key) || null;
   const patient = text(args.patient);
   const date = text(args.date);
+  let fromDate = text(args.from_date);
+  let toDate = text(args.to_date);
+  const period = text(args.period).toLowerCase();
+
+  // V37: periodos relativos se resuelven UNA sola vez en backend. La semana
+  // clínica es lunes-domingo y nunca significa "desde hoy hacia adelante".
+  const today = localDate(ctx.timezone);
+  const shiftDate = (iso, days) => {
+    const d = new Date(`${iso}T12:00:00Z`);
+    d.setUTCDate(d.getUTCDate() + days);
+    return d.toISOString().slice(0, 10);
+  };
+  if (period === 'today') fromDate = toDate = today;
+  if (period === 'tomorrow') fromDate = toDate = shiftDate(today, 1);
+  if (period === 'current_week' || period === 'next_week') {
+    const d = new Date(`${today}T12:00:00Z`);
+    const mondayOffset = -((d.getUTCDay() + 6) % 7) + (period === 'next_week' ? 7 : 0);
+    fromDate = shiftDate(today, mondayOffset);
+    toDate = shiftDate(fromDate, 6);
+  }
+
   const params = [tenantId];
   const where = ['a.tenant_id = $1::uuid'];
   if (branch) { params.push(branch); where.push(`(a.sucursal_id = $${params.length} OR a.sucursal_id IS NULL)`); }
   if (patient) { params.push(`%${patient}%`); where.push(`a.patient ILIKE $${params.length}`); }
   if (date) { params.push(date); where.push(`a.date = $${params.length}::date`); }
+  if (!date && fromDate) { params.push(fromDate); where.push(`a.date >= $${params.length}::date`); }
+  if (!date && toDate) { params.push(toDate); where.push(`a.date <= $${params.length}::date`); }
   const { rows } = await q(`
     SELECT a.id, a.patient, a.phone, a.date, a.start_time::text AS start_time,
            a.status, a.doctor_id, a.service_id, d.name AS doctor_name, s.name AS service_name
@@ -215,14 +238,15 @@ async function findAppointments(q, ctx, args = {}) {
       LEFT JOIN doctors d ON d.id=a.doctor_id
       LEFT JOIN services s ON s.id=a.service_id
      WHERE ${where.join(' AND ')}
-     ORDER BY a.date DESC, a.start_time ASC
-     LIMIT 30
+     ORDER BY a.date ASC, a.start_time ASC
+     LIMIT 100
   `, params);
   return {
     appointments: rows,
     assistant_message: rows.length
-      ? `Encontré ${rows.length} cita${rows.length === 1 ? '' : 's'}${patient ? ` para ${patient}` : ''}.`
-      : `No encontré citas${patient ? ` para ${patient}` : ''} en la sucursal actual.`,
+      ? `Encontré ${rows.length} cita${rows.length === 1 ? '' : 's'}${patient ? ` para ${patient}` : ''}${fromDate && toDate ? ` del ${fromDate} al ${toDate}` : ''}.`
+      : `No encontré citas${patient ? ` para ${patient}` : ''}${fromDate && toDate ? ` del ${fromDate} al ${toDate}` : ''} en la sucursal actual.`,
+    query_range: fromDate || toDate ? { from_date: fromDate || null, to_date: toDate || null } : null,
   };
 }
 

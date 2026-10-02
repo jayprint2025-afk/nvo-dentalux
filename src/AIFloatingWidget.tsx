@@ -83,7 +83,7 @@ type F1WakeSettings = {
 };
 
 const LEGACY_F1_WAKE_SETTINGS_KEYS = ["f1_wake_settings_v2", "f1_wake_settings_v3", "f1_wake_settings_v4"] as const;
-const F1_WAKE_SETTINGS_KEY = "f1_wake_settings_v33_simple_hana";
+const F1_WAKE_SETTINGS_KEY = "f1_wake_settings_v37_oye_hana";
 // V14: el detector local es solo PREFILTRO DE VOZ. La activaciÃ³n final exige
 // que el backend transcriba exactamente la palabra "Hana" al inicio.
 // El modelo ONNX anterior ya no decide la palabra clave.
@@ -93,7 +93,7 @@ const DEFAULT_F1_WAKE_SETTINGS: F1WakeSettings = {
   // V14: el ONNX deja de autorizar la palabra clave. Solo genera candidatos
   // cuando existe voz; la autorizaciÃ³n final es la transcripciÃ³n exacta "Hana".
   // Por eso el prefiltro debe ser deliberadamente permisivo.
-  threshold: 0.22,
+  threshold: 0.18,
   consecutiveHits: 1,
   cooldownMs: 1200,
   stabilizationMs: 500,
@@ -1486,7 +1486,7 @@ const buildLeadReport = React.useCallback(() => {
       const next: F1WakeSettings =
         preset === "sensitive"
           ? {
-              threshold: 0.22,
+              threshold: 0.18,
               consecutiveHits: 1,
               cooldownMs: 1800,
               stabilizationMs: 800,
@@ -1556,7 +1556,7 @@ const buildLeadReport = React.useCallback(() => {
   const recordVoiceProfileSample = React.useCallback(async () => {
     try {
       setVoiceProfileBusy(true);
-      setVoiceProfileMessage('Di â€œHanaâ€ con tu voz normalâ€¦');
+      setVoiceProfileMessage('Di â€œOye Hanaâ€ con tu voz normalâ€¦');
       setVoiceProfileVerification(null);
 
       const shouldRestart = f1VoiceEngineEnabled;
@@ -1587,7 +1587,7 @@ const buildLeadReport = React.useCallback(() => {
   const testVoiceProfile = React.useCallback(async () => {
     try {
       setVoiceProfileBusy(true);
-      setVoiceProfileMessage('Di â€œHanaâ€ para comparar tu vozâ€¦');
+      setVoiceProfileMessage('Di â€œOye Hanaâ€ para comparar tu vozâ€¦');
 
       const shouldRestart = f1VoiceEngineEnabled;
       if (shouldRestart) await sessionControllerRef.current?.disable();
@@ -1653,7 +1653,7 @@ const buildLeadReport = React.useCallback(() => {
     const modelUrl = String((import.meta as any).env?.VITE_F1_WAKE_MODEL_URL || "/models/hanna-v5/hanna.onnx").trim(); // V14: se usa solo como generador de candidato; NO autoriza la palabra.
     let controller: F1AudioSessionController;
     const engine = new F1VoiceEngine({
-      phrase: "Hana",
+      phrase: "Oye Hana",
       modelUrl,
       // V14: cualquier segmento de voz suficientemente claro puede convertirse
       // en CANDIDATO. Solo /f1/wake/verify puede autorizar "Hana".
@@ -1681,7 +1681,7 @@ const buildLeadReport = React.useCallback(() => {
 
         void controller.wakeDetected({
           ...(event as any),
-          phrase: "Hana",
+          phrase: "Oye Hana",
           confidence: Math.max(confidence, wakeSettings.threshold),
           detectedAt: Date.now(),
           audioWindow,
@@ -1783,7 +1783,7 @@ const buildLeadReport = React.useCallback(() => {
     if (f1VoiceEngineEnabled) {
       console.info("[F1/HANA][ENABLE_BEGIN]", {
         enabled: f1VoiceEngineEnabled,
-        phrase: "Hana",
+        phrase: "Oye Hana",
         modelUrl,
         threshold: wakeSettings.threshold,
         consecutiveHits: wakeSettings.consecutiveHits,
@@ -2453,7 +2453,7 @@ const buildLeadReport = React.useCallback(() => {
                       <div className="min-w-0">
                         <div className="text-sm font-semibold">F1 Voice Engine</div>
                         <div className="text-[11px] text-gray-500">
-                          Prefiltro local de voz. La activaciÃ³n final exige la palabra â€œHanaâ€.
+                          Prefiltro local de voz. La activaciÃ³n final exige la frase â€œOye Hanaâ€.
                         </div>
                         <div className="mt-1 text-[11px] text-gray-600">
                           Estado: {f1VoiceEngineStatus}
@@ -2464,7 +2464,7 @@ const buildLeadReport = React.useCallback(() => {
                           {" Â· "}
                           Confirmaciones: {wakeSettings.consecutiveHits}
                           {" Â· "}
-                          Palabra clave: obligatoria
+                          Frase clave: “Oye Hana”
                         </div>
                       </div>
                       <div className="flex items-center gap-2">
@@ -2538,7 +2538,7 @@ const buildLeadReport = React.useCallback(() => {
                             className="mt-1 w-full"
                           />
                           <span className="text-[10px] text-gray-500">
-                            Este control solo decide cuÃ¡ndo enviar un segmento de voz a verificaciÃ³n. La activaciÃ³n final exige que la transcripciÃ³n empiece exactamente con â€œHanaâ€.
+                            Este control solo decide cuÃ¡ndo enviar un segmento de voz a verificaciÃ³n. La activaciÃ³n final exige que la transcripciÃ³n sea exactamente â€œOye Hanaâ€.
                           </span>
                         </label>
 

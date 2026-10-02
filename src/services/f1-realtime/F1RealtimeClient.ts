@@ -533,6 +533,13 @@ export class F1RealtimeClient {
       });
       const status = String(payload.response?.status ?? "");
       if (status === "failed" || status === "cancelled") {
+        const cancelReason = String(payload.response?.status_details?.reason ?? "").toLowerCase();
+        // V37: turn_detected is normal Realtime barge-in, not a fatal session error.
+        if (status === "cancelled" && /turn_detected|client_cancelled|cancelled/.test(cancelReason)) {
+          this.markResponseCompleted();
+          console.info("[F1/V37][NON_FATAL_CANCEL]", { reason: cancelReason, at: Date.now() });
+          return;
+        }
         if (status === "failed" && this.isRateLimitError(payload)) {
           if (!this.pendingResponseCreate && this.userTurnAwaitingResponse && !this.greetingPending) {
             this.pendingResponseCreate = { type: "response.create" };
@@ -614,7 +621,8 @@ export class F1RealtimeClient {
               prefix_padding_ms: 300,
               silence_duration_ms: 750,
               create_response: true,
-              interrupt_response: true,
+              // V37: room/patient speech must never cut Hana mid-sentence.
+              interrupt_response: false,
             },
           },
         },
@@ -692,6 +700,21 @@ export class F1RealtimeClient {
       },
     });
     this.sendResponseCreate({ type: "response.create" });
+  }
+
+  /** V37: one polite closing check after a truly idle follow-up window. */
+  requestClosingPrompt(): void {
+    if (this.closed || !this.dc || this.dc.readyState !== "open") return;
+    this.sendResponseCreate({
+      type: "response.create",
+      response: {
+        conversation: "none",
+        output_modalities: ["audio"],
+        max_output_tokens: 96,
+        instructions: "Pregunta una sola vez, de forma breve y profesional: ¿Necesitas algo más? No agregues explicación ni repitas información anterior.",
+        metadata: { f1_purpose: "smart_closing_check" },
+      },
+    });
   }
 
   async close(): Promise<void> {

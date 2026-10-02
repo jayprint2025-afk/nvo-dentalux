@@ -38,12 +38,12 @@ function matchWakePhrase(value) {
   // V25: coincidencia ESTRICTA. No basta con que una frase cualquiera empiece
   // con Hana/Hanna; el verificador solo autoriza las variantes de wake word.
   // Esto evita que TV/conversaciones como 'Hana dijo...' abran F1 por accidente.
-  const allowed = new Set(['hana', 'hanna', 'oye hana', 'oye hanna', 'hey hana', 'hey hanna']);
+  const allowed = new Set(['oye hana', 'oye hanna']);
   const match = allowed.has(text);
   return {
     accepted: match,
     normalized: text,
-    phrase: match ? 'hana' : '',
+    phrase: match ? 'oye hana' : '',
   };
 }
 
@@ -220,10 +220,12 @@ Facturación: antes de crear una factura reúne cliente, tipo y al menos un conc
 Para acciones destructivas o correcciones financieras exige confirmación explícita cuando la herramienta lo indique. Si una operación está bloqueada por relaciones de datos, explica el motivo y ofrece la alternativa segura.
 No puedes crear empresas ni modificar empresas. Esa acción continúa reservada al superadministrador.
 Cuando el usuario diga “mañana”, interpreta la fecha local de la clínica. Responde con texto y voz de forma natural y concisa.
+Agenda por periodos: “esta semana”, “toda la semana” o “semana actual” significa SIEMPRE lunes a domingo de la semana calendario actual, aunque hoy sea viernes. Usa find_appointments una sola vez con period=current_week. “Próxima semana” usa period=next_week. Para un rango explícito usa from_date/to_date en una sola llamada. No sustituyas una consulta semanal por “hoy” ni hagas siete consultas separadas.
+Seguimiento de voz: durante una sesión activa responde solo a instrucciones claramente dirigidas a F1 o que continúen el tema operativo actual. Si detectas conversación lateral entre doctor/paciente, charla ambiental o una frase sin intención hacia F1, no ejecutes herramientas ni te entrometas.
 Comportamiento de voz profesional: prioriza respuestas habladas de 1 a 4 frases cuando la tarea ya quedó resuelta; si hay muchos datos, resume primero y ofrece el dato esencial sin recitar tablas completas. Nunca termines una frase a la mitad ni cierres una respuesta con una idea incompleta. Si necesitas más espacio para explicar, termina primero la oración actual y continúa de forma breve.
 Tolerancia a pausas: una pausa natural, respiración, duda, muletilla o silencio breve dentro de una instrucción no significa necesariamente que el usuario terminó. Interpreta el mensaje completo antes de actuar y no te precipites por fragmentos parciales.
 Ruido ambiental: ignora golpes, respiración, instrumental, conversaciones lejanas, sílabas aisladas, transcripciones sin sentido y fragmentos que no expresen una intención clara. No ejecutes herramientas ni confirmes acciones basándote únicamente en ruido o texto incompleto.
-Palabra clave de activación: “Hana”. Una vez que la sesión Realtime ya está activa, no exijas repetir la palabra clave para cada instrucción.
+Palabra clave de activación: “Oye Hana”. Una vez que la sesión Realtime ya está activa, no exijas repetir la palabra clave para cada instrucción.
 Usa la memoria solo como contexto; nunca inventes datos faltantes. Si el usuario dice explícitamente “recuerda”, “guarda esta preferencia” u “olvida”, usa las herramientas de memoria. No guardes información clínica sensible como memoria permanente salvo petición explícita.
 
 ${memoryContext}`;
@@ -634,12 +636,12 @@ function setupF1Routes(app, q, deps) {
     res.json({
       ok: true,
       profile: 'professional-v6',
-      wake_words: ['Hana'],
+      wake_words: ['Oye Hana'],
       vad: { type: 'semantic_vad', eagerness: profile.vadEagerness, interrupt_response: false },
       noise_reduction: profile.noiseReduction,
       max_output_tokens: profile.maxOutputTokens,
       voice_speed: profile.voiceSpeed,
-      note: 'V14 usa HANA como única palabra de activación. El cliente propone candidatos de voz y /api/f1/wake/verify autoriza únicamente transcripciones que empiecen con Hana.',
+      note: 'V37 usa OYE HANA como frase de activación. Hana sola no autoriza el wake.',
     });
   });
 
