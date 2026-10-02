@@ -266,6 +266,26 @@ export class F1AudioSessionController {
 
   onAssistantTranscriptDone(text: string): void {
     this.transcript = `F1: ${text}`;
+
+    // V39: if Hanna herself already asked the closing question as part of her
+    // normal answer, do NOT let the follow-up timer ask it a second time.
+    const normalized = String(text || "")
+      .toLocaleLowerCase("es-MX")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^a-z0-9\s]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    if (
+      /\bnecesitas algo mas\b/.test(normalized) ||
+      /\bpuedo ayudarte (?:en|con) algo mas\b/.test(normalized) ||
+      /\balgo mas en (?:que|lo que) (?:te )?pueda ayudar\b/.test(normalized)
+    ) {
+      this.closingPromptAsked = true;
+      console.info("[F1/V39][SMART_CLOSE_ALREADY_ASKED]", { transcript: text });
+    }
+
     this.emit();
   }
 
@@ -418,12 +438,12 @@ export class F1AudioSessionController {
   private armFollowup(): void {
     this.clearFollowupTimer();
     const generation = this.sessionGeneration;
-    const waitMs = this.closingPromptAsked ? 3_000 : (this.options.followupTimeoutMs ?? 5_000);
+    const waitMs = this.closingPromptAsked ? 4_000 : (this.options.followupTimeoutMs ?? 5_000);
     this.followupTimer = window.setTimeout(() => {
       if (generation !== this.sessionGeneration) return;
       if (!this.closingPromptAsked && this.realtime && this.sm.state === "REALTIME_FOLLOWUP") {
         this.closingPromptAsked = true;
-        console.info("[F1/V37][SMART_CLOSE_PROMPT]", { at: Date.now() });
+        console.info("[F1/V39][SMART_CLOSE_PROMPT_ONCE]", { at: Date.now() });
         this.realtime.requestClosingPrompt();
         // Playback lifecycle will re-arm followup when the prompt audio stops.
         return;
