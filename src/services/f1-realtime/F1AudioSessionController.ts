@@ -195,7 +195,8 @@ export class F1AudioSessionController {
   }
 
   onUserSpeechStarted(): void {
-    this.closingPromptAsked = false;
+    // V38: preserve closingPromptAsked while transcribing the answer to the
+    // smart-close question. This lets an explicit "no" close immediately.
     if (
       this.sm.state !== "REALTIME_LISTENING" &&
       this.sm.state !== "REALTIME_FOLLOWUP"
@@ -207,8 +208,31 @@ export class F1AudioSessionController {
   }
 
   onUserTranscript(text: string): void {
-    this.transcript = `Tú: ${text}`;
+    const clean = String(text || "").trim();
+    this.transcript = `Tú: ${clean}`;
     this.emit();
+
+    if (this.closingPromptAsked) {
+      const normalized = clean
+        .toLocaleLowerCase("es-MX")
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .replace(/[^a-z0-9\s]/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+
+      const explicitClose =
+        /^(no|no gracias|nada|nada mas|eso es todo|es todo|ya es todo|ya seria todo|seria todo|listo|gracias|gracias hana|no hana)$/.test(normalized) ||
+        /\b(no gracias|nada mas|eso es todo|ya es todo|seria todo)\b/.test(normalized);
+
+      if (explicitClose) {
+        console.info("[F1/V38][SMART_CLOSE_ACCEPTED]", { transcript: clean });
+        void this.enqueue(() => this.finishConversation("smart-close-negative"));
+        return;
+      }
+
+      this.closingPromptAsked = false;
+    }
   }
 
   onAssistantSpeechStarted(): void {
@@ -394,7 +418,7 @@ export class F1AudioSessionController {
   private armFollowup(): void {
     this.clearFollowupTimer();
     const generation = this.sessionGeneration;
-    const waitMs = this.closingPromptAsked ? 7_000 : (this.options.followupTimeoutMs ?? 15_000);
+    const waitMs = this.closingPromptAsked ? 3_000 : (this.options.followupTimeoutMs ?? 5_000);
     this.followupTimer = window.setTimeout(() => {
       if (generation !== this.sessionGeneration) return;
       if (!this.closingPromptAsked && this.realtime && this.sm.state === "REALTIME_FOLLOWUP") {
@@ -414,7 +438,7 @@ export class F1AudioSessionController {
     this.inactivityTimer = window.setTimeout(() => {
       if (generation !== this.sessionGeneration) return;
       void this.enqueue(() => this.finishConversation("idle-timeout"));
-    }, this.options.inactivityTimeoutMs ?? 15_000);
+    }, this.options.inactivityTimeoutMs ?? 5_000);
   }
 
   private armMaxSession(): void {

@@ -1711,8 +1711,8 @@ const buildLeadReport = React.useCallback(() => {
       wakeEngine: engine,
       onSnapshot: handleSnapshot,
       // La activaciÃ³n por voz no abre el panel flotante.
-      followupTimeoutMs: 15000,
-      inactivityTimeoutMs: 15000,
+      followupTimeoutMs: 5000,
+      inactivityTimeoutMs: 5000,
       maxSessionMs: 120000,
       wakeStabilizationMs: wakeSettings.stabilizationMs,
       // V33: sin candados duplicados. El threshold del detector local decide el wake.
