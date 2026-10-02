@@ -25,8 +25,14 @@ export class VoiceProfileService {
     const current = await this.store.get(scope);
     const now = new Date().toISOString();
 
+    // V43: fingerprint format changed. Never mix legacy coarse fingerprints
+    // with the stronger phrase-specific fingerprint. First V43 enrollment
+    // automatically starts a clean owner profile.
+    const compatibleCurrentSamples = (current?.samples ?? []).filter(
+      (sample) => sample.fingerprint.values.length === fingerprint.values.length,
+    );
     const samples = [
-      ...(current?.samples ?? []),
+      ...compatibleCurrentSamples,
       {
         id: crypto.randomUUID(),
         createdAt: now,
@@ -46,7 +52,7 @@ export class VoiceProfileService {
       centroid: this.extractor.centroid(
         samples.map((sample) => sample.fingerprint.values),
       ),
-      acceptanceThreshold: current?.acceptanceThreshold ?? 0.88,
+      acceptanceThreshold: compatibleCurrentSamples.length ? (current?.acceptanceThreshold ?? 0.90) : 0.90,
     };
 
     await this.store.put(profile);
@@ -55,8 +61,8 @@ export class VoiceProfileService {
 
   async test(scope: VoiceProfileScope): Promise<VoiceProfileVerification> {
     const profile = await this.store.get(scope);
-    if (!profile || profile.samples.length < 3 || !profile.centroid.length) {
-      throw new Error("Registra al menos 3 muestras antes de probar tu voz.");
+    if (!profile || profile.samples.length < 5 || !profile.centroid.length) {
+      throw new Error("V43 requiere al menos 5 muestras diciendo “Oye Hana” antes de probar tu voz.");
     }
 
     const blob = await this.recorder.record();
@@ -82,7 +88,7 @@ export class VoiceProfileService {
     if (!profile || !profile.enabled) {
       return { accepted: false, similarity: 0, requiredSimilarity: 0, profileRequired: true };
     }
-    if (profile.samples.length < 3 || !profile.centroid.length) {
+    if (profile.samples.length < 5 || !profile.centroid.length) {
       return { accepted: false, displayName: profile.displayName, similarity: 0, requiredSimilarity: profile.acceptanceThreshold, profileRequired: true };
     }
     const fingerprint = this.extractor.fromSamples(samples, sampleRate);
@@ -109,19 +115,25 @@ export class VoiceProfileService {
         : (sortedAscending[middle - 1] + sortedAscending[middle]) / 2)
       : 0;
 
-    const required = profile.acceptanceThreshold;
-    // Allow normal owner variation around the centroid, but require that the
-    // candidate resembles a majority of the actual registered samples.
-    const perSampleFloor = Math.max(0.84, required - 0.025);
-    const requiredMatches = Math.max(2, Math.ceil(sampleSimilarities.length * 0.60));
+    const required = Math.max(0.90, profile.acceptanceThreshold);
+
+    // V43: a wake must resemble the PROFILE, not merely cross one loose score.
+    // Require agreement with most of the actual enrollment utterances.
+    const perSampleFloor = Math.max(0.875, required - 0.025);
+    const strongSampleFloor = Math.max(0.90, required);
+    const requiredMatches = Math.max(4, Math.ceil(sampleSimilarities.length * 0.70));
     const matchingSamples = sampleSimilarities.filter(
       (value) => value >= perSampleFloor,
+    ).length;
+    const strongMatches = sampleSimilarities.filter(
+      (value) => value >= strongSampleFloor,
     ).length;
 
     const accepted =
       similarity >= required &&
       medianSimilarity >= perSampleFloor &&
-      matchingSamples >= requiredMatches;
+      matchingSamples >= requiredMatches &&
+      strongMatches >= 2;
 
     console.info("[HANA V42][OWNER_CONSISTENCY]", {
       accepted,
@@ -131,6 +143,7 @@ export class VoiceProfileService {
       perSampleFloor,
       matchingSamples,
       requiredMatches,
+      strongMatches,
       sampleSimilarities,
     });
 
@@ -143,6 +156,7 @@ export class VoiceProfileService {
       medianSimilarity,
       matchingSamples,
       requiredMatches,
+      strongMatches,
       sampleSimilarities,
     } as any;
   }
