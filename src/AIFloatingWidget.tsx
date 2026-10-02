@@ -1477,9 +1477,6 @@ const buildLeadReport = React.useCallback(() => {
       detail: { name, call_id: callId, source: 'f1' },
     }));
 
-    // V35 Professional Voice: the Realtime tool result must go back to Hanna
-    // immediately. Refreshing dashboard data is UI maintenance and must never
-    // sit on the critical voice-response path.
     void loadF1Dashboard().catch(() => undefined);
     return output;
   }, [sucursalId, loadF1Dashboard, applyF1ClientActions]);
@@ -1714,7 +1711,7 @@ const buildLeadReport = React.useCallback(() => {
       wakeEngine: engine,
       onSnapshot: handleSnapshot,
       // La activaciÃ³n por voz no abre el panel flotante.
-      followupTimeoutMs: 5000,
+      followupTimeoutMs: 15000,
       inactivityTimeoutMs: 15000,
       maxSessionMs: 120000,
       wakeStabilizationMs: wakeSettings.stabilizationMs,

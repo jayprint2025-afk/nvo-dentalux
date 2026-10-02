@@ -488,6 +488,7 @@ export class F1RealtimeClient {
     }
 
     if (type === "output_audio_buffer.started") {
+      console.info("[F1/V36][RT_EVENT]", { type, at: Date.now(), greeting: this.greetingPending });
       if (this.greetingPending) this.greetingAudioStarted = true;
       void this.remoteAudio?.play().catch(() => undefined);
       this.options.callbacks.onAssistantSpeechStarted();
@@ -524,6 +525,12 @@ export class F1RealtimeClient {
     }
 
     if (type === "response.done") {
+      console.info("[F1/V36][RT_EVENT]", {
+        type,
+        at: Date.now(),
+        status: String(payload.response?.status ?? ""),
+        outputTypes: (payload.response?.output ?? []).map((item: any) => item?.type),
+      });
       const status = String(payload.response?.status ?? "");
       if (status === "failed" || status === "cancelled") {
         if (status === "failed" && this.isRateLimitError(payload)) {
@@ -559,6 +566,7 @@ export class F1RealtimeClient {
     }
 
     if (type === "output_audio_buffer.stopped") {
+      console.info("[F1/V36][RT_EVENT]", { type, at: Date.now(), greeting: this.greetingPending });
       if (this.greetingPending) {
         this.greetingAudioStopped = true;
         await this.tryFinalizeGreeting();

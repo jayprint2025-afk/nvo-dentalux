@@ -211,13 +211,24 @@ export class F1AudioSessionController {
 
   onAssistantSpeechStarted(): void {
     if (this.sm.state === "REALTIME_GREETING") return;
+
+    // V36: a tool response can briefly put the controller in FOLLOWUP before
+    // the continuation starts speaking. Actual playback is authoritative.
+    this.clearFollowupTimer();
+    this.clearInactivityTimer();
+
     if (
       this.sm.state === "REALTIME_PROCESSING" ||
-      this.sm.state === "REALTIME_LISTENING"
+      this.sm.state === "REALTIME_LISTENING" ||
+      this.sm.state === "REALTIME_FOLLOWUP"
     ) {
       this.move("REALTIME_SPEAKING", "F1 respondiendo");
     }
-    this.clearInactivityTimer();
+
+    console.info("[F1/V36][PLAYBACK_STARTED]", {
+      at: Date.now(),
+      state: this.sm.state,
+    });
   }
 
   onAssistantTranscriptDelta(delta: string): void {
@@ -235,6 +246,11 @@ export class F1AudioSessionController {
   onResponseDone(): void {
     if (this.sm.state === "REALTIME_GREETING") return;
     if (!this.isRealtimeState()) return;
+
+    console.info("[F1/V36][PLAYBACK_STOPPED]", {
+      at: Date.now(),
+      state: this.sm.state,
+    });
 
     if (this.sm.state !== "REALTIME_FOLLOWUP") {
       this.move("REALTIME_FOLLOWUP", "Esperando otra instrucción");
@@ -286,6 +302,11 @@ export class F1AudioSessionController {
   }
 
   private async finishConversation(reason: DisconnectReason): Promise<void> {
+    console.info("[F1/V36][SESSION_FINISH]", {
+      at: Date.now(),
+      reason,
+      state: this.sm.state,
+    });
     this.clearTimers();
 
     if (this.realtime || this.isRealtimeState() || this.sm.state === "ERROR") {
@@ -373,7 +394,7 @@ export class F1AudioSessionController {
     this.followupTimer = window.setTimeout(() => {
       if (generation !== this.sessionGeneration) return;
       void this.enqueue(() => this.finishConversation("followup-timeout"));
-    }, this.options.followupTimeoutMs ?? 5_000);
+    }, this.options.followupTimeoutMs ?? 15_000);
   }
 
   private armInactivity(): void {
