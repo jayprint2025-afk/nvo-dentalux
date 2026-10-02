@@ -83,7 +83,7 @@ type F1WakeSettings = {
 };
 
 const LEGACY_F1_WAKE_SETTINGS_KEYS = ["f1_wake_settings_v2", "f1_wake_settings_v3", "f1_wake_settings_v4"] as const;
-const F1_WAKE_SETTINGS_KEY = "f1_wake_settings_v37_oye_hana";
+const F1_WAKE_SETTINGS_KEY = "f1_wake_settings_v41_sherpa_owner_gate";
 // V14: el detector local es solo PREFILTRO DE VOZ. La activaciÃ³n final exige
 // que el backend transcriba exactamente la palabra "Hana" al inicio.
 // El modelo ONNX anterior ya no decide la palabra clave.
@@ -93,7 +93,7 @@ const DEFAULT_F1_WAKE_SETTINGS: F1WakeSettings = {
   // V14: el ONNX deja de autorizar la palabra clave. Solo genera candidatos
   // cuando existe voz; la autorizaciÃ³n final es la transcripciÃ³n exacta "Hana".
   // Por eso el prefiltro debe ser deliberadamente permisivo.
-  threshold: 0.18,
+  threshold: 0.12,
   consecutiveHits: 1,
   cooldownMs: 1200,
   stabilizationMs: 500,
@@ -1486,7 +1486,7 @@ const buildLeadReport = React.useCallback(() => {
       const next: F1WakeSettings =
         preset === "sensitive"
           ? {
-              threshold: 0.18,
+              threshold: 0.22,
               consecutiveHits: 1,
               cooldownMs: 1800,
               stabilizationMs: 800,
@@ -1556,7 +1556,7 @@ const buildLeadReport = React.useCallback(() => {
   const recordVoiceProfileSample = React.useCallback(async () => {
     try {
       setVoiceProfileBusy(true);
-      setVoiceProfileMessage('Di â€œOye Hanaâ€ con tu voz normalâ€¦');
+      setVoiceProfileMessage('Di â€œHanaâ€ con tu voz normalâ€¦');
       setVoiceProfileVerification(null);
 
       const shouldRestart = f1VoiceEngineEnabled;
@@ -1587,7 +1587,7 @@ const buildLeadReport = React.useCallback(() => {
   const testVoiceProfile = React.useCallback(async () => {
     try {
       setVoiceProfileBusy(true);
-      setVoiceProfileMessage('Di â€œOye Hanaâ€ para comparar tu vozâ€¦');
+      setVoiceProfileMessage('Di â€œHanaâ€ para comparar tu vozâ€¦');
 
       const shouldRestart = f1VoiceEngineEnabled;
       if (shouldRestart) await sessionControllerRef.current?.disable();
@@ -1667,30 +1667,78 @@ const buildLeadReport = React.useCallback(() => {
         setF1VoiceEngineDetail(normalizedDetail);
       },
       onWake: (event) => {
-        // V33 SIMPLE WAKE PATH:
-        // El detector local es la unica compuerta para arrancar Hana.
-        // Quitamos Owner Voice Lock, Cost Guard, segunda verificacion de identidad
-        // y la transcripcion remota previa, porque estaban encadenando demasiados
-        // rechazos antes de permitir que Realtime arrancara.
-        const audioWindow = (event as any)?.audioWindow;
-        const sampleRate = Number((event as any)?.sampleRate || 16000);
-        const confidence = Number((event as any)?.confidence || 0);
+        // V41: SHERPA + OWNER VOICE, both local and both required.
+        // Sherpa detects the complete phrase "Oye Hana" permissively.
+        // The registered voice profile is the final local lock (>=88%).
+        // OpenAI Realtime is created ONLY after both conditions pass.
+        void (async () => {
+          const now = Date.now();
+          if (wakeVerificationInFlightRef.current || now < wakeVerificationCooldownUntilRef.current) return;
 
-        setLastWakeIdentity(`Hana detectada localmente (${Math.round(Math.max(0, confidence) * 100)}%)`);
-        setF1VoiceEngineDetail("Hana detectada · iniciando…");
+          const audioWindow = (event as any)?.audioWindow;
+          const sampleRate = Number((event as any)?.sampleRate || 0);
+          if (!(audioWindow instanceof Float32Array) || !audioWindow.length || sampleRate !== 16000) {
+            setF1VoiceEngineDetail("V41 · candidato Sherpa sin audio válido");
+            return;
+          }
 
-        void controller.wakeDetected({
-          ...(event as any),
-          phrase: "Oye Hana",
-          confidence: Math.max(confidence, wakeSettings.threshold),
-          detectedAt: Date.now(),
-          audioWindow,
-          sampleRate,
-        }).catch((error) => {
-          setF1VoiceEngineDetail(
-            `No pude iniciar Hana: ${error instanceof Error ? error.message : String(error)}`,
-          );
-        });
+          wakeVerificationInFlightRef.current = true;
+          try {
+            if (!voiceProfile?.enabled || (voiceProfile?.samples?.length ?? 0) < 3) {
+              setLastWakeIdentity("V41: falta perfil de voz registrado");
+              setF1VoiceEngineDetail("V41 · Sherpa detectó frase · bloqueado: falta perfil");
+              (f1VoiceEngineRef.current as any)?.suppressWakeFor?.(450);
+              wakeVerificationCooldownUntilRef.current = Date.now() + 400;
+              return;
+            }
+
+            const result: any = await voiceProfileServiceRef.current.verifyWakeSamples(
+              voiceProfileScope,
+              audioWindow,
+              sampleRate,
+            );
+
+            const similarity = Number(result?.similarity || 0);
+            const required = Math.max(0.88, Number(voiceProfile.acceptanceThreshold || 0));
+            const accepted = similarity >= required;
+            const pct = Math.round(similarity * 100);
+            const requiredPct = Math.round(required * 100);
+
+            console.info("[HANA V41][SHERPA_OWNER_GATE]", {
+              sherpa: true,
+              ownerAccepted: accepted,
+              similarity,
+              required,
+              sherpaConfidence: Number((event as any)?.confidence || 0),
+              samples: voiceProfile.samples.length,
+            });
+
+            if (!accepted) {
+              setLastWakeIdentity(`Oye Hana detectado · voz rechazada ${pct}%/${requiredPct}%`);
+              setF1VoiceEngineDetail(`V41 · voz no autorizada (${pct}%) · 0 llamadas OpenAI`);
+              (f1VoiceEngineRef.current as any)?.suppressWakeFor?.(450);
+              wakeVerificationCooldownUntilRef.current = Date.now() + 400;
+              return;
+            }
+
+            setLastWakeIdentity(`Oye Hana · propietario ${pct}%`);
+            setF1VoiceEngineDetail("V41 · frase + propietario aprobados · iniciando…");
+
+            await controller.wakeDetected({
+              ...(event as any),
+              phrase: "Oye Hana",
+              detectedAt: Date.now(),
+              audioWindow,
+              sampleRate,
+            });
+          } catch (error) {
+            setF1VoiceEngineDetail(
+              `V41 · verificación local falló: ${error instanceof Error ? error.message : String(error)}`,
+            );
+          } finally {
+            wakeVerificationInFlightRef.current = false;
+          }
+        })();
       },
     });
     f1VoiceEngineRef.current = engine;
@@ -1711,8 +1759,8 @@ const buildLeadReport = React.useCallback(() => {
       wakeEngine: engine,
       onSnapshot: handleSnapshot,
       // La activaciÃ³n por voz no abre el panel flotante.
-      followupTimeoutMs: 5000,
-      inactivityTimeoutMs: 5000,
+      followupTimeoutMs: 15000,
+      inactivityTimeoutMs: 15000,
       maxSessionMs: 120000,
       wakeStabilizationMs: wakeSettings.stabilizationMs,
       // V33: sin candados duplicados. El threshold del detector local decide el wake.
@@ -1720,7 +1768,7 @@ const buildLeadReport = React.useCallback(() => {
       verifyWakeIdentity: async () => ({
         accepted: true,
         similarity: 1,
-        reason: "v33_simple_wake",
+        reason: "v41_sherpa_owner_already_verified_locally",
       }),
       createRealtimeClient: ({ greetingText, speakerName }) => new F1RealtimeClient({
         greetingText,
@@ -2453,7 +2501,7 @@ const buildLeadReport = React.useCallback(() => {
                       <div className="min-w-0">
                         <div className="text-sm font-semibold">F1 Voice Engine</div>
                         <div className="text-[11px] text-gray-500">
-                          Prefiltro local de voz. La activaciÃ³n final exige la frase â€œOye Hanaâ€.
+                          Prefiltro local de voz. La activaciÃ³n final exige la palabra â€œHanaâ€.
                         </div>
                         <div className="mt-1 text-[11px] text-gray-600">
                           Estado: {f1VoiceEngineStatus}
@@ -2464,7 +2512,7 @@ const buildLeadReport = React.useCallback(() => {
                           {" Â· "}
                           Confirmaciones: {wakeSettings.consecutiveHits}
                           {" Â· "}
-                          Frase clave: “Oye Hana”
+                          Palabra clave: obligatoria
                         </div>
                       </div>
                       <div className="flex items-center gap-2">
@@ -2538,7 +2586,7 @@ const buildLeadReport = React.useCallback(() => {
                             className="mt-1 w-full"
                           />
                           <span className="text-[10px] text-gray-500">
-                            Este control solo decide cuÃ¡ndo enviar un segmento de voz a verificaciÃ³n. La activaciÃ³n final exige que la transcripciÃ³n sea exactamente â€œOye Hanaâ€.
+                            Este control solo decide cuÃ¡ndo enviar un segmento de voz a verificaciÃ³n. La activaciÃ³n final exige que la transcripciÃ³n empiece exactamente con â€œHanaâ€.
                           </span>
                         </label>
 

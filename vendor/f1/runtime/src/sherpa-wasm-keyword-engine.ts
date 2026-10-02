@@ -145,10 +145,10 @@ export class SherpaWasmKeywordEngine implements SherpaKeywordEngine {
         (this.#keywordSpec ?? await fetchText(`${this.#base}/keywords.txt`)).trim();
       if (!configuredKeywords) throw new Error("Hana keywords.txt is empty.");
 
-      // V39 PROFESSIONAL WAKE:
-      // Keep ONLY the complete trained phrase from keywords.txt (no partial
-      // "oye" or "hana" triggers), but give the complete phrase more search
-      // room/context boost so it can activate on the first natural utterance.
+      // V38 PROFESSIONAL WAKE:
+      // Only the complete phrase from keywords.txt can trigger. Partial
+      // diagnostic keywords are deliberately excluded to protect against
+      // false positives while making the full phrase easier to detect.
       const keywords = configuredKeywords;
 
       const config = {
@@ -167,12 +167,12 @@ export class SherpaWasmKeywordEngine implements SherpaKeywordEngine {
           modelingUnit: "bpe",
           bpeVocab: "",
         },
-        maxActivePaths: 8,
+        maxActivePaths: 16,
         numTrailingBlanks: 2,
         // Stronger context boost + lower acoustic trigger threshold for Hana.
         // The WASM-KWS build parses `keywords` directly as keyword text.
-        keywordsScore: Math.max(this.#score, 6.0),
-        keywordsThreshold: Math.min(this.#threshold, 0.02),
+        keywordsScore: Math.max(this.#score, 4.0),
+        keywordsThreshold: Math.min(this.#threshold, 0.012),
         keywords: `${keywords}\n`,
         keywordsBuf: "",
         keywordsBufSize: 0,
@@ -196,8 +196,8 @@ export class SherpaWasmKeywordEngine implements SherpaKeywordEngine {
         vfs: VFS_DIR,
         keywords,
         keywordTransport: "wasm-keywords-text",
-        keywordsScore: Math.max(this.#score, 6.0),
-        keywordsThreshold: Math.min(this.#threshold, 0.02),
+        keywordsScore: Math.max(this.#score, 4.0),
+        keywordsThreshold: Math.min(this.#threshold, 0.012),
       });
     } catch (cause) {
       const detail = formatError(cause);
