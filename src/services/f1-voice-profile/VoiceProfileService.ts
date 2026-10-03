@@ -3,12 +3,19 @@ import { VoiceProfileRecorder } from "./VoiceProfileRecorder";
 import { VoiceProfileStore, voiceProfileKey } from "./VoiceProfileStore";
 import type { VoiceProfile, VoiceProfileScope, VoiceProfileVerification } from "./types";
 
-const V44_EMBEDDING_SIZE = 192;
-const V44_REQUIRED_SAMPLES = 5;
-// Calibration 2026-10-02: owner close ~0.80-0.84; highest observed impostor ~0.703.
-// 0.75 keeps a measurable safety margin. Far-field owner samples below this value
-// fail closed rather than allowing the observed impostor overlap.
-const V44_OWNER_THRESHOLD = 0.75;
+const EMBEDDING_SIZE = 192;
+const REQUIRED_SAMPLES = 5;
+
+// V45 uses a consensus across the enrolled samples instead of trusting one
+// centroid and one hard 0.75 cut. This is intentionally robust to one bad
+// enrollment (the field logs contained one ~0.16 outlier) while still requiring
+// agreement with multiple owner samples, so a single accidental high match from
+// TV/another speaker cannot open the gate.
+const OWNER_CENTROID_FLOOR = 0.58;
+const OWNER_CONSENSUS_FLOOR = 0.54;
+const OWNER_TOP3_FLOOR = 0.56;
+const OWNER_REQUIRED_MATCHES = 2;
+const DISPLAY_REQUIRED = 0.60;
 
 export class VoiceProfileService {
   private readonly store = new VoiceProfileStore();
@@ -18,25 +25,9 @@ export class VoiceProfileService {
   async load(scope: VoiceProfileScope): Promise<VoiceProfile | null> {
     const profile = await this.store.get(scope);
     if (!profile) return null;
-
-    // V44 migration view: never present V43 samples as CAMPPlus enrollment.
-    // Keep the legacy record untouched until the first new V44 sample is saved,
-    // but expose a clean 0/5 profile to the UI and to the wake gate.
-    const compatible =
-      profile.engineVersion === "campplus-v44" &&
-      profile.centroid?.length === V44_EMBEDDING_SIZE &&
-      profile.samples.every((sample) => sample.fingerprint.values.length === V44_EMBEDDING_SIZE);
-
+    const compatible = this.isCompatible(profile);
     if (compatible) return profile;
-
-    return {
-      ...profile,
-      engineVersion: "campplus-v44",
-      enabled: true,
-      samples: [],
-      centroid: [],
-      acceptanceThreshold: V44_OWNER_THRESHOLD,
-    };
+    return { ...profile, engineVersion: "campplus-v44", enabled: true, samples: [], centroid: [], acceptanceThreshold: DISPLAY_REQUIRED };
   }
 
   async addEnrollmentSample(scope: VoiceProfileScope, displayName: string): Promise<VoiceProfile> {
@@ -44,11 +35,8 @@ export class VoiceProfileService {
     const fingerprint = await this.extractor.fromBlob(blob);
     const current = await this.store.get(scope);
     const now = new Date().toISOString();
-
-    // V44 deliberately invalidates every legacy profile, even if an older
-    // fingerprint happened to have the same vector length.
     const compatible = current?.engineVersion === "campplus-v44"
-      ? (current.samples ?? []).filter((sample) => sample.fingerprint.values.length === V44_EMBEDDING_SIZE)
+      ? (current.samples ?? []).filter((sample) => sample.fingerprint.values.length === EMBEDDING_SIZE)
       : [];
     const samples = [...compatible, { id: crypto.randomUUID(), createdAt: now, fingerprint, audio: blob }].slice(-10);
     const profile: VoiceProfile = {
@@ -59,58 +47,117 @@ export class VoiceProfileService {
       createdAt: compatible.length ? (current?.createdAt ?? now) : now,
       updatedAt: now,
       samples,
-      centroid: this.extractor.centroid(samples.map((sample) => sample.fingerprint.values)),
-      acceptanceThreshold: compatible.length ? Math.max(V44_OWNER_THRESHOLD, current?.acceptanceThreshold ?? 0) : V44_OWNER_THRESHOLD,
+      centroid: this.robustCentroid(samples.map((sample) => sample.fingerprint.values)),
+      acceptanceThreshold: DISPLAY_REQUIRED,
     };
     await this.store.put(profile);
     return profile;
   }
 
   async test(scope: VoiceProfileScope): Promise<VoiceProfileVerification> {
-    const profile = await this.requireV44Profile(scope);
+    const profile = await this.requireProfile(scope);
     const blob = await this.recorder.record(3500);
     const fingerprint = await this.extractor.fromBlob(blob);
-    const similarity = this.extractor.similarity(fingerprint.values, profile.centroid);
-    const requiredSimilarity = Math.max(V44_OWNER_THRESHOLD, profile.acceptanceThreshold);
-    return { matched: similarity >= requiredSimilarity, similarity, requiredSimilarity };
+    const decision = this.verifyFingerprint(profile, fingerprint.values);
+    return { matched: decision.accepted, similarity: decision.similarity, requiredSimilarity: DISPLAY_REQUIRED };
   }
 
   async verifyWakeSamples(scope: VoiceProfileScope, samples: Float32Array, sampleRate: number): Promise<any> {
     const profile = await this.store.get(scope);
-    if (!profile || !profile.enabled || profile.engineVersion !== "campplus-v44") return { accepted: false, similarity: 0, requiredSimilarity: V44_OWNER_THRESHOLD, profileRequired: true };
-    const compatible = profile.samples.filter((sample) => sample.fingerprint.values.length === V44_EMBEDDING_SIZE);
-    if (compatible.length < V44_REQUIRED_SAMPLES || profile.centroid.length !== V44_EMBEDDING_SIZE) {
-      return { accepted: false, displayName: profile.displayName, similarity: 0, requiredSimilarity: V44_OWNER_THRESHOLD, profileRequired: true };
+    if (!profile || !profile.enabled || !this.isCompatible(profile)) {
+      return { accepted: false, similarity: 0, requiredSimilarity: DISPLAY_REQUIRED, profileRequired: true };
     }
-
     const fingerprint = await this.extractor.fromSamples(samples, sampleRate);
-    const similarity = this.extractor.similarity(fingerprint.values, profile.centroid);
-    const sampleSimilarities = compatible.map((sample) => this.extractor.similarity(fingerprint.values, sample.fingerprint.values)).sort((a, b) => b - a);
-    const required = Math.max(V44_OWNER_THRESHOLD, profile.acceptanceThreshold);
-    const accepted = similarity >= required;
-
-    console.info("[HANA V44][CAMPPLUS_OWNER]", { accepted, similarity, required, sampleSimilarities });
-    return { accepted, displayName: profile.displayName, similarity, requiredSimilarity: required, profileRequired: true, sampleSimilarities };
+    const decision = this.verifyFingerprint(profile, fingerprint.values);
+    console.info("[HANA V45][CAMPPLUS_OWNER]", decision);
+    return {
+      ...decision,
+      displayName: profile.displayName,
+      requiredSimilarity: DISPLAY_REQUIRED,
+      profileRequired: true,
+    };
   }
 
   async update(profile: VoiceProfile, patch: Partial<Pick<VoiceProfile, "displayName" | "enabled" | "acceptanceThreshold">>): Promise<VoiceProfile> {
     const next: VoiceProfile = {
-      ...profile, ...patch,
+      ...profile,
+      ...patch,
       displayName: String(patch.displayName ?? profile.displayName).trim() || "Usuario",
-      acceptanceThreshold: Math.max(V44_OWNER_THRESHOLD, Math.min(Number(patch.acceptanceThreshold ?? profile.acceptanceThreshold), 0.95)),
+      // Keep the stored value stable for old UI code, but V45's actual decision is
+      // multi-sample consensus and cannot be weakened to a one-number bypass.
+      acceptanceThreshold: DISPLAY_REQUIRED,
       updatedAt: new Date().toISOString(),
     };
-    await this.store.put(next); return next;
+    await this.store.put(next);
+    return next;
   }
 
   async remove(scope: VoiceProfileScope): Promise<void> { await this.store.delete(scope); }
 
-  private async requireV44Profile(scope: VoiceProfileScope): Promise<VoiceProfile> {
+  private isCompatible(profile: VoiceProfile): boolean {
+    const compatible = profile.samples?.filter((sample) => sample.fingerprint.values.length === EMBEDDING_SIZE) ?? [];
+    return profile.engineVersion === "campplus-v44" && compatible.length >= REQUIRED_SAMPLES;
+  }
+
+  private async requireProfile(scope: VoiceProfileScope): Promise<VoiceProfile> {
     const profile = await this.store.get(scope);
-    const compatible = profile?.samples.filter((sample) => sample.fingerprint.values.length === V44_EMBEDDING_SIZE) ?? [];
-    if (!profile || profile.engineVersion !== "campplus-v44" || compatible.length < V44_REQUIRED_SAMPLES || profile.centroid.length !== V44_EMBEDDING_SIZE) {
-      throw new Error("V44 requiere 5 muestras nuevas del propietario para CAMPPlus.");
-    }
+    if (!profile || !this.isCompatible(profile)) throw new Error("Se requieren al menos 5 muestras CAMPPlus del propietario.");
     return profile;
+  }
+
+  private verifyFingerprint(profile: VoiceProfile, candidate: number[]) {
+    const vectors = profile.samples
+      .map((sample) => sample.fingerprint.values)
+      .filter((values) => values.length === EMBEDDING_SIZE);
+    const centroid = this.robustCentroid(vectors);
+    const centroidSimilarity = this.extractor.similarity(candidate, centroid);
+    const sampleSimilarities = vectors
+      .map((values) => this.extractor.similarity(candidate, values))
+      .sort((a, b) => b - a);
+    const top = sampleSimilarities.slice(0, Math.min(3, sampleSimilarities.length));
+    const top3Mean = top.reduce((sum, value) => sum + value, 0) / Math.max(1, top.length);
+    const matchingSamples = sampleSimilarities.filter((value) => value >= OWNER_CONSENSUS_FLOOR).length;
+    const secondBest = sampleSimilarities[1] ?? 0;
+
+    // Both conditions matter: global owner similarity + agreement with at least
+    // two independent enrollment samples. This rejects a one-off TV/impostor hit.
+    const accepted = centroidSimilarity >= OWNER_CENTROID_FLOOR &&
+      top3Mean >= OWNER_TOP3_FLOOR &&
+      secondBest >= OWNER_CONSENSUS_FLOOR &&
+      matchingSamples >= OWNER_REQUIRED_MATCHES;
+
+    // Human-facing score blends robust centroid and repeated-sample evidence.
+    const similarity = 0.6 * centroidSimilarity + 0.4 * top3Mean;
+    return {
+      accepted,
+      similarity,
+      centroidSimilarity,
+      top3Mean,
+      matchingSamples,
+      requiredMatches: OWNER_REQUIRED_MATCHES,
+      sampleSimilarities,
+    };
+  }
+
+  private robustCentroid(vectors: number[][]): number[] {
+    const valid = vectors.filter((v) => v.length === EMBEDDING_SIZE);
+    if (!valid.length) return [];
+    if (valid.length <= REQUIRED_SAMPLES) return this.extractor.centroid(valid);
+
+    // Rank each enrollment by how well it agrees with the other enrollments.
+    // Keep the most coherent set; one accidental/noisy recording cannot drag the
+    // owner centroid down for every future wake attempt.
+    const ranked = valid.map((vector, index) => {
+      const sims = valid
+        .map((other, j) => j === index ? -1 : this.extractor.similarity(vector, other))
+        .filter((v) => v >= 0)
+        .sort((a, b) => b - a);
+      const peers = sims.slice(0, Math.min(4, sims.length));
+      const agreement = peers.reduce((sum, v) => sum + v, 0) / Math.max(1, peers.length);
+      return { vector, agreement };
+    }).sort((a, b) => b.agreement - a.agreement);
+
+    const keep = ranked.slice(0, Math.max(REQUIRED_SAMPLES, Math.ceil(valid.length * 0.75)));
+    return this.extractor.centroid(keep.map((entry) => entry.vector));
   }
 }

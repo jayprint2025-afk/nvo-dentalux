@@ -78,7 +78,7 @@ export class F1AudioSessionController {
       // Owner Lock V18: la activación automática falla cerrada.
       // Exigimos una muestra NUEVA del mismo evento wake y un verificador de identidad.
       if (!event || !event.audioWindow || !event.sampleRate || !this.options.verifyWakeIdentity) {
-        this.wakeAcceptAfter = Date.now() + 1200;
+        this.wakeAcceptAfter = Date.now() + 100;
         this.move("WAKE_LISTENING", "Hana: muestra de voz requerida");
         return;
       }
@@ -94,8 +94,8 @@ export class F1AudioSessionController {
         peak = Math.max(peak, Math.abs(v));
       }
       const rms = samples.length ? Math.sqrt(sumSq / samples.length) : 0;
-      if (ageMs > 4000 || samples.length < 1600 || rms < 0.008 || peak < 0.025) {
-        this.wakeAcceptAfter = Date.now() + 900;
+      if (ageMs > 5000 || samples.length < 1600 || rms < 0.0015 || peak < 0.006) {
+        this.wakeAcceptAfter = Date.now() + 100;
         this.move("WAKE_LISTENING", "Escuchando Hana");
         return;
       }
@@ -104,7 +104,7 @@ export class F1AudioSessionController {
 
       if (!identity.accepted) {
         const similarity = Math.round(Number(identity.similarity ?? 0) * 100);
-        this.wakeAcceptAfter = Date.now() + 1200;
+        this.wakeAcceptAfter = Date.now() + 100;
         this.move(
           "WAKE_LISTENING",
           similarity > 0
@@ -420,7 +420,7 @@ export class F1AudioSessionController {
     }
 
     this.wakeAcceptAfter =
-      Date.now() + (this.options.wakeStabilizationMs ?? 2500);
+      Date.now() + (this.options.wakeStabilizationMs ?? 350);
     this.move("WAKE_LISTENING", "Esperando “Oye Hana”");
   }
 

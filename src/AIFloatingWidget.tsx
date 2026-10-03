@@ -83,7 +83,7 @@ type F1WakeSettings = {
 };
 
 const LEGACY_F1_WAKE_SETTINGS_KEYS = ["f1_wake_settings_v2", "f1_wake_settings_v3", "f1_wake_settings_v4"] as const;
-const F1_WAKE_SETTINGS_KEY = "f1_wake_settings_v42_one_shot_owner_consistency";
+const F1_WAKE_SETTINGS_KEY = "f1_wake_settings_v46_owner_consensus_rearm";
 // V14: el detector local es solo PREFILTRO DE VOZ. La activaciÃ³n final exige
 // que el backend transcriba exactamente la palabra "Hana" al inicio.
 // El modelo ONNX anterior ya no decide la palabra clave.
@@ -95,8 +95,8 @@ const DEFAULT_F1_WAKE_SETTINGS: F1WakeSettings = {
   // Por eso el prefiltro debe ser deliberadamente permisivo.
   threshold: 0.12,
   consecutiveHits: 1,
-  cooldownMs: 1200,
-  stabilizationMs: 500,
+  cooldownMs: 640,
+  stabilizationMs: 350,
 };
 
 function loadF1WakeSettings(): F1WakeSettings {
@@ -1520,10 +1520,10 @@ const buildLeadReport = React.useCallback(() => {
         clamp(Number(wakeSettingsDraft.consecutiveHits), 1, 2),
       ),
       cooldownMs: Math.round(
-        clamp(Number(wakeSettingsDraft.cooldownMs), 1000, 8000),
+        clamp(Number(wakeSettingsDraft.cooldownMs), 400, 8000),
       ),
       stabilizationMs: Math.round(
-        clamp(Number(wakeSettingsDraft.stabilizationMs), 500, 5000),
+        clamp(Number(wakeSettingsDraft.stabilizationMs), 250, 5000),
       ),
     };
 
@@ -1667,9 +1667,9 @@ const buildLeadReport = React.useCallback(() => {
         setF1VoiceEngineDetail(normalizedDetail);
       },
       onWake: (event) => {
-        // V41: SHERPA + OWNER VOICE, both local and both required.
+        // V46: SHERPA + OWNER VOICE, both local and both required.
         // Sherpa detects the complete phrase "Oye Hana" permissively.
-        // The registered voice profile is the final local lock (>=88%).
+        // The registered voice profile is the final local lock using multi-sample CAMPPlus consensus.
         // OpenAI Realtime is created ONLY after both conditions pass.
         void (async () => {
           const now = Date.now();
@@ -1678,7 +1678,7 @@ const buildLeadReport = React.useCallback(() => {
           const audioWindow = (event as any)?.audioWindow;
           const sampleRate = Number((event as any)?.sampleRate || 0);
           if (!(audioWindow instanceof Float32Array) || !audioWindow.length || sampleRate !== 16000) {
-            setF1VoiceEngineDetail("V44 · candidato Sherpa sin audio válido");
+            setF1VoiceEngineDetail("V46 · candidato Sherpa sin audio válido");
             return;
           }
 
@@ -1686,9 +1686,9 @@ const buildLeadReport = React.useCallback(() => {
           try {
             if (!voiceProfile?.enabled || (voiceProfile?.samples?.length ?? 0) < 5) {
               setLastWakeIdentity("V43B: registra 5 muestras activas diciendo Oye Hana");
-              setF1VoiceEngineDetail("V44 · Sherpa detectó frase · bloqueado: faltan 5 muestras CAMPPlus");
-              (f1VoiceEngineRef.current as any)?.suppressWakeFor?.(450);
-              wakeVerificationCooldownUntilRef.current = Date.now() + 400;
+              setF1VoiceEngineDetail("V46 · Sherpa detectó frase · bloqueado: faltan 5 muestras CAMPPlus");
+              (f1VoiceEngineRef.current as any)?.suppressWakeFor?.(80);
+              wakeVerificationCooldownUntilRef.current = Date.now() + 80;
               return;
             }
 
@@ -1699,12 +1699,16 @@ const buildLeadReport = React.useCallback(() => {
             );
 
             const similarity = Number(result?.similarity || 0);
-            const required = Math.max(0.75, Number(result?.requiredSimilarity || voiceProfile.acceptanceThreshold || 0));
-            const accepted = Boolean(result?.accepted) && similarity >= required;
+            // V46: VoiceProfileService V45 already makes the security decision
+            // using robust centroid + multi-sample owner consensus. Do NOT apply
+            // the obsolete V44 hard 0.75 gate again here; that was rejecting the
+            // real owner even when the consensus verifier approved the voice.
+            const required = Number(result?.requiredSimilarity || 0.60);
+            const accepted = Boolean(result?.accepted);
             const pct = Math.round(similarity * 100);
             const requiredPct = Math.round(required * 100);
 
-            console.info("[HANA V44][SHERPA_CAMPPLUS_GATE]", {
+            console.info("[HANA V46][SHERPA_CAMPPLUS_GATE]", {
               sherpa: true,
               ownerAccepted: accepted,
               similarity,
@@ -1720,14 +1724,14 @@ const buildLeadReport = React.useCallback(() => {
 
             if (!accepted) {
               setLastWakeIdentity(`Oye Hana detectado · voz rechazada ${pct}%/${requiredPct}%`);
-              setF1VoiceEngineDetail(`V44 · voz no autorizada (${pct}%) · 0 llamadas OpenAI`);
-              (f1VoiceEngineRef.current as any)?.suppressWakeFor?.(450);
-              wakeVerificationCooldownUntilRef.current = Date.now() + 400;
+              setF1VoiceEngineDetail(`V46 · voz no autorizada (${pct}%) · 0 llamadas OpenAI`);
+              (f1VoiceEngineRef.current as any)?.suppressWakeFor?.(80);
+              wakeVerificationCooldownUntilRef.current = Date.now() + 80;
               return;
             }
 
             setLastWakeIdentity(`Oye Hana · propietario ${pct}%`);
-            setF1VoiceEngineDetail("V44 · Sherpa + CAMPPlus aprobados · iniciando…");
+            setF1VoiceEngineDetail("V46 · Sherpa + CAMPPlus aprobados · iniciando…");
 
             await controller.wakeDetected({
               ...(event as any),
@@ -1738,7 +1742,7 @@ const buildLeadReport = React.useCallback(() => {
             });
           } catch (error) {
             setF1VoiceEngineDetail(
-              `V44 · verificación CAMPPlus falló: ${error instanceof Error ? error.message : String(error)}`,
+              `V46 · verificación CAMPPlus falló: ${error instanceof Error ? error.message : String(error)}`,
             );
           } finally {
             wakeVerificationInFlightRef.current = false;
@@ -2656,7 +2660,7 @@ const buildLeadReport = React.useCallback(() => {
                             Perfil de voz del usuario
                           </div>
                           <div className="mt-1 text-[10px] text-gray-500">
-                            CAMPPlus V44 · Guardado por empresa, usuario y sucursal en este
+                            CAMPPlus V46 · Guardado por empresa, usuario y sucursal en este
                             dispositivo. Registra 5 muestras nuevas.
                           </div>
 

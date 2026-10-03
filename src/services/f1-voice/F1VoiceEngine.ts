@@ -1,4 +1,4 @@
-﻿import {
+import {
   EngineBuilder,
   type F1VoiceEngine as CoreF1VoiceEngine,
   type F1VoiceEngineState,
@@ -16,8 +16,8 @@ const DEFAULT_WAKE_THRESHOLD = 0.30;
 
 // Hanna V27 Wake Isolation: keep the final wake-word region instead of
 // forwarding the entire rolling window (which may contain TV/background speech).
-const WAKE_ISOLATION_MS = 1920;
-const DEFAULT_COOLDOWN_MS = 1800;
+const WAKE_ISOLATION_MS = 2200;
+const DEFAULT_COOLDOWN_MS = 640;
 
 export class F1VoiceEngine {
   private readonly options: F1VoiceEngineOptions;
@@ -33,8 +33,8 @@ export class F1VoiceEngine {
     // Sherpa-ONNX KWS local para la frase de activaciÃ³n "Oye Hana".
     const wakeModel = createHanaSherpaWakeModel();
 
-    // V27: 5 s allowed a false TV candidate to suppress the owner wake word.
-    // 1.8 s still prevents rapid duplicate wakes without leaving Hanna deaf for 5 s.
+    // V45: keep duplicate protection short. A rejected foreign/TV candidate must not
+    // leave Hanna deaf when the enrolled owner says the phrase immediately after it.
     const cooldownMs = Number(options.cooldownMs ?? DEFAULT_COOLDOWN_MS);
     const cooldownFrames = Math.max(
       1,

@@ -133,6 +133,10 @@ export class WakeDetector implements WakeDetectorProcessor {
     this.#wasSpeech = false;
     this.#preRollFeatures = [];
     this.#audioFrames = [];
+    // V46: a streaming KWS keeps decoder state internally. Any detector reset
+    // must reset Sherpa too, otherwise the next phrase can inherit stale partial
+    // tokens and appear "dead" until the whole engine is restarted.
+    this.#model.reset();
     if (this.#state !== "disposed" && this.#state !== "failed") this.#setState("ready");
   }
 
@@ -147,6 +151,9 @@ export class WakeDetector implements WakeDetectorProcessor {
     this.#wasSpeech = false;
     this.#preRollFeatures = [];
     this.#audioFrames = [];
+    // V46: frames are deliberately not delivered while suppressed. Reset the
+    // streaming decoder so it resumes from a clean state after the gap.
+    this.#model.reset();
   }
 
   public async dispose(): Promise<void> {
