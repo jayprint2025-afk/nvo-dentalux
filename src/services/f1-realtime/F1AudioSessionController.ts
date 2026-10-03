@@ -100,7 +100,30 @@ export class F1AudioSessionController {
         return;
       }
 
-      const identity = await this.options.verifyWakeIdentity(event);
+      // V44 R5: CAMPPlus is more stable with ~1.2 s or more of useful speech.
+      // Sherpa may emit only the compact wake phrase window, especially on mobile.
+      // Repeat the SAME local wake window until it reaches a stable analysis duration.
+      // This does not lower the identity threshold, does not capture a second microphone,
+      // and does not send anything to OpenAI. It is sample-rate agnostic and works on
+      // desktop, Android and iOS because it only operates on the Float32Array already
+      // produced by the wake engine.
+      const minIdentityMs = 1400;
+      const currentMs = (samples.length / event.sampleRate) * 1000;
+      let identityEvent = event;
+      if (currentMs > 0 && currentMs < minIdentityMs) {
+        const copies = Math.min(3, Math.max(2, Math.ceil(minIdentityMs / currentMs)));
+        const stabilized = new Float32Array(samples.length * copies);
+        for (let i = 0; i < copies; i += 1) stabilized.set(samples, i * samples.length);
+        identityEvent = { ...event, audioWindow: stabilized };
+        console.info("[HANA V44][WAKE_ID_STABILIZED]", {
+          originalMs: Math.round(currentMs),
+          stabilizedMs: Math.round((stabilized.length / event.sampleRate) * 1000),
+          copies,
+          sampleRate: event.sampleRate,
+        });
+      }
+
+      const identity = await this.options.verifyWakeIdentity(identityEvent);
 
       if (!identity.accepted) {
         const similarity = Math.round(Number(identity.similarity ?? 0) * 100);
