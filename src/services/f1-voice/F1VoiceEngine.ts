@@ -1,4 +1,4 @@
-import {
+﻿import {
   EngineBuilder,
   type F1VoiceEngine as CoreF1VoiceEngine,
   type F1VoiceEngineState,
@@ -16,7 +16,7 @@ const DEFAULT_WAKE_THRESHOLD = 0.30;
 
 // Hanna V27 Wake Isolation: keep the final wake-word region instead of
 // forwarding the entire rolling window (which may contain TV/background speech).
-const WAKE_ISOLATION_MS = 1400;
+const WAKE_ISOLATION_MS = 1920;
 const DEFAULT_COOLDOWN_MS = 1800;
 
 export class F1VoiceEngine {
@@ -30,7 +30,7 @@ export class F1VoiceEngine {
   constructor(options: F1VoiceEngineOptions = {}) {
     this.options = options;
 
-    // Sherpa-ONNX KWS local para la frase de activación "Oye Hana".
+    // Sherpa-ONNX KWS local para la frase de activaciÃ³n "Oye Hana".
     const wakeModel = createHanaSherpaWakeModel();
 
     // V27: 5 s allowed a false TV candidate to suppress the owner wake word.
@@ -62,7 +62,7 @@ export class F1VoiceEngine {
           expectedSampleRate: 16000,
           preEmphasis: 0.97,
 
-          // Configuración del pipeline de activación.
+          // ConfiguraciÃ³n del pipeline de activaciÃ³n.
           preRollFrames: 10,
           vadGraceFrames: 10,
           maxSilentFramesBeforeReset: 12,
@@ -175,11 +175,11 @@ export class F1VoiceEngine {
      * IMPORTANTE:
      *
      * Este evento significa que el detector LOCAL
-     * encontró un candidato.
+     * encontrÃ³ un candidato.
      *
-     * NO reproducimos aquí el sonido de confirmación,
-     * porque todavía falta la verificación final de
-     * que realmente se detectó "Oye Hana".
+     * NO reproducimos aquÃ­ el sonido de confirmaciÃ³n,
+     * porque todavÃ­a falta la verificaciÃ³n final de
+     * que realmente se detectÃ³ "Oye Hana".
      */
     this.core.on(
       "wake",
@@ -293,3 +293,4 @@ export class F1VoiceEngine {
     }
   }
 }
+
