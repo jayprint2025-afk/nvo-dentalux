@@ -1,190 +1,90 @@
-import { VoiceFingerprintExtractor } from "./VoiceFingerprintExtractor";
+import { CampPlusSpeakerExtractor } from "./CampPlusSpeakerExtractor";
 import { VoiceProfileRecorder } from "./VoiceProfileRecorder";
 import { VoiceProfileStore, voiceProfileKey } from "./VoiceProfileStore";
-import type {
-  VoiceProfile,
-  VoiceProfileScope,
-  VoiceProfileVerification,
-} from "./types";
+import type { VoiceProfile, VoiceProfileScope, VoiceProfileVerification } from "./types";
+
+const V44_EMBEDDING_SIZE = 192;
+const V44_REQUIRED_SAMPLES = 5;
+// Calibration 2026-10-02: owner close ~0.80-0.84; highest observed impostor ~0.703.
+// 0.75 keeps a measurable safety margin. Far-field owner samples below this value
+// fail closed rather than allowing the observed impostor overlap.
+const V44_OWNER_THRESHOLD = 0.75;
 
 export class VoiceProfileService {
   private readonly store = new VoiceProfileStore();
   private readonly recorder = new VoiceProfileRecorder();
-  private readonly extractor = new VoiceFingerprintExtractor();
+  private readonly extractor = new CampPlusSpeakerExtractor();
 
-  async load(scope: VoiceProfileScope): Promise<VoiceProfile | null> {
-    return this.store.get(scope);
-  }
+  async load(scope: VoiceProfileScope): Promise<VoiceProfile | null> { return this.store.get(scope); }
 
-  async addEnrollmentSample(
-    scope: VoiceProfileScope,
-    displayName: string,
-  ): Promise<VoiceProfile> {
-    const blob = await this.recorder.record();
+  async addEnrollmentSample(scope: VoiceProfileScope, displayName: string): Promise<VoiceProfile> {
+    const blob = await this.recorder.record(3500);
     const fingerprint = await this.extractor.fromBlob(blob);
     const current = await this.store.get(scope);
     const now = new Date().toISOString();
 
-    // V43: fingerprint format changed. Never mix legacy coarse fingerprints
-    // with the stronger phrase-specific fingerprint. First V43 enrollment
-    // automatically starts a clean owner profile.
-    const compatibleCurrentSamples = (current?.samples ?? []).filter(
-      (sample) => sample.fingerprint.values.length === fingerprint.values.length,
-    );
-    const samples = [
-      ...compatibleCurrentSamples,
-      {
-        id: crypto.randomUUID(),
-        createdAt: now,
-        fingerprint,
-        audio: blob,
-      },
-    ].slice(-10);
-
+    // V44 deliberately invalidates V43 handcrafted fingerprints.
+    const compatible = (current?.samples ?? []).filter((sample) => sample.fingerprint.values.length === V44_EMBEDDING_SIZE);
+    const samples = [...compatible, { id: crypto.randomUUID(), createdAt: now, fingerprint, audio: blob }].slice(-10);
     const profile: VoiceProfile = {
-      key: voiceProfileKey(scope),
-      scope,
+      key: voiceProfileKey(scope), scope,
       displayName: String(displayName || "Usuario").trim() || "Usuario",
       enabled: true,
-      createdAt: current?.createdAt ?? now,
+      createdAt: compatible.length ? (current?.createdAt ?? now) : now,
       updatedAt: now,
       samples,
-      centroid: this.extractor.centroid(
-        samples.map((sample) => sample.fingerprint.values),
-      ),
-      acceptanceThreshold: compatibleCurrentSamples.length ? (current?.acceptanceThreshold ?? 0.90) : 0.90,
+      centroid: this.extractor.centroid(samples.map((sample) => sample.fingerprint.values)),
+      acceptanceThreshold: compatible.length ? Math.max(V44_OWNER_THRESHOLD, current?.acceptanceThreshold ?? 0) : V44_OWNER_THRESHOLD,
     };
-
     await this.store.put(profile);
     return profile;
   }
 
   async test(scope: VoiceProfileScope): Promise<VoiceProfileVerification> {
-    const profile = await this.store.get(scope);
-    if (!profile || profile.samples.length < 5 || !profile.centroid.length) {
-      throw new Error("V43 requiere al menos 5 muestras diciendo “Oye Hana” antes de probar tu voz.");
-    }
-
-    const blob = await this.recorder.record();
+    const profile = await this.requireV44Profile(scope);
+    const blob = await this.recorder.record(3500);
     const fingerprint = await this.extractor.fromBlob(blob);
-    const similarity = this.extractor.similarity(
-      fingerprint.values,
-      profile.centroid,
-    );
-
-    return {
-      matched: similarity >= profile.acceptanceThreshold,
-      similarity,
-      requiredSimilarity: profile.acceptanceThreshold,
-    };
-  }
-
-  async verifyWakeSamples(
-    scope: VoiceProfileScope,
-    samples: Float32Array,
-    sampleRate: number,
-  ): Promise<{ accepted: boolean; displayName?: string; similarity: number; requiredSimilarity: number; profileRequired: boolean }> {
-    const profile = await this.store.get(scope);
-    if (!profile || !profile.enabled) {
-      return { accepted: false, similarity: 0, requiredSimilarity: 0, profileRequired: true };
-    }
-    if (profile.samples.length < 5 || !profile.centroid.length) {
-      return { accepted: false, displayName: profile.displayName, similarity: 0, requiredSimilarity: profile.acceptanceThreshold, profileRequired: true };
-    }
-    const fingerprint = this.extractor.fromSamples(samples, sampleRate);
     const similarity = this.extractor.similarity(fingerprint.values, profile.centroid);
-
-    // V42 CONSISTENT OWNER:
-    // The old gate trusted only centroid similarity. In our real tests an
-    // unregistered WAV reached ~88.23%, while the owner ranged ~89-95%.
-    // Add a second LOCAL identity signal: consistency against the individual
-    // enrollment samples. This does not call OpenAI.
-    const sampleSimilarities = profile.samples
-      .map((sample) => this.extractor.similarity(
-        fingerprint.values,
-        sample.fingerprint.values,
-      ))
-      .filter((value) => Number.isFinite(value))
-      .sort((a, b) => b - a);
-
-    const sortedAscending = [...sampleSimilarities].sort((a, b) => a - b);
-    const middle = Math.floor(sortedAscending.length / 2);
-    const medianSimilarity = sortedAscending.length
-      ? (sortedAscending.length % 2
-        ? sortedAscending[middle]
-        : (sortedAscending[middle - 1] + sortedAscending[middle]) / 2)
-      : 0;
-
-    const required = Math.max(0.90, profile.acceptanceThreshold);
-
-    // V43: a wake must resemble the PROFILE, not merely cross one loose score.
-    // Require agreement with most of the actual enrollment utterances.
-    const perSampleFloor = Math.max(0.875, required - 0.025);
-    const strongSampleFloor = Math.max(0.90, required);
-    const requiredMatches = Math.max(4, Math.ceil(sampleSimilarities.length * 0.70));
-    const matchingSamples = sampleSimilarities.filter(
-      (value) => value >= perSampleFloor,
-    ).length;
-    const strongMatches = sampleSimilarities.filter(
-      (value) => value >= strongSampleFloor,
-    ).length;
-
-    const accepted =
-      similarity >= required &&
-      medianSimilarity >= perSampleFloor &&
-      matchingSamples >= requiredMatches &&
-      strongMatches >= 2;
-
-    console.info("[HANA V42][OWNER_CONSISTENCY]", {
-      accepted,
-      centroidSimilarity: similarity,
-      required,
-      medianSimilarity,
-      perSampleFloor,
-      matchingSamples,
-      requiredMatches,
-      strongMatches,
-      sampleSimilarities,
-    });
-
-    return {
-      accepted,
-      displayName: profile.displayName,
-      similarity,
-      requiredSimilarity: required,
-      profileRequired: true,
-      medianSimilarity,
-      matchingSamples,
-      requiredMatches,
-      strongMatches,
-      sampleSimilarities,
-    } as any;
+    const requiredSimilarity = Math.max(V44_OWNER_THRESHOLD, profile.acceptanceThreshold);
+    return { matched: similarity >= requiredSimilarity, similarity, requiredSimilarity };
   }
 
-  async update(
-    profile: VoiceProfile,
-    patch: Partial<Pick<VoiceProfile, "displayName" | "enabled" | "acceptanceThreshold">>,
-  ): Promise<VoiceProfile> {
+  async verifyWakeSamples(scope: VoiceProfileScope, samples: Float32Array, sampleRate: number): Promise<any> {
+    const profile = await this.store.get(scope);
+    if (!profile || !profile.enabled) return { accepted: false, similarity: 0, requiredSimilarity: V44_OWNER_THRESHOLD, profileRequired: true };
+    const compatible = profile.samples.filter((sample) => sample.fingerprint.values.length === V44_EMBEDDING_SIZE);
+    if (compatible.length < V44_REQUIRED_SAMPLES || profile.centroid.length !== V44_EMBEDDING_SIZE) {
+      return { accepted: false, displayName: profile.displayName, similarity: 0, requiredSimilarity: V44_OWNER_THRESHOLD, profileRequired: true };
+    }
+
+    const fingerprint = await this.extractor.fromSamples(samples, sampleRate);
+    const similarity = this.extractor.similarity(fingerprint.values, profile.centroid);
+    const sampleSimilarities = compatible.map((sample) => this.extractor.similarity(fingerprint.values, sample.fingerprint.values)).sort((a, b) => b - a);
+    const required = Math.max(V44_OWNER_THRESHOLD, profile.acceptanceThreshold);
+    const accepted = similarity >= required;
+
+    console.info("[HANA V44][CAMPPLUS_OWNER]", { accepted, similarity, required, sampleSimilarities });
+    return { accepted, displayName: profile.displayName, similarity, requiredSimilarity: required, profileRequired: true, sampleSimilarities };
+  }
+
+  async update(profile: VoiceProfile, patch: Partial<Pick<VoiceProfile, "displayName" | "enabled" | "acceptanceThreshold">>): Promise<VoiceProfile> {
     const next: VoiceProfile = {
-      ...profile,
-      ...patch,
-      displayName:
-        String(patch.displayName ?? profile.displayName).trim() || "Usuario",
-      acceptanceThreshold: Math.max(
-        0.7,
-        Math.min(
-          Number(patch.acceptanceThreshold ?? profile.acceptanceThreshold),
-          0.99,
-        ),
-      ),
+      ...profile, ...patch,
+      displayName: String(patch.displayName ?? profile.displayName).trim() || "Usuario",
+      acceptanceThreshold: Math.max(V44_OWNER_THRESHOLD, Math.min(Number(patch.acceptanceThreshold ?? profile.acceptanceThreshold), 0.95)),
       updatedAt: new Date().toISOString(),
     };
-
-    await this.store.put(next);
-    return next;
+    await this.store.put(next); return next;
   }
 
-  async remove(scope: VoiceProfileScope): Promise<void> {
-    await this.store.delete(scope);
+  async remove(scope: VoiceProfileScope): Promise<void> { await this.store.delete(scope); }
+
+  private async requireV44Profile(scope: VoiceProfileScope): Promise<VoiceProfile> {
+    const profile = await this.store.get(scope);
+    const compatible = profile?.samples.filter((sample) => sample.fingerprint.values.length === V44_EMBEDDING_SIZE) ?? [];
+    if (!profile || compatible.length < V44_REQUIRED_SAMPLES || profile.centroid.length !== V44_EMBEDDING_SIZE) {
+      throw new Error("V44 requiere 5 muestras nuevas del propietario para CAMPPlus.");
+    }
+    return profile;
   }
 }

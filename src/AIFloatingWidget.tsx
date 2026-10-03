@@ -1556,7 +1556,7 @@ const buildLeadReport = React.useCallback(() => {
   const recordVoiceProfileSample = React.useCallback(async () => {
     try {
       setVoiceProfileBusy(true);
-      setVoiceProfileMessage('Di â€œHanaâ€ con tu voz normalâ€¦');
+      setVoiceProfileMessage('Di una frase normal de 2 a 3 segundos con tu voz natural…');
       setVoiceProfileVerification(null);
 
       const shouldRestart = f1VoiceEngineEnabled;
@@ -1587,7 +1587,7 @@ const buildLeadReport = React.useCallback(() => {
   const testVoiceProfile = React.useCallback(async () => {
     try {
       setVoiceProfileBusy(true);
-      setVoiceProfileMessage('Di â€œHanaâ€ para comparar tu vozâ€¦');
+      setVoiceProfileMessage('Di una frase normal para verificar tu identidad…');
 
       const shouldRestart = f1VoiceEngineEnabled;
       if (shouldRestart) await sessionControllerRef.current?.disable();
@@ -1678,7 +1678,7 @@ const buildLeadReport = React.useCallback(() => {
           const audioWindow = (event as any)?.audioWindow;
           const sampleRate = Number((event as any)?.sampleRate || 0);
           if (!(audioWindow instanceof Float32Array) || !audioWindow.length || sampleRate !== 16000) {
-            setF1VoiceEngineDetail("V43B · candidato Sherpa sin audio válido");
+            setF1VoiceEngineDetail("V44 · candidato Sherpa sin audio válido");
             return;
           }
 
@@ -1686,7 +1686,7 @@ const buildLeadReport = React.useCallback(() => {
           try {
             if (!voiceProfile?.enabled || (voiceProfile?.samples?.length ?? 0) < 5) {
               setLastWakeIdentity("V43B: registra 5 muestras activas diciendo Oye Hana");
-              setF1VoiceEngineDetail("V43B · Sherpa detectó frase · bloqueado: faltan 5 muestras V43");
+              setF1VoiceEngineDetail("V44 · Sherpa detectó frase · bloqueado: faltan 5 muestras CAMPPlus");
               (f1VoiceEngineRef.current as any)?.suppressWakeFor?.(450);
               wakeVerificationCooldownUntilRef.current = Date.now() + 400;
               return;
@@ -1699,12 +1699,12 @@ const buildLeadReport = React.useCallback(() => {
             );
 
             const similarity = Number(result?.similarity || 0);
-            const required = Math.max(0.90, Number(voiceProfile.acceptanceThreshold || 0));
-            const accepted = similarity >= required;
+            const required = Math.max(0.75, Number(result?.requiredSimilarity || voiceProfile.acceptanceThreshold || 0));
+            const accepted = Boolean(result?.accepted) && similarity >= required;
             const pct = Math.round(similarity * 100);
             const requiredPct = Math.round(required * 100);
 
-            console.info("[HANA V43B][SHERPA_OWNER_GATE]", {
+            console.info("[HANA V44][SHERPA_CAMPPLUS_GATE]", {
               sherpa: true,
               ownerAccepted: accepted,
               similarity,
@@ -1720,14 +1720,14 @@ const buildLeadReport = React.useCallback(() => {
 
             if (!accepted) {
               setLastWakeIdentity(`Oye Hana detectado · voz rechazada ${pct}%/${requiredPct}%`);
-              setF1VoiceEngineDetail(`V43B · voz no autorizada (${pct}%) · 0 llamadas OpenAI`);
+              setF1VoiceEngineDetail(`V44 · voz no autorizada (${pct}%) · 0 llamadas OpenAI`);
               (f1VoiceEngineRef.current as any)?.suppressWakeFor?.(450);
               wakeVerificationCooldownUntilRef.current = Date.now() + 400;
               return;
             }
 
             setLastWakeIdentity(`Oye Hana · propietario ${pct}%`);
-            setF1VoiceEngineDetail("V43B · frase + propietario aprobados · iniciando…");
+            setF1VoiceEngineDetail("V44 · Sherpa + CAMPPlus aprobados · iniciando…");
 
             await controller.wakeDetected({
               ...(event as any),
@@ -1738,7 +1738,7 @@ const buildLeadReport = React.useCallback(() => {
             });
           } catch (error) {
             setF1VoiceEngineDetail(
-              `V43B · verificación local falló: ${error instanceof Error ? error.message : String(error)}`,
+              `V44 · verificación CAMPPlus falló: ${error instanceof Error ? error.message : String(error)}`,
             );
           } finally {
             wakeVerificationInFlightRef.current = false;
@@ -1764,17 +1764,20 @@ const buildLeadReport = React.useCallback(() => {
       wakeEngine: engine,
       onSnapshot: handleSnapshot,
       // La activaciÃ³n por voz no abre el panel flotante.
-      followupTimeoutMs: 15000,
+      followupTimeoutMs: 5000,
       inactivityTimeoutMs: 15000,
       maxSessionMs: 120000,
       wakeStabilizationMs: wakeSettings.stabilizationMs,
       // V33: sin candados duplicados. El threshold del detector local decide el wake.
       minimumWakeConfidence: F1_MIN_WAKE_CONFIDENCE,
-      verifyWakeIdentity: async () => ({
-        accepted: true,
-        similarity: 1,
-        reason: "v41_sherpa_owner_already_verified_locally",
-      }),
+      // V44: Sherpa detecta la frase; CAMPPlus autoriza la identidad.
+      // No se abre Realtime si el evento wake no pertenece al perfil V44.
+      verifyWakeIdentity: (event) =>
+        voiceProfileServiceRef.current.verifyWakeSamples(
+          voiceProfileScope,
+          event.audioWindow,
+          event.sampleRate,
+        ),
       createRealtimeClient: ({ greetingText, speakerName }) => new F1RealtimeClient({
         greetingText,
         speakerName,
@@ -1782,6 +1785,11 @@ const buildLeadReport = React.useCallback(() => {
         branchKey: sucursalId || "sucursal_1",
         getToken: () => localStorage.getItem("dentalux_auth_token") || "",
         getRemoteAudioElement: () => audioRef.current,
+        // V44 ACTIVE SPEAKER GATE: cada turno se verifica localmente con el
+        // mismo perfil CAMPPlus. Audio rechazado nunca entra a WebRTC/OpenAI.
+        verifyActiveSpeaker: (samples, sampleRate) =>
+          voiceProfileServiceRef.current.verifyWakeSamples(voiceProfileScope, samples, sampleRate),
+        activeSpeakerTimeoutMs: 9000,
         callbacks: {
           onConnected: () => controller.onConnected(),
           onGreetingDone: () => controller.onGreetingDone(),
@@ -1805,6 +1813,8 @@ const buildLeadReport = React.useCallback(() => {
             setF1VoiceEngineDetail(`Realtime: ${error.message}`);
             controller.onRealtimeError(error);
           },
+          onActiveSpeakerStatus: (detail) => controller.onActiveSpeakerStatus(detail),
+          onActiveSpeakerTimeout: () => controller.onActiveSpeakerTimeout(),
           onClosed: () => controller.onRealtimeClosed(),
         },
       }),

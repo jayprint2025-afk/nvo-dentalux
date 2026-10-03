@@ -1,5 +1,6 @@
 import { F1AudioResourceManager } from "./F1AudioResourceManager";
 import type { F1RealtimeClientOptions, RealtimeToolCall } from "./types";
+import { F1ActiveSpeakerGate } from "./F1ActiveSpeakerGate";
 
 export class F1RealtimeClient {
   private readonly resources = new F1AudioResourceManager();
@@ -12,6 +13,7 @@ export class F1RealtimeClient {
   private greetingAttempts = 0;
   private remoteAudio: HTMLAudioElement | null = null;
   private closed = false;
+  private activeSpeakerGate: F1ActiveSpeakerGate | null = null;
   private greetingRequested = false;
   private greetingFallbackTimer: number | null = null;
   private greetingTranscript = "";
@@ -115,10 +117,26 @@ export class F1RealtimeClient {
       throw new Error("No se encontró una pista de micrófono.");
     }
 
-    // La frase Wake nunca llega a OpenAI. El micrófono Realtime permanece
-    // deshabilitado hasta que F1 termine de decir “Te escucho”.
-    microphoneTrack.enabled = false;
-    stream.getTracks().forEach((track) => pc.addTrack(track, stream));
+    // V44: el micrófono físico NUNCA se conecta directamente a OpenAI.
+    // CAMPPlus verifica cada turno localmente y solo la voz aceptada se
+    // reproduce hacia una pista virtual que sí se adjunta a WebRTC.
+    if (!this.options.verifyActiveSpeaker) {
+      stream.getTracks().forEach((track) => track.stop());
+      pc.close();
+      throw new Error("V44 requiere verifyActiveSpeaker; Realtime falla cerrado.");
+    }
+    const activeSpeakerGate = new F1ActiveSpeakerGate({
+      sourceStream: stream,
+      verify: this.options.verifyActiveSpeaker,
+      ownerTimeoutMs: this.options.activeSpeakerTimeoutMs ?? 5000,
+      onStatus: (detail) => this.options.callbacks.onActiveSpeakerStatus?.(detail),
+      onTimeout: () => this.options.callbacks.onActiveSpeakerTimeout?.(),
+    });
+    this.activeSpeakerGate = activeSpeakerGate;
+    activeSpeakerGate.pause();
+    activeSpeakerGate.outputStream.getTracks().forEach((track) =>
+      pc.addTrack(track, activeSpeakerGate.outputStream),
+    );
 
     const dc = pc.createDataChannel("oai-events");
     this.pc = pc;
@@ -281,6 +299,8 @@ export class F1RealtimeClient {
     this.transportRecoveryAttempt += 1;
     this.clearResponseRetry();
     try {
+      await this.activeSpeakerGate?.dispose().catch(() => undefined);
+      this.activeSpeakerGate = null;
       await this.resources.closeRealtime();
     } catch {}
     this.pc = null;
@@ -599,8 +619,7 @@ export class F1RealtimeClient {
     this.greetingFinalizing = true;
     this.clearGreetingFallback();
 
-    const microphoneTrack = this.stream?.getAudioTracks()[0];
-    if (microphoneTrack) microphoneTrack.enabled = false;
+    this.activeSpeakerGate?.pause();
 
     // El saludo ya terminó de generarse y de reproducirse. Se limpia cualquier
     // residuo antes de habilitar el VAD conversacional.
@@ -638,8 +657,7 @@ export class F1RealtimeClient {
     await new Promise((resolve) => window.setTimeout(resolve, 450));
     if (this.closed) return;
 
-    const microphoneTrack = this.stream?.getAudioTracks()[0];
-    if (microphoneTrack) microphoneTrack.enabled = true;
+    await this.activeSpeakerGate?.start();
 
     this.greetingPending = false;
     this.greetingFinalizing = false;
@@ -721,6 +739,8 @@ export class F1RealtimeClient {
     if (this.closed) return;
     this.closed = true;
 
+    await this.activeSpeakerGate?.dispose().catch(() => undefined);
+    this.activeSpeakerGate = null;
     await this.resources.closeRealtime();
     this.pc = null;
     this.dc = null;

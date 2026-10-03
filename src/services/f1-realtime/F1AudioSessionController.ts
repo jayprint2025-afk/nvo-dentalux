@@ -304,6 +304,16 @@ export class F1AudioSessionController {
     this.armFollowup();
   }
 
+  onActiveSpeakerStatus(detail: string): void {
+    this.detail = detail;
+    this.emit();
+  }
+
+  onActiveSpeakerTimeout(): void {
+    if (this.disposed || !this.realtime) return;
+    void this.enqueue(() => this.finishConversation("idle-timeout"));
+  }
+
   onRealtimeError(error: Error): void {
     this.detail = error.message;
     if (this.sm.state !== "ERROR") this.move("ERROR", error.message);

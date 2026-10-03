@@ -3,3 +3,5 @@ export * from "./VoiceProfileStore";
 export * from "./VoiceProfileRecorder";
 export * from "./VoiceFingerprintExtractor";
 export * from "./VoiceProfileService";
+
+export * from "./CampPlusSpeakerExtractor";

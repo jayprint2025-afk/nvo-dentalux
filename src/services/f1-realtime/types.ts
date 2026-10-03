@@ -23,7 +23,8 @@ export type DisconnectReason =
   | "max-session"
   | "briefing"
   | "disabled"
-  | "error";
+  | "error"
+  | "smart-close-negative";
 
 export interface WakeEngineAdapter {
   start(): Promise<void>;
@@ -59,6 +60,8 @@ export interface RealtimeCallbacks {
   onToolCall(call: RealtimeToolCall): Promise<unknown>;
   onError(error: Error): void;
   onClosed(): void;
+  onActiveSpeakerStatus?(detail: string): void;
+  onActiveSpeakerTimeout?(): void;
 }
 
 export interface F1RealtimeClientOptions {
@@ -68,6 +71,8 @@ export interface F1RealtimeClientOptions {
   branchKey: string;
   getToken(): string;
   getRemoteAudioElement(): HTMLAudioElement | null;
+  verifyActiveSpeaker?(samples: Float32Array, sampleRate: number): Promise<{ accepted: boolean; similarity?: number; requiredSimilarity?: number; displayName?: string }>;
+  activeSpeakerTimeoutMs?: number;
   callbacks: RealtimeCallbacks;
 }
 
