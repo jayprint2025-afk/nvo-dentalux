@@ -15,7 +15,29 @@ export class VoiceProfileService {
   private readonly recorder = new VoiceProfileRecorder();
   private readonly extractor = new CampPlusSpeakerExtractor();
 
-  async load(scope: VoiceProfileScope): Promise<VoiceProfile | null> { return this.store.get(scope); }
+  async load(scope: VoiceProfileScope): Promise<VoiceProfile | null> {
+    const profile = await this.store.get(scope);
+    if (!profile) return null;
+
+    // V44 migration view: never present V43 samples as CAMPPlus enrollment.
+    // Keep the legacy record untouched until the first new V44 sample is saved,
+    // but expose a clean 0/5 profile to the UI and to the wake gate.
+    const compatible =
+      profile.engineVersion === "campplus-v44" &&
+      profile.centroid?.length === V44_EMBEDDING_SIZE &&
+      profile.samples.every((sample) => sample.fingerprint.values.length === V44_EMBEDDING_SIZE);
+
+    if (compatible) return profile;
+
+    return {
+      ...profile,
+      engineVersion: "campplus-v44",
+      enabled: true,
+      samples: [],
+      centroid: [],
+      acceptanceThreshold: V44_OWNER_THRESHOLD,
+    };
+  }
 
   async addEnrollmentSample(scope: VoiceProfileScope, displayName: string): Promise<VoiceProfile> {
     const blob = await this.recorder.record(3500);
@@ -23,11 +45,15 @@ export class VoiceProfileService {
     const current = await this.store.get(scope);
     const now = new Date().toISOString();
 
-    // V44 deliberately invalidates V43 handcrafted fingerprints.
-    const compatible = (current?.samples ?? []).filter((sample) => sample.fingerprint.values.length === V44_EMBEDDING_SIZE);
+    // V44 deliberately invalidates every legacy profile, even if an older
+    // fingerprint happened to have the same vector length.
+    const compatible = current?.engineVersion === "campplus-v44"
+      ? (current.samples ?? []).filter((sample) => sample.fingerprint.values.length === V44_EMBEDDING_SIZE)
+      : [];
     const samples = [...compatible, { id: crypto.randomUUID(), createdAt: now, fingerprint, audio: blob }].slice(-10);
     const profile: VoiceProfile = {
       key: voiceProfileKey(scope), scope,
+      engineVersion: "campplus-v44",
       displayName: String(displayName || "Usuario").trim() || "Usuario",
       enabled: true,
       createdAt: compatible.length ? (current?.createdAt ?? now) : now,
@@ -51,7 +77,7 @@ export class VoiceProfileService {
 
   async verifyWakeSamples(scope: VoiceProfileScope, samples: Float32Array, sampleRate: number): Promise<any> {
     const profile = await this.store.get(scope);
-    if (!profile || !profile.enabled) return { accepted: false, similarity: 0, requiredSimilarity: V44_OWNER_THRESHOLD, profileRequired: true };
+    if (!profile || !profile.enabled || profile.engineVersion !== "campplus-v44") return { accepted: false, similarity: 0, requiredSimilarity: V44_OWNER_THRESHOLD, profileRequired: true };
     const compatible = profile.samples.filter((sample) => sample.fingerprint.values.length === V44_EMBEDDING_SIZE);
     if (compatible.length < V44_REQUIRED_SAMPLES || profile.centroid.length !== V44_EMBEDDING_SIZE) {
       return { accepted: false, displayName: profile.displayName, similarity: 0, requiredSimilarity: V44_OWNER_THRESHOLD, profileRequired: true };
@@ -82,7 +108,7 @@ export class VoiceProfileService {
   private async requireV44Profile(scope: VoiceProfileScope): Promise<VoiceProfile> {
     const profile = await this.store.get(scope);
     const compatible = profile?.samples.filter((sample) => sample.fingerprint.values.length === V44_EMBEDDING_SIZE) ?? [];
-    if (!profile || compatible.length < V44_REQUIRED_SAMPLES || profile.centroid.length !== V44_EMBEDDING_SIZE) {
+    if (!profile || profile.engineVersion !== "campplus-v44" || compatible.length < V44_REQUIRED_SAMPLES || profile.centroid.length !== V44_EMBEDDING_SIZE) {
       throw new Error("V44 requiere 5 muestras nuevas del propietario para CAMPPlus.");
     }
     return profile;

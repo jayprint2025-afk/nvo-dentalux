@@ -2664,8 +2664,8 @@ const buildLeadReport = React.useCallback(() => {
                             Perfil de voz del usuario
                           </div>
                           <div className="mt-1 text-[10px] text-gray-500">
-                            Guardado por empresa, usuario y sucursal en este
-                            dispositivo. Registra al menos 3 muestras.
+                            CAMPPlus V44 · Guardado por empresa, usuario y sucursal en este
+                            dispositivo. Registra 5 muestras nuevas.
                           </div>
 
                           <label className="mt-3 block text-[11px] text-gray-600">
@@ -2681,7 +2681,7 @@ const buildLeadReport = React.useCallback(() => {
                           </label>
 
                           <div className="mt-3 rounded-lg border bg-white p-2 text-[11px] text-gray-600">
-                            Muestras registradas: {voiceProfile?.samples.length ?? 0}
+                            Muestras V44 registradas: {voiceProfile?.samples.length ?? 0} / 5
                             {voiceProfile?.updatedAt
                               ? ` Â· Actualizado ${new Date(
                                   voiceProfile.updatedAt,
@@ -2698,13 +2698,13 @@ const buildLeadReport = React.useCallback(() => {
                             >
                               {voiceProfileBusy
                                 ? "Grabandoâ€¦"
-                                : 'Grabar â€œHanaâ€'}
+                                : 'Grabar muestra V44'}
                             </button>
                             <button
                               type="button"
                               disabled={
                                 voiceProfileBusy ||
-                                (voiceProfile?.samples.length ?? 0) < 3
+                                (voiceProfile?.samples.length ?? 0) < 5
                               }
                               onClick={() => void testVoiceProfile()}
                               className="rounded-lg bg-indigo-600 px-2 py-2 text-xs text-white disabled:opacity-50"
@@ -2722,8 +2722,8 @@ const buildLeadReport = React.useCallback(() => {
                               %
                               <input
                                 type="range"
-                                min="0.88"
-                                max="0.98"
+                                min="0.72"
+                                max="0.90"
                                 step="0.01"
                                 value={voiceProfile.acceptanceThreshold}
                                 onChange={(event) =>

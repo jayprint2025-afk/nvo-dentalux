@@ -19,6 +19,7 @@ export type VoiceProfileSample = {
 
 export type VoiceProfile = {
   key: string;
+  engineVersion?: "campplus-v44";
   scope: VoiceProfileScope;
   displayName: string;
   enabled: boolean;
