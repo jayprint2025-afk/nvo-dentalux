@@ -45,7 +45,7 @@ export class F1ActiveSpeakerGate {
 
   constructor(private readonly options: F1ActiveSpeakerGateOptions) {
     this.ownerTimeoutMs = Math.max(2500, options.ownerTimeoutMs ?? 5000);
-    this.minSpeechMs = Math.max(700, options.minSpeechMs ?? 1000);
+    this.minSpeechMs = Math.max(250, options.minSpeechMs ?? 550);
     this.endSilenceMs = Math.max(250, options.endSilenceMs ?? 500);
     this.speechRms = Math.max(0.002, options.speechRms ?? 0.008);
 
