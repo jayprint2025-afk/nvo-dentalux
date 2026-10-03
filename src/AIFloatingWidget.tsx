@@ -1770,14 +1770,6 @@ const buildLeadReport = React.useCallback(() => {
       wakeStabilizationMs: wakeSettings.stabilizationMs,
       // V33: sin candados duplicados. El threshold del detector local decide el wake.
       minimumWakeConfidence: F1_MIN_WAKE_CONFIDENCE,
-      // V44: Sherpa detecta la frase; CAMPPlus autoriza la identidad.
-      // No se abre Realtime si el evento wake no pertenece al perfil V44.
-      verifyWakeIdentity: (event) =>
-        voiceProfileServiceRef.current.verifyWakeSamples(
-          voiceProfileScope,
-          event.audioWindow,
-          event.sampleRate,
-        ),
       createRealtimeClient: ({ greetingText, speakerName }) => new F1RealtimeClient({
         greetingText,
         speakerName,
