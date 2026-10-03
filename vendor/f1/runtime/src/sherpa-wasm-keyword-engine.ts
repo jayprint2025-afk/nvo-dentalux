@@ -260,8 +260,7 @@ export class SherpaWasmKeywordEngine implements SherpaKeywordEngine {
         });
         hit = { keyword: keyword.replace(/_/g, " ") };
 
-        // Sherpa's KWS API requires reset immediately after a detection.
-        this.#kws.reset(this.#stream);
+        // V48: leave the decode loop before replacing the Sherpa stream.
         break;
       }
 
@@ -274,11 +273,62 @@ export class SherpaWasmKeywordEngine implements SherpaKeywordEngine {
       }
     }
 
+    if (hit) {
+      this.#hardRearmStream("wake-detected");
+    }
+
     return hit;
   }
 
+  // V48: keep the loaded KWS/model, but replace its stream after each wake.
+  #hardRearmStream(reason: string): void {
+    const kws = this.#kws;
+    const oldStream = this.#stream;
+    if (!kws || !oldStream) return;
+
+    console.info("[HANA SHERPA] HARD_REARM_BEGIN", { reason });
+    this.#stream = null;
+
+    try {
+      try {
+        kws.reset(oldStream);
+      } catch (cause) {
+        console.warn("[HANA SHERPA] HARD_REARM_RESET_WARN", {
+          reason,
+          error: formatError(cause),
+        });
+      }
+
+      try {
+        oldStream.free();
+        console.info("[HANA SHERPA] OLD_STREAM_FREED", { reason });
+      } catch (cause) {
+        console.warn("[HANA SHERPA] HARD_REARM_FREE_WARN", {
+          reason,
+          error: formatError(cause),
+        });
+      }
+
+      const newStream = kws.createStream();
+      if (!newStream || typeof newStream.acceptWaveform !== "function") {
+        throw new Error("Sherpa KWS failed to create a replacement stream.");
+      }
+
+      this.#stream = newStream;
+      console.info("[HANA SHERPA] NEW_STREAM_CREATED", { reason });
+      console.info("[HANA SHERPA] HARD_REARM_OK", { reason });
+    } catch (cause) {
+      console.error("[HANA SHERPA] HARD_REARM_FAILED", {
+        reason,
+        error: formatError(cause),
+      });
+      throw cause;
+    }
+  }
+
   reset(): void {
-    if (this.#kws && this.#stream) this.#kws.reset(this.#stream);
+    if (!this.#kws || !this.#stream) return;
+    this.#kws.reset(this.#stream);
   }
 
   async dispose(): Promise<void> {
