@@ -46,7 +46,7 @@ export class F1VoiceEngine {
       workletModuleUrl: options.workletUrl || "/f1-voice/f1-audio-processor.js",
       echoCancellation: true,
       noiseSuppression: true,
-      autoGainControl: true,
+      autoGainControl: false, // V47: avoid pumping/clipping external TV noise
     });
     const audio = new AudioEngine({ capture });
 
@@ -116,6 +116,7 @@ export class F1VoiceEngine {
           : String(error);
 
       this.options.onStatus?.("error", message);
+      throw error; // V47: controller must see startup failure and retry/recover
     }
   }
 

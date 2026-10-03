@@ -152,9 +152,13 @@ export class SherpaWasmKeywordEngine implements SherpaKeywordEngine {
       // V42 ONE-SHOT: keep the canonical trained phrase and add the common
       // "Hanna" tokenization as an alias to the SAME wake tag. Neither "oye"
       // nor "hana" alone is a valid keyword.
+      const normalizeKeywordLine = (line: string) => {
+        const clean = line.replace(/\s+:[0-9.]+/g, "").replace(/\s+#[0-9.]+/g, "").trim();
+        return `${clean} :10.0 #0.001`;
+      };
       const keywordLines = [
-        configuredKeywords,
-        "▁o ye ▁ha n na @oye_hana",
+        normalizeKeywordLine(configuredKeywords),
+        normalizeKeywordLine("▁o ye ▁ha n na @oye_hana"),
       ];
       const keywords = [...new Set(keywordLines)].join("\n");
 
@@ -178,8 +182,8 @@ export class SherpaWasmKeywordEngine implements SherpaKeywordEngine {
         numTrailingBlanks: 1,
         // Stronger context boost + lower acoustic trigger threshold for Hana.
         // The WASM-KWS build parses `keywords` directly as keyword text.
-        keywordsScore: Math.max(this.#score, 6.0),
-        keywordsThreshold: Math.min(this.#threshold, 0.008),
+        keywordsScore: Math.max(this.#score, 10.0),
+        keywordsThreshold: Math.min(this.#threshold, 0.001),
         keywords: `${keywords}\n`,
         keywordsBuf: "",
         keywordsBufSize: 0,
@@ -203,8 +207,8 @@ export class SherpaWasmKeywordEngine implements SherpaKeywordEngine {
         vfs: VFS_DIR,
         keywords,
         keywordTransport: "wasm-keywords-text",
-        keywordsScore: Math.max(this.#score, 6.0),
-        keywordsThreshold: Math.min(this.#threshold, 0.008),
+        keywordsScore: Math.max(this.#score, 10.0),
+        keywordsThreshold: Math.min(this.#threshold, 0.001),
       });
     } catch (cause) {
       const detail = formatError(cause);

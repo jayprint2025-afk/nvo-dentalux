@@ -412,10 +412,24 @@ export class F1AudioSessionController {
       this.move("WAKE_STARTING", detail);
     }
 
-    await this.options.wakeEngine.start();
+    let startError: unknown = null;
+    try {
+      await this.options.wakeEngine.start();
+    } catch (error) {
+      startError = error;
+    }
+
     if (this.options.wakeEngine.currentStatus !== "listening") {
+      // V47 self-heal: recover from enabled/idle browser or WASM startup races.
+      try { await this.options.wakeEngine.stop(); } catch { /* best effort */ }
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 120));
+      await this.options.wakeEngine.start();
+    }
+
+    if (this.options.wakeEngine.currentStatus !== "listening") {
+      const suffix = startError instanceof Error ? ` · ${startError.message}` : "";
       throw new Error(
-        `Wake Engine no quedó escuchando: ${this.options.wakeEngine.currentStatus}`,
+        `Wake Engine no quedó escuchando: ${this.options.wakeEngine.currentStatus}${suffix}`,
       );
     }
 
