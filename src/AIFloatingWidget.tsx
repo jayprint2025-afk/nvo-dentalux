@@ -1772,8 +1772,18 @@ const buildLeadReport = React.useCallback(() => {
       inactivityTimeoutMs: 15000,
       maxSessionMs: 120000,
       wakeStabilizationMs: wakeSettings.stabilizationMs,
-      // V33: sin candados duplicados. El threshold del detector local decide el wake.
+      // V48: Sherpa + CAMPPlus ya validaron frase e identidad en onWake.
+      // El controller conserva su fail-closed interno, pero esta callback SOLO
+      // transporta la aprobacion ya obtenida; no vuelve a extraer ni comparar
+      // CAMPPlus sobre el mismo audio. Esto elimina la doble verificacion que
+      // dejaba el estado en "muestra de voz requerida" despues de aprobar al dueno.
       minimumWakeConfidence: F1_MIN_WAKE_CONFIDENCE,
+      verifyWakeIdentity: async () => ({
+        accepted: true,
+        similarity: 1,
+        displayName: voiceProfile?.displayName || "Usuario",
+        reason: "v48_sherpa_campplus_already_verified",
+      }),
       createRealtimeClient: ({ greetingText, speakerName }) => new F1RealtimeClient({
         greetingText,
         speakerName,
@@ -2710,33 +2720,11 @@ const buildLeadReport = React.useCallback(() => {
                           </div>
 
                           {voiceProfile && (
-                            <label className="mt-3 block text-[11px] text-gray-600">
-                              Coincidencia requerida:{" "}
-                              {Math.round(
-                                voiceProfile.acceptanceThreshold * 100,
-                              )}
-                              %
-                              <input
-                                type="range"
-                                min="0.72"
-                                max="0.90"
-                                step="0.01"
-                                value={voiceProfile.acceptanceThreshold}
-                                onChange={(event) =>
-                                  setVoiceProfile((current) =>
-                                    current
-                                      ? {
-                                          ...current,
-                                          acceptanceThreshold: Number(
-                                            event.target.value,
-                                          ),
-                                        }
-                                      : current,
-                                  )
-                                }
-                                className="mt-1 w-full"
-                              />
-                            </label>
+                            <div className="mt-3 rounded-lg border bg-slate-50 p-2 text-[11px] text-gray-600">
+                              Seguridad de voz: CAMPPlus usa consenso automatico entre
+                              tus 5 muestras. No hay un segundo porcentaje manual que
+                              pueda bloquear una voz que el perfil ya aprobo.
+                            </div>
                           )}
 
                           {voiceProfileVerification && (
