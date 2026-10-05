@@ -328,7 +328,12 @@ export class SherpaWasmKeywordEngine implements SherpaKeywordEngine {
 
   reset(): void {
     if (!this.#kws || !this.#stream) return;
-    this.#kws.reset(this.#stream);
+    // V52 SINGLE REARM:
+    // The Sherpa stream is replaced exactly once in acceptWaveform() after a
+    // confirmed wake. Generic upper-layer reset calls must not reset that new
+    // stream again, otherwise the next wake cycle can start from an unstable
+    // decoder state.
+    console.debug("[HANA SHERPA] SOFT_RESET_IGNORED", { streamOwner: "sherpa-engine" });
   }
 
   async dispose(): Promise<void> {

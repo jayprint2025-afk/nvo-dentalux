@@ -135,10 +135,13 @@ export class WakeDetector implements WakeDetectorProcessor {
     this.#audioFrames = [];
     // V50: fresh wake cycle must not inherit a previous suppression lockout.
     this.#suppressedUntilMs = 0;
-    // V46: a streaming KWS keeps decoder state internally. Any detector reset
-    // must reset Sherpa too, otherwise the next phrase can inherit stale partial
-    // tokens and appear "dead" until the whole engine is restarted.
-    this.#model.reset();
+    // V52 SINGLE REARM:
+    // Do not reset a streaming Sherpa model here. Its runtime owns the decoder
+    // stream lifecycle and replaces the stream after each successful wake.
+    // Legacy/non-streaming models still need their normal reset.
+    if (!isStreamingWakeModelPort(this.#model)) {
+      this.#model.reset();
+    }
     if (this.#state !== "disposed" && this.#state !== "failed") this.#setState("ready");
   }
 
@@ -153,9 +156,12 @@ export class WakeDetector implements WakeDetectorProcessor {
     this.#wasSpeech = false;
     this.#preRollFeatures = [];
     this.#audioFrames = [];
-    // V46: frames are deliberately not delivered while suppressed. Reset the
-    // streaming decoder so it resumes from a clean state after the gap.
-    this.#model.reset();
+    // V52 SINGLE REARM:
+    // Keep streaming Sherpa stream ownership inside the Sherpa engine.
+    // Non-streaming models retain the legacy reset behavior.
+    if (!isStreamingWakeModelPort(this.#model)) {
+      this.#model.reset();
+    }
   }
 
   public async dispose(): Promise<void> {
@@ -249,7 +255,9 @@ export class WakeDetector implements WakeDetectorProcessor {
           if (this.#cooldown.active) this.#setState("cooldown");
           this.#events.emit("wake", { ...scoreEvent, cooldownFrames: this.#config.cooldownFrames,
             audioWindow: concatenateFrames(this.#audioFrames), sampleRate: frame.sampleRate });
-          this.#model.reset();
+          // V52 SINGLE REARM:
+          // Streaming Sherpa already replaces its decoder stream immediately after
+          // a successful keyword. Do not reset it a second time here.
         }
         return { status: "scored", sequence: frame.sequence, timestampMs: frame.timestampMs, score: output.score, detected };
       } catch (cause) {
