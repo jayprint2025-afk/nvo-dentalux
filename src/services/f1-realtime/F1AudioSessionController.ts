@@ -385,6 +385,8 @@ export class F1AudioSessionController {
     this.activeGreetingText = "Te escucho";
 
     if (this.enabled && !this.disposed) {
+      // V50 CLEAN HANDOFF: let Realtime fully release the browser audio graph.
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 220));
       await this.startWake("Conversación finalizada");
     } else {
       this.move("DISABLED", "Motor desactivado");
@@ -419,6 +421,10 @@ export class F1AudioSessionController {
       this.move("WAKE_STARTING", detail);
     }
 
+    // V50 CLEAN REARM: force a fresh Wake/Sherpa lifecycle after every handoff.
+    try { await this.options.wakeEngine.stop(); } catch { /* already idle */ }
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 120));
+
     let startError: unknown = null;
     try {
       await this.options.wakeEngine.start();
@@ -427,9 +433,9 @@ export class F1AudioSessionController {
     }
 
     if (this.options.wakeEngine.currentStatus !== "listening") {
-      // V47 self-heal: recover from enabled/idle browser or WASM startup races.
+      // V50 self-heal: one complete second rearm on browser/WASM startup races.
       try { await this.options.wakeEngine.stop(); } catch { /* best effort */ }
-      await new Promise<void>((resolve) => window.setTimeout(resolve, 120));
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 180));
       await this.options.wakeEngine.start();
     }
 
@@ -441,7 +447,7 @@ export class F1AudioSessionController {
     }
 
     this.wakeAcceptAfter =
-      Date.now() + (this.options.wakeStabilizationMs ?? 350);
+      Date.now() + (this.options.wakeStabilizationMs ?? 180);
     this.move("WAKE_LISTENING", "Esperando “Oye Hana”");
   }
 

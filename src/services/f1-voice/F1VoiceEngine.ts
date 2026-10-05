@@ -107,6 +107,9 @@ export class F1VoiceEngine {
       );
     }
 
+    // V50 CLEAN REARM: a new Wake lifecycle starts fully receptive.
+    this.wakeSuppressedUntil = 0;
+
     try {
       await this.core.start();
     } catch (error) {
@@ -140,6 +143,8 @@ export class F1VoiceEngine {
 
   async stop(): Promise<void> {
     await this.core.stop();
+    // V50: suppression never survives a microphone handoff.
+    this.wakeSuppressedUntil = 0;
   }
 
   async dispose(): Promise<void> {

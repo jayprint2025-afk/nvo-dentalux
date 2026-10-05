@@ -133,6 +133,8 @@ export class WakeDetector implements WakeDetectorProcessor {
     this.#wasSpeech = false;
     this.#preRollFeatures = [];
     this.#audioFrames = [];
+    // V50: fresh wake cycle must not inherit a previous suppression lockout.
+    this.#suppressedUntilMs = 0;
     // V46: a streaming KWS keeps decoder state internally. Any detector reset
     // must reset Sherpa too, otherwise the next phrase can inherit stale partial
     // tokens and appear "dead" until the whole engine is restarted.
