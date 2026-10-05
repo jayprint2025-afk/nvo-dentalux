@@ -102,8 +102,15 @@ export class F1AudioSessionController {
 
       const identity = await this.options.verifyWakeIdentity(event);
 
-      if (!identity.accepted) {
-        const similarity = Math.round(Number(identity.similarity ?? 0) * 100);
+      // V49 FINAL: the wake phrase is the primary lock. Keep owner verification
+      // as a light second gate so normal microphone/room variation does not make
+      // the enrolled owner repeat the phrase. 50% is the explicit product floor.
+      const wakeIdentityFloor = 0.50;
+      const wakeSimilarity = Number(identity.similarity ?? 0);
+      const wakeIdentityAccepted = identity.accepted || wakeSimilarity >= wakeIdentityFloor;
+
+      if (!wakeIdentityAccepted) {
+        const similarity = Math.round(wakeSimilarity * 100);
         this.wakeAcceptAfter = Date.now() + 100;
         this.move(
           "WAKE_LISTENING",

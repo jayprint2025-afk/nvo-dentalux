@@ -117,26 +117,12 @@ export class F1RealtimeClient {
       throw new Error("No se encontró una pista de micrófono.");
     }
 
-    // V44: el micrófono físico NUNCA se conecta directamente a OpenAI.
-    // CAMPPlus verifica cada turno localmente y solo la voz aceptada se
-    // reproduce hacia una pista virtual que sí se adjunta a WebRTC.
-    if (!this.options.verifyActiveSpeaker) {
-      stream.getTracks().forEach((track) => track.stop());
-      pc.close();
-      throw new Error("V44 requiere verifyActiveSpeaker; Realtime falla cerrado.");
-    }
-    const activeSpeakerGate = new F1ActiveSpeakerGate({
-      sourceStream: stream,
-      verify: this.options.verifyActiveSpeaker,
-      ownerTimeoutMs: this.options.activeSpeakerTimeoutMs ?? 5000,
-      onStatus: (detail) => this.options.callbacks.onActiveSpeakerStatus?.(detail),
-      onTimeout: () => this.options.callbacks.onActiveSpeakerTimeout?.(),
-    });
-    this.activeSpeakerGate = activeSpeakerGate;
-    activeSpeakerGate.pause();
-    activeSpeakerGate.outputStream.getTracks().forEach((track) =>
-      pc.addTrack(track, activeSpeakerGate.outputStream),
-    );
+    // V49 FINAL: CAMPPlus is used only at wake time. Once "Oye Hana" + the
+    // wake-owner check have opened Realtime, do not re-identify every utterance.
+    // This restores the original conversational behavior: instructions flow
+    // directly to Realtime instead of getting stuck in "verificando hablante".
+    this.activeSpeakerGate = null;
+    pc.addTrack(microphoneTrack, stream);
 
     const dc = pc.createDataChannel("oai-events");
     this.pc = pc;
@@ -657,7 +643,7 @@ export class F1RealtimeClient {
     await new Promise((resolve) => window.setTimeout(resolve, 450));
     if (this.closed) return;
 
-    await this.activeSpeakerGate?.start();
+    // V49: microphone track is already attached directly to WebRTC.
 
     this.greetingPending = false;
     this.greetingFinalizing = false;

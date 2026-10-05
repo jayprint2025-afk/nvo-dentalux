@@ -154,7 +154,7 @@ export class SherpaWasmKeywordEngine implements SherpaKeywordEngine {
       // nor "hana" alone is a valid keyword.
       const normalizeKeywordLine = (line: string) => {
         const clean = line.replace(/\s+:[0-9.]+/g, "").replace(/\s+#[0-9.]+/g, "").trim();
-        return `${clean} :10.0 #0.001`;
+        return `${clean} :6.0 #0.05`;
       };
       const keywordLines = [
         normalizeKeywordLine(configuredKeywords),
@@ -180,10 +180,10 @@ export class SherpaWasmKeywordEngine implements SherpaKeywordEngine {
         },
         maxActivePaths: 24,
         numTrailingBlanks: 1,
-        // Stronger context boost + lower acoustic trigger threshold for Hana.
+        // V49: sensitive one-shot full-phrase KWS without the ultra-low 0.001 false-wake setting.
         // The WASM-KWS build parses `keywords` directly as keyword text.
-        keywordsScore: Math.max(this.#score, 10.0),
-        keywordsThreshold: Math.min(this.#threshold, 0.001),
+        keywordsScore: Math.max(this.#score, 6.0),
+        keywordsThreshold: Math.min(this.#threshold, 0.05),
         keywords: `${keywords}\n`,
         keywordsBuf: "",
         keywordsBufSize: 0,
@@ -207,8 +207,8 @@ export class SherpaWasmKeywordEngine implements SherpaKeywordEngine {
         vfs: VFS_DIR,
         keywords,
         keywordTransport: "wasm-keywords-text",
-        keywordsScore: Math.max(this.#score, 10.0),
-        keywordsThreshold: Math.min(this.#threshold, 0.001),
+        keywordsScore: Math.max(this.#score, 6.0),
+        keywordsThreshold: Math.min(this.#threshold, 0.05),
       });
     } catch (cause) {
       const detail = formatError(cause);
