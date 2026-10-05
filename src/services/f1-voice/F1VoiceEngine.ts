@@ -141,6 +141,19 @@ export class F1VoiceEngine {
     this.wakeSuppressedUntil = Math.max(this.wakeSuppressedUntil, Date.now() + ms);
   }
 
+  /**
+   * V53 REJECTION REARM:
+   * A rejected owner-verification attempt must never leave the wake gate
+   * suppressed. Clear only this wrapper's cost-guard state; do not reset or
+   * recreate the Sherpa stream here because V52 owns that lifecycle.
+   */
+  rearmAfterRejectedWake(): void {
+    this.wakeSuppressedUntil = 0;
+    console.debug("[HANNA V53] rejected wake rearmed", {
+      wakeSuppressedUntil: this.wakeSuppressedUntil,
+    });
+  }
+
   async stop(): Promise<void> {
     await this.core.stop();
     // V50: suppression never survives a microphone handoff.
