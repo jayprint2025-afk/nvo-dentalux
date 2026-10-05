@@ -219,27 +219,29 @@ export class F1AudioSessionController {
     this.transcript = `Tú: ${clean}`;
     this.emit();
 
-    if (this.closingPromptAsked) {
-      const normalized = clean
-        .toLocaleLowerCase("es-MX")
-        .normalize("NFD")
-        .replace(/[\u0300-\u036f]/g, "")
-        .replace(/[^a-z0-9\s]/g, " ")
-        .replace(/\s+/g, " ")
-        .trim();
+    const normalized = clean
+      .toLocaleLowerCase("es-MX")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^a-z0-9\s]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
 
-      const explicitClose =
-        /^(no|no gracias|nada|nada mas|eso es todo|es todo|ya es todo|ya seria todo|seria todo|listo|gracias|gracias hana|no hana)$/.test(normalized) ||
-        /\b(no gracias|nada mas|eso es todo|ya es todo|seria todo)\b/.test(normalized);
+    // V55: the user can explicitly end the conversation at any point.
+    // Otherwise a valid turn keeps the same Realtime session alive.
+    const explicitClose =
+      /^(no|no gracias|nada|nada mas|eso es todo|es todo|ya es todo|ya seria todo|seria todo|listo|gracias|gracias hana|no hana|terminamos|hemos terminado|descansa|descansa hana|puedes descansar)$/.test(normalized) ||
+      /\b(no gracias|nada mas|eso es todo|ya es todo|seria todo|ya no necesito nada|terminamos|descansa hana|puedes descansar)\b/.test(normalized);
 
-      if (explicitClose) {
-        console.info("[F1/V38][SMART_CLOSE_ACCEPTED]", { transcript: clean });
-        void this.enqueue(() => this.finishConversation("smart-close-negative"));
-        return;
-      }
-
-      this.closingPromptAsked = false;
+    if (explicitClose) {
+      console.info("[F1/V55][EXPLICIT_CLOSE]", { transcript: clean });
+      void this.enqueue(() => this.finishConversation("smart-close-negative"));
+      return;
     }
+
+    this.closingPromptAsked = false;
+    this.clearFollowupTimer();
+    this.clearInactivityTimer();
   }
 
   onAssistantSpeechStarted(): void {
@@ -308,7 +310,13 @@ export class F1AudioSessionController {
     if (this.sm.state !== "REALTIME_FOLLOWUP") {
       this.move("REALTIME_FOLLOWUP", "Esperando otra instrucción");
     }
-    this.armFollowup();
+
+    // V55: a completed answer is not the end of the conversation.
+    // Stay in the same Realtime session and close only after real inactivity
+    // (or an explicit user close phrase handled in onUserTranscript).
+    this.closingPromptAsked = false;
+    this.clearFollowupTimer();
+    this.armInactivity();
   }
 
   onActiveSpeakerStatus(detail: string): void {
@@ -473,20 +481,11 @@ export class F1AudioSessionController {
   }
 
   private armFollowup(): void {
+    // V55 compatibility path: legacy callers may still invoke armFollowup().
+    // Treat it as normal inactivity instead of asking "¿Necesitas algo más?"
+    // or closing after 4-5 seconds.
     this.clearFollowupTimer();
-    const generation = this.sessionGeneration;
-    const waitMs = this.closingPromptAsked ? 4_000 : (this.options.followupTimeoutMs ?? 5_000);
-    this.followupTimer = window.setTimeout(() => {
-      if (generation !== this.sessionGeneration) return;
-      if (!this.closingPromptAsked && this.realtime && this.sm.state === "REALTIME_FOLLOWUP") {
-        this.closingPromptAsked = true;
-        console.info("[F1/V39][SMART_CLOSE_PROMPT_ONCE]", { at: Date.now() });
-        this.realtime.requestClosingPrompt();
-        // Playback lifecycle will re-arm followup when the prompt audio stops.
-        return;
-      }
-      void this.enqueue(() => this.finishConversation("followup-timeout"));
-    }, waitMs);
+    this.armInactivity();
   }
 
   private armInactivity(): void {
@@ -495,16 +494,23 @@ export class F1AudioSessionController {
     this.inactivityTimer = window.setTimeout(() => {
       if (generation !== this.sessionGeneration) return;
       void this.enqueue(() => this.finishConversation("idle-timeout"));
-    }, this.options.inactivityTimeoutMs ?? 5_000);
+    }, this.options.inactivityTimeoutMs ?? 180_000);
   }
 
   private armMaxSession(): void {
     if (this.maxSessionTimer != null) window.clearTimeout(this.maxSessionTimer);
+    this.maxSessionTimer = null;
+
+    // V55: no forced session cap by default. A long, active conversation must
+    // remain alive. A product-specific hard cap can still be supplied explicitly.
+    const configuredMax = Number(this.options.maxSessionMs ?? 0);
+    if (!Number.isFinite(configuredMax) || configuredMax <= 0) return;
+
     const generation = this.sessionGeneration;
     this.maxSessionTimer = window.setTimeout(() => {
       if (generation !== this.sessionGeneration) return;
       void this.enqueue(() => this.finishConversation("max-session"));
-    }, this.options.maxSessionMs ?? 120_000);
+    }, configuredMax);
   }
 
   private clearInactivityTimer(): void {
