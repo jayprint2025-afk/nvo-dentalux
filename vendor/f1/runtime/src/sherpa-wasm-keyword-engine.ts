@@ -328,7 +328,14 @@ export class SherpaWasmKeywordEngine implements SherpaKeywordEngine {
 
   reset(): void {
     if (!this.#kws || !this.#stream) return;
-    this.#kws.reset(this.#stream);
+
+    // V51: a normal kws.reset(stream) keeps the same Sherpa stream alive.
+    // After Realtime -> Wake that stream can remain receptive to PCM/inference
+    // while no longer emitting the wake keyword reliably. Recreate the stream
+    // so every wake cycle starts from the same clean decoder state as a fresh
+    // activation, without reloading the ONNX models/WASM runtime.
+    this.#hardRearmStream("engine-reset");
+    this.#pcmDiagFrames = 0;
   }
 
   async dispose(): Promise<void> {
