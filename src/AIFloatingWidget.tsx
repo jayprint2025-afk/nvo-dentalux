@@ -1724,9 +1724,34 @@ const buildLeadReport = React.useCallback(() => {
 
             if (!accepted) {
               setLastWakeIdentity(`Oye Hana detectado · voz rechazada ${pct}%/${requiredPct}%`);
-              setF1VoiceEngineDetail(`V46 · voz no autorizada (${pct}%) · 0 llamadas OpenAI`);
-              (f1VoiceEngineRef.current as any)?.suppressWakeFor?.(80);
-              wakeVerificationCooldownUntilRef.current = Date.now() + 80;
+              setF1VoiceEngineDetail(`V54 · voz rechazada (${pct}%) · rearmando escucha…`);
+
+              // V54 REJECT -> CLEAN LISTEN:
+              // Un rechazo NO debe dejar ningún candado de verificación activo.
+              // Volvemos al mismo ciclo limpio de escucha que usa el controller,
+              // sin abrir Realtime y sin esperar varios intentos.
+              wakeVerificationCooldownUntilRef.current = 0;
+              wakeVerificationInFlightRef.current = false;
+
+              const activeController = sessionControllerRef.current;
+              if (activeController && f1VoiceEngineEnabled) {
+                try {
+                  await activeController.disable();
+                  await activeController.enable();
+                  setF1VoiceEngineDetail('V54 · listening · esperando "Oye Hana"');
+                  console.info("[HANA V54][REJECT_REARM_OK]", {
+                    similarity,
+                    required,
+                  });
+                } catch (rearmError) {
+                  console.error("[HANA V54][REJECT_REARM_FAILED]", rearmError);
+                  setF1VoiceEngineDetail(
+                    `V54 · no pude rearmar escucha: ${
+                      rearmError instanceof Error ? rearmError.message : String(rearmError)
+                    }`,
+                  );
+                }
+              }
               return;
             }
 
