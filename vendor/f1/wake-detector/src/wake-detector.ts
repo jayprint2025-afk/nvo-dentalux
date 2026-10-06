@@ -64,6 +64,7 @@ export class WakeDetector implements WakeDetectorProcessor {
   readonly #policy: WakeDetectionPolicy;
   readonly #cooldown: CooldownPort;
   #state: WakeDetectorState = "idle";
+  #quietSamples = 0;
   #silentFrames = 0;
   #recentSpeechFrames = 0;
   #wasSpeech = false;
@@ -128,6 +129,7 @@ export class WakeDetector implements WakeDetectorProcessor {
     this.#window.reset();
     this.#policy.reset();
     this.#cooldown.reset();
+    this.#quietSamples = 0;
     this.#silentFrames = 0;
     this.#recentSpeechFrames = 0;
     this.#wasSpeech = false;
@@ -136,17 +138,14 @@ export class WakeDetector implements WakeDetectorProcessor {
     // V50: fresh wake cycle must not inherit a previous suppression lockout.
     this.#suppressedUntilMs = 0;
     // V52 SINGLE REARM:
-    // Do not reset a streaming Sherpa model here. Its runtime owns the decoder
-    // stream lifecycle and replaces the stream after each successful wake.
-    // Legacy/non-streaming models still need their normal reset.
-    if (!isStreamingWakeModelPort(this.#model)) {
-      this.#model.reset();
-    }
+    // Reset decoder state through the model; Sherpa recreates its stream.
+    this.#model.reset?.();
     if (this.#state !== "disposed" && this.#state !== "failed") this.#setState("ready");
   }
 
   /** Hard lockout used after "F1 descansa" so echo/noise cannot immediately re-wake the assistant. */
   public suppressFor(durationMs: number): void {
+    this.#quietSamples = 0;
     if (!Number.isFinite(durationMs) || durationMs < 0) throw new RangeError("durationMs must be a non-negative number.");
     this.#suppressedUntilMs = Date.now() + durationMs;
     this.#features.reset();
@@ -157,11 +156,8 @@ export class WakeDetector implements WakeDetectorProcessor {
     this.#preRollFeatures = [];
     this.#audioFrames = [];
     // V52 SINGLE REARM:
-    // Keep streaming Sherpa stream ownership inside the Sherpa engine.
-    // Non-streaming models retain the legacy reset behavior.
-    if (!isStreamingWakeModelPort(this.#model)) {
-      this.#model.reset();
-    }
+    // Clear decoder state when entering a suppression period.
+    this.#model.reset?.();
   }
 
   public async dispose(): Promise<void> {
@@ -194,6 +190,16 @@ export class WakeDetector implements WakeDetectorProcessor {
       return { status: "gated", sequence: frame.sequence, timestampMs: frame.timestampMs, detected: false };
     }
 
+    if (isStreamingWakeModelPort(this.#model)) {
+      let sumSq = 0;
+      for (const sample of frame.samples) sumSq += sample * sample;
+      const quiet = Math.sqrt(sumSq / frame.samples.length) < 0.0015;
+      if (!quiet && this.#quietSamples >= frame.sampleRate * 0.3) {
+        this.#model.reset?.();
+        this.#audioFrames = [];
+      }
+      this.#quietSamples = quiet ? this.#quietSamples + frame.samples.length : 0;
+    }
     this.#audioFrames.push(frame.samples.slice());
     while (this.#audioFrames.length > this.#config.captureWindowFrames) {
       this.#audioFrames.shift();

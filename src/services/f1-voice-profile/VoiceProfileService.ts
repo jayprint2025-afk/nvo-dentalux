@@ -1,3 +1,4 @@
+import { restoreValidatedOwnerProfile } from "./ValidatedOwnerProfile";
 import { CampPlusSpeakerExtractor } from "./CampPlusSpeakerExtractor";
 import { VoiceProfileRecorder } from "./VoiceProfileRecorder";
 import { VoiceProfileStore, voiceProfileKey } from "./VoiceProfileStore";
@@ -22,9 +23,14 @@ export class VoiceProfileService {
   private readonly recorder = new VoiceProfileRecorder();
   private readonly extractor = new CampPlusSpeakerExtractor();
 
-  async load(scope: VoiceProfileScope): Promise<VoiceProfile | null> {
-    const profile = await this.store.get(scope);
+  async load(scope: VoiceProfileScope, options: { useValidatedOwnerPreset?: boolean } = {}): Promise<VoiceProfile | null> {
+    let profile = await this.store.get(scope);
     if (!profile) return null;
+    if (options.useValidatedOwnerPreset) {
+      const restored = await restoreValidatedOwnerProfile(profile);
+      if (restored !== profile) await this.store.put(restored);
+      profile = restored;
+    }
     const compatible = this.isCompatible(profile);
     if (compatible) return profile;
     return { ...profile, engineVersion: "campplus-v44", enabled: true, samples: [], centroid: [], acceptanceThreshold: DISPLAY_REQUIRED };

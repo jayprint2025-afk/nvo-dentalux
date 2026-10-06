@@ -107,7 +107,7 @@ export class F1AudioSessionController {
       // the enrolled owner repeat the phrase. 50% is the explicit product floor.
       const wakeIdentityFloor = 0.50;
       const wakeSimilarity = Number(identity.similarity ?? 0);
-      const wakeIdentityAccepted = identity.accepted || wakeSimilarity >= wakeIdentityFloor;
+      const wakeIdentityAccepted = identity.accepted === true;
 
       if (!wakeIdentityAccepted) {
         const similarity = Math.round(wakeSimilarity * 100);

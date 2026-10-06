@@ -1,6 +1,6 @@
 import type { AudioFrame } from "@cliniqone/audio-engine";
 import type { VadConfig, VadResult } from "@cliniqone/vad";
-import type { WakeDetectorConfig, WakeEvent, WakeModelPort, WakeProcessResult, WakeScore } from "@cliniqone/wake-detector";
+import type { WakeDetectorConfig, WakeEvent, WakeModelPort, StreamingWakeModelPort, WakeProcessResult, WakeScore } from "@cliniqone/wake-detector";
 
 export type F1VoiceEngineState = "idle" | "starting" | "running" | "paused" | "stopping" | "failed" | "disposed";
 
@@ -11,7 +11,7 @@ export interface F1VoiceEngineConfig {
 }
 
 export interface F1VoiceEngineDependencies {
-  readonly wakeModel: WakeModelPort;
+  readonly wakeModel: WakeModelPort | StreamingWakeModelPort;
   readonly audio?: AudioPort;
   readonly vad?: VadPort;
   readonly wakeDetector?: WakeDetectorPort;

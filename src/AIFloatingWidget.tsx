@@ -689,7 +689,7 @@ export default function AIFloatingWidget(props: { apiBase?: string; sucursalId?:
     let cancelled = false;
 
     void voiceProfileServiceRef.current
-      .load(voiceProfileScope)
+      .load(voiceProfileScope, { useValidatedOwnerPreset: true })
       .then((profile) => {
         if (cancelled) return;
         setVoiceProfile(profile);
@@ -1704,7 +1704,7 @@ const buildLeadReport = React.useCallback(() => {
             // the obsolete V44 hard 0.75 gate again here; that was rejecting the
             // real owner even when the consensus verifier approved the voice.
             const required = Number(result?.requiredSimilarity || 0.60);
-            const accepted = Boolean(result?.accepted) || similarity >= 0.50;
+            const accepted = result?.accepted === true;
             const pct = Math.round(similarity * 100);
             const requiredPct = Math.round(required * 100);
 

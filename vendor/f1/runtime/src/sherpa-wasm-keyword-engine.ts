@@ -152,15 +152,7 @@ export class SherpaWasmKeywordEngine implements SherpaKeywordEngine {
       // V42 ONE-SHOT: keep the canonical trained phrase and add the common
       // "Hanna" tokenization as an alias to the SAME wake tag. Neither "oye"
       // nor "hana" alone is a valid keyword.
-      const normalizeKeywordLine = (line: string) => {
-        const clean = line.replace(/\s+:[0-9.]+/g, "").replace(/\s+#[0-9.]+/g, "").trim();
-        return `${clean} :6.0 #0.05`;
-      };
-      const keywordLines = [
-        normalizeKeywordLine(configuredKeywords),
-        normalizeKeywordLine("▁o ye ▁ha n na @oye_hana"),
-      ];
-      const keywords = [...new Set(keywordLines)].join("\n");
+      const keywords = configuredKeywords;
 
       const config = {
         featConfig: { samplingRate: 16000, featureDim: 80 },
@@ -182,8 +174,8 @@ export class SherpaWasmKeywordEngine implements SherpaKeywordEngine {
         numTrailingBlanks: 1,
         // V49: sensitive one-shot full-phrase KWS without the ultra-low 0.001 false-wake setting.
         // The WASM-KWS build parses `keywords` directly as keyword text.
-        keywordsScore: Math.max(this.#score, 6.0),
-        keywordsThreshold: Math.min(this.#threshold, 0.05),
+        keywordsScore: this.#score,
+        keywordsThreshold: this.#threshold,
         keywords: `${keywords}\n`,
         keywordsBuf: "",
         keywordsBufSize: 0,
@@ -207,8 +199,8 @@ export class SherpaWasmKeywordEngine implements SherpaKeywordEngine {
         vfs: VFS_DIR,
         keywords,
         keywordTransport: "wasm-keywords-text",
-        keywordsScore: Math.max(this.#score, 6.0),
-        keywordsThreshold: Math.min(this.#threshold, 0.05),
+        keywordsScore: this.#score,
+        keywordsThreshold: this.#threshold,
       });
     } catch (cause) {
       const detail = formatError(cause);
@@ -274,20 +266,20 @@ export class SherpaWasmKeywordEngine implements SherpaKeywordEngine {
     }
 
     if (hit && this.#kws && this.#stream) {
-      // FINAL: Sherpa's supported reset keeps the same live decoder/stream.
-      // Replacing/freeing the stream here made the first wake reliable but could
-      // leave later microphone handoffs attached to a decoder with poor re-entry.
-      this.#kws.reset(this.#stream);
+      // Recreate decoder state after a result; retain the loaded model.
+      this.#stream.free();
+      this.#stream = this.#kws.createStream();
       console.info("[HANA SHERPA] DECODER_RESET_OK", { reason: "wake-detected" });
     }
 
     return hit;
   }
 
-  // Lifecycle reset is intentionally in-place: keep model and stream allocated.
+  // Lifecycle reset recreates the stream and retains the loaded model.
   reset(): void {
     if (!this.#kws || !this.#stream) return;
-    this.#kws.reset(this.#stream);
+    this.#stream.free();
+    this.#stream = this.#kws.createStream();
     console.debug("[HANA SHERPA] DECODER_RESET_OK", { reason: "pipeline-reset" });
   }
 

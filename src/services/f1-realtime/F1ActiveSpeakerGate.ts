@@ -141,7 +141,7 @@ export class F1ActiveSpeakerGate {
 
   private async playIntoRealtime(pcm: Float32Array): Promise<void> {
     const buffer = this.ctx.createBuffer(1, pcm.length, this.ctx.sampleRate);
-    buffer.copyToChannel(pcm, 0);
+    buffer.copyToChannel(Float32Array.from(pcm), 0);
     const node = this.ctx.createBufferSource();
     node.buffer = buffer;
     node.connect(this.destination);
