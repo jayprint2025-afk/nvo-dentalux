@@ -273,67 +273,22 @@ export class SherpaWasmKeywordEngine implements SherpaKeywordEngine {
       }
     }
 
-    if (hit) {
-      this.#hardRearmStream("wake-detected");
+    if (hit && this.#kws && this.#stream) {
+      // FINAL: Sherpa's supported reset keeps the same live decoder/stream.
+      // Replacing/freeing the stream here made the first wake reliable but could
+      // leave later microphone handoffs attached to a decoder with poor re-entry.
+      this.#kws.reset(this.#stream);
+      console.info("[HANA SHERPA] DECODER_RESET_OK", { reason: "wake-detected" });
     }
 
     return hit;
   }
 
-  // V48: keep the loaded KWS/model, but replace its stream after each wake.
-  #hardRearmStream(reason: string): void {
-    const kws = this.#kws;
-    const oldStream = this.#stream;
-    if (!kws || !oldStream) return;
-
-    console.info("[HANA SHERPA] HARD_REARM_BEGIN", { reason });
-    this.#stream = null;
-
-    try {
-      try {
-        kws.reset(oldStream);
-      } catch (cause) {
-        console.warn("[HANA SHERPA] HARD_REARM_RESET_WARN", {
-          reason,
-          error: formatError(cause),
-        });
-      }
-
-      try {
-        oldStream.free();
-        console.info("[HANA SHERPA] OLD_STREAM_FREED", { reason });
-      } catch (cause) {
-        console.warn("[HANA SHERPA] HARD_REARM_FREE_WARN", {
-          reason,
-          error: formatError(cause),
-        });
-      }
-
-      const newStream = kws.createStream();
-      if (!newStream || typeof newStream.acceptWaveform !== "function") {
-        throw new Error("Sherpa KWS failed to create a replacement stream.");
-      }
-
-      this.#stream = newStream;
-      console.info("[HANA SHERPA] NEW_STREAM_CREATED", { reason });
-      console.info("[HANA SHERPA] HARD_REARM_OK", { reason });
-    } catch (cause) {
-      console.error("[HANA SHERPA] HARD_REARM_FAILED", {
-        reason,
-        error: formatError(cause),
-      });
-      throw cause;
-    }
-  }
-
+  // Lifecycle reset is intentionally in-place: keep model and stream allocated.
   reset(): void {
     if (!this.#kws || !this.#stream) return;
-    // V52 SINGLE REARM:
-    // The Sherpa stream is replaced exactly once in acceptWaveform() after a
-    // confirmed wake. Generic upper-layer reset calls must not reset that new
-    // stream again, otherwise the next wake cycle can start from an unstable
-    // decoder state.
-    console.debug("[HANA SHERPA] SOFT_RESET_IGNORED", { streamOwner: "sherpa-engine" });
+    this.#kws.reset(this.#stream);
+    console.debug("[HANA SHERPA] DECODER_RESET_OK", { reason: "pipeline-reset" });
   }
 
   async dispose(): Promise<void> {

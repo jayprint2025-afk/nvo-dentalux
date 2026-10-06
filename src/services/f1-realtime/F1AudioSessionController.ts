@@ -385,8 +385,10 @@ export class F1AudioSessionController {
     this.activeGreetingText = "Te escucho";
 
     if (this.enabled && !this.disposed) {
-      // V50 CLEAN HANDOFF: let Realtime fully release the browser audio graph.
-      await new Promise<void>((resolve) => window.setTimeout(resolve, 220));
+      // FINAL HANDOFF: Realtime/WebRTC must fully release the microphone before
+      // getUserMedia is reacquired by Wake. A single deterministic restart avoids
+      // overlapping stop/start cycles and stale AudioWorklet callbacks.
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 350));
       await this.startWake("Conversación finalizada");
     } else {
       this.move("DISABLED", "Motor desactivado");
@@ -421,28 +423,16 @@ export class F1AudioSessionController {
       this.move("WAKE_STARTING", detail);
     }
 
-    // V50 CLEAN REARM: force a fresh Wake/Sherpa lifecycle after every handoff.
-    try { await this.options.wakeEngine.stop(); } catch { /* already idle */ }
-    await new Promise<void>((resolve) => window.setTimeout(resolve, 120));
-
-    let startError: unknown = null;
-    try {
-      await this.options.wakeEngine.start();
-    } catch (error) {
-      startError = error;
+    // FINAL REARM: one owner, one restart. stop() drains the old audio pipeline;
+    // start() then acquires a fresh browser microphone while Sherpa keeps its loaded model.
+    if (this.options.wakeEngine.currentStatus !== "idle") {
+      await this.options.wakeEngine.stop();
     }
+    await this.options.wakeEngine.start();
 
     if (this.options.wakeEngine.currentStatus !== "listening") {
-      // V50 self-heal: one complete second rearm on browser/WASM startup races.
-      try { await this.options.wakeEngine.stop(); } catch { /* best effort */ }
-      await new Promise<void>((resolve) => window.setTimeout(resolve, 180));
-      await this.options.wakeEngine.start();
-    }
-
-    if (this.options.wakeEngine.currentStatus !== "listening") {
-      const suffix = startError instanceof Error ? ` · ${startError.message}` : "";
       throw new Error(
-        `Wake Engine no quedó escuchando: ${this.options.wakeEngine.currentStatus}${suffix}`,
+        `Wake Engine no quedó escuchando: ${this.options.wakeEngine.currentStatus}`,
       );
     }
 

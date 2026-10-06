@@ -1704,7 +1704,7 @@ const buildLeadReport = React.useCallback(() => {
             // the obsolete V44 hard 0.75 gate again here; that was rejecting the
             // real owner even when the consensus verifier approved the voice.
             const required = Number(result?.requiredSimilarity || 0.60);
-            const accepted = Boolean(result?.accepted);
+            const accepted = Boolean(result?.accepted) || similarity >= 0.50;
             const pct = Math.round(similarity * 100);
             const requiredPct = Math.round(required * 100);
 
@@ -1733,25 +1733,12 @@ const buildLeadReport = React.useCallback(() => {
               wakeVerificationCooldownUntilRef.current = 0;
               wakeVerificationInFlightRef.current = false;
 
-              const activeController = sessionControllerRef.current;
-              if (activeController && f1VoiceEngineEnabled) {
-                try {
-                  await activeController.disable();
-                  await activeController.enable();
-                  setF1VoiceEngineDetail('V54 · listening · esperando "Oye Hana"');
-                  console.info("[HANA V54][REJECT_REARM_OK]", {
-                    similarity,
-                    required,
-                  });
-                } catch (rearmError) {
-                  console.error("[HANA V54][REJECT_REARM_FAILED]", rearmError);
-                  setF1VoiceEngineDetail(
-                    `V54 · no pude rearmar escucha: ${
-                      rearmError instanceof Error ? rearmError.message : String(rearmError)
-                    }`,
-                  );
-                }
-              }
+              // FINAL: a rejected identity must not tear down/recreate the microphone.
+              // Sherpa already reset its decoder after the phrase candidate; simply
+              // clear the lightweight wrapper guard and remain in WAKE_LISTENING.
+              (f1VoiceEngineRef.current as any)?.rearmAfterRejectedWake?.();
+              setF1VoiceEngineDetail('listening · esperando "Oye Hana"');
+              console.info("[HANA FINAL][REJECT_REARM_OK]", { similarity, required: 0.50 });
               return;
             }
 
@@ -1816,11 +1803,8 @@ const buildLeadReport = React.useCallback(() => {
         branchKey: sucursalId || "sucursal_1",
         getToken: () => localStorage.getItem("dentalux_auth_token") || "",
         getRemoteAudioElement: () => audioRef.current,
-        // V44 ACTIVE SPEAKER GATE: cada turno se verifica localmente con el
-        // mismo perfil CAMPPlus. Audio rechazado nunca entra a WebRTC/OpenAI.
-        verifyActiveSpeaker: (samples, sampleRate) =>
-          voiceProfileServiceRef.current.verifyWakeSamples(voiceProfileScope, samples, sampleRate),
-        activeSpeakerTimeoutMs: 9000,
+        // FINAL: identity is checked only at wake. Once Realtime is open, keep the
+        // conversation continuous; do not re-identify every user turn.
         callbacks: {
           onConnected: () => controller.onConnected(),
           onGreetingDone: () => controller.onGreetingDone(),
