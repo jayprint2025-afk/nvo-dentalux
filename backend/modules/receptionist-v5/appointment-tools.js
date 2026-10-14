@@ -45,23 +45,19 @@ function minutesToTime(value) {
   const m = value % 60;
   return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
 }
-function parseBusinessHours(text, date) {
-  const raw = String(text || '').trim();
-  if (!raw) return null;
-  const day = new Date(`${date}T12:00:00`).getDay(); // 0 dom ... 6 sáb
-  const normalized = raw.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
-  const segments = normalized.split(/[;\n]+/).map(v => v.trim()).filter(Boolean);
-  const labels = day === 0 ? ['dom','domingo'] : day === 6 ? ['sab','sabado'] : ['l-v','lun-vie','lunes a viernes','lunes-viernes'];
-  let chosen = segments.find(seg => labels.some(label => seg.includes(label)));
-  if (!chosen && day >= 1 && day <= 5) chosen = segments.find(seg => /lunes|lun|l-v/.test(seg));
-  if (!chosen) return null;
-  if (/cerrado|no\s+abr/.test(chosen)) return { closed: true };
-  const times = [...chosen.matchAll(/(\d{1,2})(?::(\d{2}))?\s*(?:h|hrs?)?/g)]
-    .map(m => ({ h:Number(m[1]), m:Number(m[2] || 0) }))
-    .filter(x => x.h <= 23 && x.m <= 59)
-    .map(x => x.h * 60 + x.m);
-  if (times.length < 2) return null;
-  return { start: times[0], end: times[1], closed: false };
+function parseBusinessHours(text,date) {
+  const raw=String(text||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
+  const day=new Date(`${date}T12:00:00Z`).getUTCDay();
+  const segments=raw.split(/[;\n]+/).map(v=>v.trim()).filter(Boolean);
+  const dayPatterns=[/\b(dom|domingo|domingos)\b/,/\b(lun|lunes)\b|l\s*-\s*v/,/\b(mar|martes)\b/,/\b(mie|miercoles)\b/,/\b(jue|jueves)\b/,/\b(vie|viernes)\b/,/\b(sab|sabado|sabados)\b/];
+  let chosen=segments.find(segment=>dayPatterns[day].test(segment) && !/lunes\s*(?:a|-|al)\s*viernes/.test(segment));
+  if(!chosen && day>=1 && day<=5)chosen=segments.find(segment=>/lunes\s*(?:a|-|al)\s*viernes|lun\s*-\s*vie|l\s*-\s*v/.test(segment));
+  if(!chosen)return null;
+  if(/cerrad|no\s+abr/.test(chosen))return {closed:true};
+  const matches=[...chosen.matchAll(/(\d{1,2})(?::(\d{2}))?\s*(a\.?\s*m\.?|p\.?\s*m\.?|am|pm)?/g)];
+  const times=matches.map(m=>{let h=Number(m[1]);const minutes=Number(m[2]||0),period=String(m[3]||'').replace(/[^apm]/g,'');if(period&&h<=12){if(h===12)h=0;if(period==='pm')h+=12;}return h<=23 && minutes<=59?h*60+minutes:null;}).filter(v=>v!=null);
+  if(times.length!==2 || times[1]<=times[0])return null;
+  return {start:times[0],end:times[1],closed:false};
 }
 async function checkAvailability(q, ctx, args) {
   const tenantId = String(ctx.tenant_id || ctx.clinic_id || '').trim();
@@ -84,7 +80,7 @@ async function checkAvailability(q, ctx, args) {
     const serviceResult = await q(
       `SELECT id, COALESCE(duration_hours,1) AS duration_hours
          FROM services
-        WHERE tenant_id=$1::uuid AND sucursal_id=$2 AND id::text=$3
+        WHERE tenant_id=$1::uuid AND (sucursal_id=$2 OR sucursal_id IS NULL) AND id::text=$3
           AND COALESCE(active,TRUE)=TRUE LIMIT 1`,
       [tenantId, branchKey, serviceId]
     );
@@ -95,13 +91,15 @@ async function checkAvailability(q, ctx, args) {
   const durationMins = Math.max(30, Math.ceil(durationHours * 60 / 30) * 30);
 
   const hours = parseBusinessHours(branch.business_hours, date);
+  if(!hours)return {slots:[],date,branch_key:branchKey,reason:'business_hours_not_configured'};
   if (hours?.closed) return { slots: [], date, branch_key: branchKey, reason: 'closed' };
   const start = hours?.start ?? 8 * 60;
   const end = hours?.end ?? 20 * 60;
 
   const doctorsResult = await q(
     `SELECT id, name FROM doctors
-      WHERE tenant_id=$1::uuid AND sucursal_id=$2 ORDER BY id`, [tenantId, branchKey]
+      WHERE tenant_id=$1::uuid AND (sucursal_id=$2 OR sucursal_id IS NULL)
+        AND ($3::text='' OR id::text=$3) ORDER BY id`, [tenantId, branchKey,String(args.requested_doctor_id||'')]
   );
   const doctors = doctorsResult.rows || [];
   if (!doctors.length) return { slots: [], date, branch_key: branchKey, reason: 'no_doctors' };
@@ -110,8 +108,9 @@ async function checkAvailability(q, ctx, args) {
     `SELECT id, doctor_id, start_time::text AS start_time, COALESCE(duration_hours,1) AS duration_hours, status
        FROM appointments
       WHERE tenant_id=$1::uuid AND sucursal_id=$2 AND date=$3::date
-        AND LOWER(COALESCE(status,'')) NOT LIKE '%cancel%'`,
-    [tenantId, branchKey, date]
+        AND LOWER(COALESCE(status,'')) NOT LIKE '%cancel%'
+        AND ($4::bigint=0 OR id<>$4::bigint)`,
+    [tenantId, branchKey, date, Number(args.exclude_appointment_id||0)]
   );
   const busy = appointmentsResult.rows || [];
   const timeZone =
@@ -122,6 +121,7 @@ async function checkAvailability(q, ctx, args) {
   const localNow = localNowParts(timeZone);
   const todayLocal = localNow.date;
   const currentMins = localNow.minutes;
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(date) || date<todayLocal)return {slots:[],date,branch_key:branchKey,reason:'date_in_past_or_invalid'};
   const minRequested = args.min_start_mins == null ? null : Number(args.min_start_mins);
   const slots = [];
 
@@ -178,28 +178,24 @@ async function findFutureAppointment(q, ctx, args = {}) {
   const phone = normalizePhone(args.phone);
   const patient = String(args.patient || '').trim();
 
-  const { rows } = await q(
-    `SELECT id, patient, phone, doctor_id, service_id, date,
-            start_time::text AS start_time, duration_hours, status,
-            sucursal_id, tenant_id
-       FROM appointments
-      WHERE tenant_id = $1::uuid
-        AND date >= CURRENT_DATE
-        AND LOWER(COALESCE(status,'')) NOT LIKE '%cancel%'
-        AND (
-          ($2 <> '' AND regexp_replace(COALESCE(phone,''), '\\D', '', 'g') = $2)
-          OR
-          ($3 <> '' AND LOWER(TRIM(patient)) = LOWER(TRIM($3)))
-        )
-      ORDER BY date ASC, start_time ASC, id ASC
-      LIMIT 1`,
-    [tenantId, phone, patient]
-  );
-
-  return rows[0] || null;
+  if(!phone && !patient)return null;
+  const branchKey=String(args.branch_key||ctx.branch_key||'').trim();
+  const {rows}=await q(`SELECT id,patient,phone,doctor_id,service_id,date::text AS date,
+    start_time::text AS start_time,duration_hours,status,sucursal_id,tenant_id
+    FROM appointments WHERE tenant_id=$1::uuid AND date>=CURRENT_DATE
+    AND LOWER(COALESCE(status,'')) NOT LIKE '%cancel%'
+    AND ($4='' OR sucursal_id=$4)
+    AND ($5::bigint=0 OR id=$5::bigint)
+    AND ($6::date IS NULL OR date=$6::date)
+    AND ($2='' OR regexp_replace(COALESCE(phone,''),'\\D','','g')=$2)
+    AND ($3='' OR LOWER(TRIM(patient))=LOWER(TRIM($3)))
+    ORDER BY date,start_time,id LIMIT 2`,[tenantId,phone,patient,branchKey,Number(args.lookup_id||0),args.lookup_date||null]);
+  if(rows.length>1){const error=new Error('Encontré varias citas. Indica el número de la cita que deseas modificar; no haré cambios hasta identificarla.');error.code='AMBIGUOUS_APPOINTMENT';throw error;}
+  return rows[0]||null;
 }
 
 async function rescheduleAppointment(q, ctx, args = {}) {
+  if(q.withTransaction && !q.inTransaction)return q.withTransaction(tx=>rescheduleAppointment(tx,ctx,args));
   const tenantId = String(ctx.tenant_id || ctx.clinic_id || '').trim();
   if (!tenantId) throw new Error('No se pudo identificar la empresa');
 
@@ -227,7 +223,7 @@ async function rescheduleAppointment(q, ctx, args = {}) {
       `SELECT id, COALESCE(duration_hours,1) AS duration_hours
          FROM services
         WHERE tenant_id=$1::uuid
-          AND sucursal_id=$2
+          AND (sucursal_id=$2 OR sucursal_id IS NULL)
           AND id::text=$3
           AND COALESCE(active,TRUE)=TRUE
         LIMIT 1`,
@@ -245,10 +241,12 @@ async function rescheduleAppointment(q, ctx, args = {}) {
 
   if (!Number.isFinite(durationHours) || durationHours <= 0) durationHours = 1;
   const durationMins = Math.max(30, Math.ceil(durationHours * 60 / 30) * 30);
+  const availability=await checkAvailability(q,ctx,{...args,branch_key:branchKey,date,service_id:serviceId,exact_time:startTime,exclude_appointment_id:current.id});
+  if(!availability.slots.some(slot=>slot.start_time===startTime)){const error=new Error('El horario seleccionado ya no está disponible');error.code='SLOT_UNAVAILABLE';throw error;}
   const requestedStart = timeToMinutes(startTime);
   const requestedEnd = requestedStart + durationMins;
 
-  await q('BEGIN');
+  if(!q.inTransaction)await q('BEGIN');
   try {
     // Mismo candado lógico que la creación: serializa movimientos dentro
     // de empresa+sucursal+fecha y evita carreras entre crear/reagendar.
@@ -313,7 +311,7 @@ async function rescheduleAppointment(q, ctx, args = {}) {
       throw error;
     }
 
-    await q('COMMIT');
+    if(!q.inTransaction)await q('COMMIT');
 
     return {
       appointment: rows[0],
@@ -321,7 +319,7 @@ async function rescheduleAppointment(q, ctx, args = {}) {
       rescheduled: true,
     };
   } catch (error) {
-    try { await q('ROLLBACK'); } catch (_) {}
+    try { if(!q.inTransaction)await q('ROLLBACK'); } catch (_) {}
     throw error;
   }
 }
@@ -359,6 +357,10 @@ async function cancelAppointment(q, ctx, args = {}) {
 
 
 async function createAppointment(q, ctx, args) {
+  const available=await checkAvailability(q,ctx,{...args,exact_time:args.start_time});
+  if(!available.slots.some(slot=>slot.start_time===String(args.start_time||'').slice(0,5))) {
+    const error=new Error('El horario seleccionado ya no está disponible');error.code='SLOT_UNAVAILABLE';throw error;
+  }
   return createAppointmentTransactional(q, {
     tenant_id: ctx.tenant_id || ctx.clinic_id,
     clinic_id: ctx.clinic_id || ctx.tenant_id,
@@ -366,8 +368,8 @@ async function createAppointment(q, ctx, args) {
     patient: args.patient,
     phone: args.phone,
     service_id: args.service_id,
-    slot: { date: args.date, start_time: args.start_time, end_time: args.end_time || null },
+    slot: { date: args.date, start_time: args.start_time, end_time: args.end_time || null, doctor_id:available.slots[0].doctor_id,doctor_name:available.slots[0].doctor_name,duration_hours:available.slots[0].duration_hours },
   });
 }
 
-module.exports={checkAvailability,createAppointment,findFutureAppointment,rescheduleAppointment,cancelAppointment,bookingKey};
+module.exports={checkAvailability,createAppointment,findFutureAppointment,rescheduleAppointment,cancelAppointment,bookingKey,parseBusinessHours};

@@ -1,47 +1,17 @@
 'use strict';
 
-async function loadBranches(q, tenantId) {
-  try {
-    const { rows } = await q(
-      `SELECT branch_key,name,address,phone,COALESCE(whatsapp,phone) AS whatsapp,
-              business_hours,google_maps_url,directions,payment_methods,parking_info,
-              welcome_message,cancellation_policy,preparation_notes,insurance_information,
-              extra_information,promotions,ai_enabled,booking_enabled
-         FROM branches
-        WHERE tenant_id=$1::uuid AND COALESCE(active,TRUE)=TRUE
-        ORDER BY branch_key`,
-      [tenantId]
-    );
-    return rows || [];
-  } catch (error) {
-    console.warn('V5 knowledge branches:', error.message);
-    return [];
-  }
+async function loadBranches(q,tenantId) {
+  const {rows}=await q(`SELECT b.* FROM branches b WHERE b.tenant_id=$1::uuid
+    AND COALESCE((to_jsonb(b)->>'active')::boolean,TRUE)=TRUE ORDER BY b.branch_key`,[tenantId]);
+  return (rows||[]).map(b=>({...b,whatsapp:b.whatsapp||b.phone||null,ai_enabled:b.ai_enabled!==false,booking_enabled:b.booking_enabled!==false}));
 }
-
-async function loadAllServices(q, tenantId, branches) {
-  const services = [];
-  for (const branch of branches) {
-    try {
-      const { rows } = await q(
-        `SELECT id, name,
-                COALESCE(price, 0) AS price,
-                COALESCE(duration_hours, 1) AS duration_hours,
-                COALESCE(description, '') AS description,
-                sucursal_id
-           FROM services
-          WHERE tenant_id=$1::uuid
-            AND sucursal_id=$2
-            AND COALESCE(active, TRUE)=TRUE
-          ORDER BY name`,
-        [tenantId, branch.branch_key]
-      );
-      for (const service of rows || []) {
-        services.push({ ...service, branch_key: branch.branch_key });
-      }
-    } catch (error) {
-      console.warn('V5 knowledge services:', error.message);
-    }
+async function loadAllServices(q,tenantId,branches) {
+  const services=[];
+  for(const branch of branches){
+    const {rows}=await q(`SELECT s.* FROM services s WHERE s.tenant_id=$1::uuid
+      AND (s.sucursal_id=$2 OR s.sucursal_id IS NULL)
+      AND COALESCE((to_jsonb(s)->>'active')::boolean,TRUE)=TRUE ORDER BY s.name`,[tenantId,branch.branch_key]);
+    for(const item of rows||[])services.push({...item,branch_key:branch.branch_key});
   }
   return services;
 }
@@ -102,10 +72,12 @@ async function loadClinicKnowledge(q, ctx) {
   const branches = await loadBranches(q, tenantId);
   const services = await loadAllServices(q, tenantId, branches);
   const promotions = await loadPromotions(q, tenantId, branches);
+  const doctors=(await q(`SELECT id,name,sucursal_id FROM doctors WHERE tenant_id=$1::uuid ORDER BY id`,[tenantId])).rows||[];
   const urgentPhone = branches.find(branch => branch.phone)?.phone || null;
   return {
     tenant_id: tenantId,
     branches,
+    doctors,
     services: services.map(service => ({
       id: service.id,
       name: service.name,

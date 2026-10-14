@@ -122,6 +122,8 @@ function looksLikeShortPatientName(text) {
   // nombre depende del contexto conversacional (que realmente falte el paciente).
   if (!/^[A-Za-zÁÉÍÓÚÜÑáéíóúüñ' -]{2,60}$/.test(raw)) return null;
 
+  if(/^(si|no|ok|okay|claro|correcto|perfecto|adelante|de acuerdo|esta bien|me parece bien|no lo se|no quiero|por favor)(?:\s|$)/.test(n))return null;
+  if(/^(una|uno|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|once|doce)(?:\s+y\s+(media|cuarto))?$/.test(n))return null;
   const words = raw.split(/\s+/).filter(Boolean);
   if (words.length < 1 || words.length > 5) return null;
 
@@ -147,7 +149,7 @@ function extractPatientAge(text) {
 function extractPatient(text) {
   const raw = String(text || '').trim();
   const patterns = [
-    /(?:la cita (?:es|ser[aá]) para|es para|a nombre de|mi nombre es|me llamo)\s+([A-Za-zÁÉÍÓÚÜÑáéíóúüñ][A-Za-zÁÉÍÓÚÜÑáéíóúüñ' -]{1,60})/i,
+    /(?:la cita (?:es|ser[aá]) para|es para|a nombre de|mi nombre es|me llamo|soy)\s+([A-Za-zÁÉÍÓÚÜÑáéíóúüñ][A-Za-zÁÉÍÓÚÜÑáéíóúüñ' -]{1,60})/i,
     /(?:para mi hija|para mi hijo)\s+([A-Za-zÁÉÍÓÚÜÑáéíóúüñ][A-Za-zÁÉÍÓÚÜÑáéíóúüñ' -]{1,60})/i,
   ];
   for (const pattern of patterns) {
@@ -215,35 +217,45 @@ function addDays(base, days) {
   return date.toISOString().slice(0, 10);
 }
 
-function parseDate(text, timeZone = 'America/Tijuana', now = new Date()) {
-  const n = normalize(text);
-  const local = dateParts(timeZone, now);
-  const base = new Date(Date.UTC(local.year, local.month - 1, local.day));
-
-  // Cuando el mensaje contiene palabras contradictorias por una corrección del paciente,
-  // se prioriza la referencia más específica/futura: "pasado mañana" > "mañana" > "hoy".
-  if (/\bpasado manana\b/.test(n)) return addDays(base, 2);
-  if (/\bmanana\b/.test(n)) return addDays(base, 1);
-  if (/\bhoy\b/.test(n)) return addDays(base, 0);
-
-  const weekdays = {
-    domingo: 0, lunes: 1, martes: 2, miercoles: 3,
-    jueves: 4, viernes: 5, sabado: 6,
-  };
-  const weekday = Object.keys(weekdays).find(day => new RegExp(`\\b${day}\\b`).test(n));
-  if (weekday) {
-    let delta = (weekdays[weekday] - base.getUTCDay() + 7) % 7;
-    if (delta === 0) delta = 7;
-    return addDays(base, delta);
-  }
-
-  const iso = n.match(/\b(20\d{2})[-/](\d{1,2})[-/](\d{1,2})\b/);
-  if (iso) {
-    return `${iso[1]}-${String(iso[2]).padStart(2, '0')}-${String(iso[3]).padStart(2, '0')}`;
-  }
-  return null;
+function calendarWords(text) {
+  const words={primero:1,uno:1,dos:2,tres:3,cuatro:4,cinco:5,seis:6,siete:7,ocho:8,nueve:9,diez:10,once:11,doce:12,trece:13,catorce:14,quince:15,dieciseis:16,diecisiete:17,dieciocho:18,diecinueve:19,veinte:20,veintiuno:21,veintidos:22,veintitres:23,veinticuatro:24,veinticinco:25,veintiseis:26,veintisiete:27,veintiocho:28,veintinueve:29,treinta:30,'treinta y uno':31};
+  const normalized=normalize(text);
+  return normalized.replace(new RegExp(`\\b(${Object.keys(words).sort((a,b)=>b.length-a.length).join('|')})\\s+(?:de\\s+)?(?=enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre)`,'g'),(_,word)=>words[word]+' de ');
+}
+function timeWords(text) {
+  const words={una:1,uno:1,dos:2,tres:3,cuatro:4,cinco:5,seis:6,siete:7,ocho:8,nueve:9,diez:10,once:11,doce:12,trece:13,catorce:14,quince:15,dieciseis:16,diecisiete:17,dieciocho:18,diecinueve:19,veinte:20,veintiuna:21,veintidos:22,veintitres:23};
+  let value=String(text||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/\ba\.?\s*m\.?\b/g,'am').replace(/\bp\.?\s*m\.?\b/g,'pm');
+  const names=Object.keys(words).join('|');
+  value=value.replace(new RegExp(`(\\b(?:a las?|despues de las?|antes de las?|desde las?)\\s+)(${names})\\b`,'g'),(_,prefix,word)=>prefix+words[word]);
+  value=value.replace(new RegExp(`\\b(${names})\\s+(?=am|pm)`,'g'),(_,word)=>words[word]+' ');
+  value=value.replace(/\b(\d{1,2})\s+y\s+(media|cuarto)\b/g,(_,hour,part)=>hour+':'+(part==='media'?'30':'15'));
+  value=value.replace(/\b(\d{1,2})\s+menos\s+cuarto\b/g,(_,hour)=>(Number(hour)-1||12)+':45');
+  return value.replace(/[¿?¡!.,;()[\]{}]/g,' ').replace(/\s+/g,' ').trim();
 }
 
+function parseDate(text, timeZone = 'America/Tijuana', now = new Date()) {
+  const raw=String(text||'');
+  const n=calendarWords(raw);
+  const local=dateParts(timeZone,now);
+  const base=new Date(Date.UTC(local.year,local.month-1,local.day));
+  const valid=(year,month,day)=>{
+    const d=new Date(Date.UTC(year,month-1,day));
+    return d.getUTCFullYear()===year && d.getUTCMonth()+1===month && d.getUTCDate()===day
+      ? d.toISOString().slice(0,10):null;
+  };
+  const iso=raw.match(/\b(20\d{2})[-/](\d{1,2})[-/](\d{1,2})\b/);
+  if(iso)return valid(Number(iso[1]),Number(iso[2]),Number(iso[3]));
+  const months={enero:1,febrero:2,marzo:3,abril:4,mayo:5,junio:6,julio:7,agosto:8,septiembre:9,setiembre:9,octubre:10,noviembre:11,diciembre:12};
+  const natural=n.match(/\b(\d{1,2})\s+(?:de\s+)?(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre)(?:\s+(?:de\s+)?(20\d{2}))?\b/);
+  if(natural)return valid(Number(natural[3]||local.year),months[natural[2]],Number(natural[1]));
+  if(/\bpasado manana\b/.test(n))return addDays(base,2);
+  if(/\bmanana\b/.test(n))return addDays(base,1);
+  if(/\bhoy\b/.test(n))return addDays(base,0);
+  const weekdays={domingo:0,lunes:1,martes:2,miercoles:3,jueves:4,viernes:5,sabado:6};
+  const weekday=Object.keys(weekdays).find(day=>new RegExp(`\\b${day}\\b`).test(n));
+  if(weekday){let delta=(weekdays[weekday]-base.getUTCDay()+7)%7;if(delta===0)delta=7;return addDays(base,delta);}
+  return null;
+}
 
 function normalizeStoredDate(dateValue, timeZone = 'America/Tijuana', now = new Date()) {
   const raw = String(dateValue || '').trim();
@@ -286,7 +298,7 @@ function naturalDateLabel(dateValue, timeZone = 'America/Tijuana', now = new Dat
 }
 
 function parseTimePreference(text, previous = {}) {
-  const n = normalize(text);
+  const n = timeWords(text);
   // Aceptar tanto "a las 4 pm" como una corrección breve "4 pm".
   // La forma breve exige AM/PM explícito para no confundir edades, teléfonos u otros números.
   const match = n.match(
@@ -333,6 +345,7 @@ function parseTimePreference(text, previous = {}) {
     hour += 12;
   }
 
+  if(hour>23 || minute>59 || hour<0 || (meridiem && Number(match[1])>12))return {type:'invalid'};
   const value = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
   if (/\bdespues de|desde\b/.test(n)) return { type: 'after', after_time: value };
   if (/\bantes de\b/.test(n)) return { type: 'before', before_time: value };
@@ -356,6 +369,8 @@ function informationIntents(text) {
   if (/\bhorario|a que hora|abren|cierran\b/.test(n)) intents.push('business_hours');
   if (/\bpago|tarjeta|efectivo|transferencia\b/.test(n)) intents.push('payment_methods');
   if (/\bestacionamiento|parking\b/.test(n)) intents.push('parking');
+  if (/\b(telefono|numero de contacto|whatsapp|como los contacto|a que numero)\b/.test(n) && !extractPhone(text))intents.push('contact');
+  if (/\b(seguro|seguros|aseguradora)\b/.test(n))intents.push('insurance');
   return [...new Set(intents)];
 }
 
@@ -390,6 +405,10 @@ function deriveFacts(text, knowledge, state, options = {}) {
   if (appointmentAction) {
     collected.booking_mode = appointmentAction;
   }
+  if(appointmentAction || ['cancel','reschedule'].includes(collected.booking_mode)) {
+    const appointmentNumber=String(text).match(/\b(?:cita|numero|número)(?:\s+(?:numero|número))?\s*#?\s*(\d+)\b/i);
+    if(appointmentNumber)collected.lookup_id=Number(appointmentNumber[1]);
+  }
   const branchMention = findBranch(text, knowledge.branches);
   const infoIntents = informationIntents(text);
   const branchIsInformationalOnly = Boolean(
@@ -420,6 +439,12 @@ function deriveFacts(text, knowledge, state, options = {}) {
     );
   }
 
+  const doctorPool=(knowledge.doctors||[]).filter(d=>!targetBranchKey || d.sucursal_id===targetBranchKey || d.sucursal_id==null);
+  const fullDoctors=doctorPool.filter(d=>new RegExp(`\\b${escapeRegex(normalize(d.name).replace(/^(?:doctor|doctora|dr|dra)\s+/,''))}\\b`).test(normalize(text)));
+  const namedDoctors=fullDoctors.length?fullDoctors:doctorPool.filter(d=>{const first=normalize(d.name).replace(/^(?:doctor|doctora|dr|dra)\s+/,'').split(' ')[0];return first.length>=3 && new RegExp(`\\b${escapeRegex(first)}\\b`).test(normalize(text));});
+  const doctor=namedDoctors.length===1 && (/\b(con|doctor|doctora|dr|dra)\b/.test(normalize(text)) || collected.doctor_choice_pending)?namedDoctors[0]:null;
+  if(doctor){collected.requested_doctor_id=doctor.id;collected.requested_doctor_name=doctor.name;}
+  if(branch && collected.requested_doctor_id && !doctorPool.some(d=>String(d.id)===String(collected.requested_doctor_id))){delete collected.requested_doctor_id;delete collected.requested_doctor_name;}
   const phone = extractPhone(text);
   let patient = extractPatient(text);
   const patientAge = extractPatientAge(text);
@@ -437,6 +462,7 @@ function deriveFacts(text, knowledge, state, options = {}) {
     !phone &&
     !branchMention &&
     !service &&
+    !doctor &&
     !parseDate(text, 'America/Tijuana', options.now || new Date()) &&
     !parseTimePreference(text, collected) &&
     infoIntents.length === 0 &&
@@ -479,7 +505,8 @@ function deriveFacts(text, knowledge, state, options = {}) {
   }
 
   const date = parseDate(text, clinicTimeZone, currentNow);
-  const time = parseTimePreference(text, collected);
+  let time = parseTimePreference(text, collected);
+  if(!time && state.last_tool_result?.type==='check_availability' && /^(?:\d{1,2}(?::\d{2})?|una|uno|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|once|doce)(?:\s+y\s+(?:media|cuarto))?$/.test(normalize(text)))time=parseTimePreference('a las '+String(text),collected);
 
   if (branch) {
     collected.branch_key = branch.branch_key;
@@ -562,6 +589,10 @@ function deriveFacts(text, knowledge, state, options = {}) {
       service: service
         ? { id: targetBranchKey ? service.id : null, name: service.name }
         : null,
+      doctor:doctor?{id:doctor.id,name:doctor.name}:null,
+      doctor_ambiguous:namedDoctors.length>1 && /\b(con|doctor|doctora|dr|dra)\b/.test(normalize(text)),
+      doctor_unknown:namedDoctors.length===0 && /\bcon\s+(?:(?:el|la)\s+)?(?:doctor|doctora|dr|dra)\s+(?!disponible|cualquier)[a-z]{3,}/.test(normalize(text)),
+      invalid_date:!date && /\b(?:20\d{2}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}\s+(?:de\s+)?(?:enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre))\b/.test(calendarWords(text)),
       phone,
       patient,
       patient_age: patientAge,
@@ -733,6 +764,7 @@ module.exports = {
   normalizeStoredDate,
   naturalDateLabel,
   parseTimePreference,
+  timeWords,
   informationIntents,
   appointmentActionIntent,
   deriveFacts,
