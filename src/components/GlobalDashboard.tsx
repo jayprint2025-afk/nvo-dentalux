@@ -1,3 +1,4 @@
+import {api as authenticatedApi,fetchBranches} from '../lib/api';
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { jsPDF } from 'jspdf';
 import html2canvas from 'html2canvas';
@@ -123,11 +124,6 @@ const CHART_COLORS = {
 
 
 // === Helper LOCAL: obtener datos reales del dashboard desde el backend ===
-const API_BASE_URL =
-  import.meta.env.PROD
-    ? 'https://http://localhost:4001'
-    : 'https://http://localhost:4001.';
-
 async function obtenerDatosDashboard(
   sucursalId: string,
   fechaInicio: string,
@@ -137,22 +133,7 @@ async function obtenerDatosDashboard(
   if (fechaInicio) params.set('fecha_inicio', fechaInicio);
   if (fechaFin) params.set('fecha_fin', fechaFin);
 
-  const url = `${API_BASE_URL}/api/dashboard/${sucursalId}?${params.toString()}`;
-
-  const res = await fetch(url, {
-    method: 'GET',
-    credentials: 'include',
-    headers: {
-      'content-type': 'application/json',
-    },
-  });
-
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    throw new Error(`Error al obtener dashboard (${res.status}): ${text}`);
-  }
-
-  return res.json();
+  return authenticatedApi(`/dashboard/${encodeURIComponent(sucursalId)}?${params.toString()}`);
 }
 
 const GlobalDashboard: React.FC = () => {
@@ -162,6 +143,8 @@ const GlobalDashboard: React.FC = () => {
   );
   const [fechaFin, setFechaFin] = useState(new Date().toISOString().split('T')[0]);
   const [loading, setLoading] = useState(false);
+  const [dashboardError,setDashboardError]=useState<string|null>(null);
+  const loadGeneration=useRef(0);
   const [vistaActiva, setVistaActiva] = useState<'resumen' | 'financiero' | 'operacional' | 'laboratorio' | 'doctores' | 'inventario' | 'servicios' | 'avanzado'>('resumen');
   const [metaIngresos, setMetaIngresos] = useState(50000);
   const [sucursalSeleccionada, setSucursalSeleccionada] = useState<string>('todas');
@@ -345,19 +328,22 @@ const waitForRechartsLayout = async () => {
   }, [fechaInicio, fechaFin]);
 
   const cargarDatosSucursales = async () => {
-    setLoading(true);
-    try {
-      // Aquí irían las llamadas reales a tu API para cada sucursal
-      const sucursal1Data = await cargarDatosSucursal('sucursal_1');
-      const sucursal2Data = await cargarDatosSucursal('sucursal_2');
-      
-      setSucursalesData([sucursal1Data, sucursal2Data]);
-    } catch (error) {
-      console.error('Error cargando datos:', error);
-    } finally {
-      setLoading(false);
-    }
+    const generation=++loadGeneration.current;
+    setLoading(true);setDashboardError(null);
+    try{
+      const branches=await fetchBranches();
+      const data=await Promise.all(branches.map(b=>cargarDatosSucursal(b.branchKey)));
+      if(generation===loadGeneration.current)setSucursalesData(data);
+    }catch(error:any){
+      if(generation===loadGeneration.current){setSucursalesData([]);setDashboardError(error.message||'No se pudo actualizar el dashboard')}
+    }finally{if(generation===loadGeneration.current)setLoading(false)}
   };
+  useEffect(()=>{
+    const update=(event:Event)=>{if(event.type==='dentalux:finance-changed'&&(event as CustomEvent).detail?.canonical)return;void cargarDatosSucursales()};
+    window.addEventListener('cliniqone:f1-data-changed',update);
+    window.addEventListener('dentalux:finance-changed',update);
+    return ()=>{window.removeEventListener('cliniqone:f1-data-changed',update);window.removeEventListener('dentalux:finance-changed',update);loadGeneration.current++};
+  },[fechaInicio,fechaFin]);
 
  const cargarDatosSucursal = async (sucursalId: string): Promise<SucursalData> => {
   // Declarar fuera del try para poder usarlo en el catch
@@ -406,43 +392,7 @@ const waitForRechartsLayout = async () => {
     };
 
   } catch (error) {
-    console.warn(`⚠️ Error obteniendo datos reales para ${sucursalId}, usando fallback:`, error);
-    // Logs defensivos (datosReales puede ser null/undefined)
-    console.log('🔍 DEBUG - Datos reales appointments:', datosReales?.appointments?.slice(0, 2));
-    console.log('🔍 DEBUG - Datos reales payments:', datosReales?.payments?.slice(0, 2));
-    console.log('🔍 DEBUG - Datos reales doctors:', datosReales?.doctors?.slice(0, 2));
-
-    // FALLBACK: Si falla, usar datos simulados (y aprovechar lo que sí haya llegado)
-    const apptsFallback = datosReales?.appointments ?? generateMockAppointments(sucursalId);
-    const servicesFallback = datosReales?.services ?? generateMockServices();
-
-    return {
-      id: sucursalId,
-      nombre: sucursalId === 'sucursal_1' ? 'Sucursal Centro' : 'Sucursal Norte',
-
-      appointments: apptsFallback,
-      payments: datosReales?.payments ?? generateMockPayments(sucursalId),
-      expenses: datosReales?.expenses ?? generateMockExpenses(sucursalId),
-      trabajosLaboratorio: datosReales?.trabajosLaboratorio ?? generateMockLaboratorio(sucursalId),
-
-      doctors: datosReales?.doctors ?? generateMockDoctors(sucursalId),
-      services: servicesFallback,
-
-      inventory: datosReales?.inventory ?? generateMockInventory(sucursalId),
-      productosInventario: datosReales?.inventory ?? generateMockInventory(sucursalId),
-
-      // usa lo que haya (reales o mock) para construir ventasServicios
-      ventasServicios: convertirServiciosAVentas(servicesFallback, apptsFallback),
-
-      alertasInventario: generateMockAlertas(sucursalId),
-
-      configuracion: {
-        metaIngresos: sucursalId === 'sucursal_1' ? 60000 : 45000,
-        metaCitas: sucursalId === 'sucursal_1' ? 300 : 250,
-        metaConversion: 85,
-        metaInventario: 95,
-      },
-    };
+    throw error;
   }
 };
 
@@ -473,17 +423,7 @@ const convertirServiciosAVentas = (services: any[], appointments: any[]) => {
 // Función auxiliar para obtener alertas de inventario
 const obtenerAlertasInventario = async (sucursalId: string) => {
   try {
-    const API_BASE_URL = process.env.NODE_ENV === 'production' 
-      ? 'http://localhost:4001'
-      : 'http://localhost:4001';
-      
-    const response = await fetch(`${API_BASE_URL}/api/inventario/${sucursalId}`);
-    
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
-    }
-    
-    const data = await response.json();
+    const data=await authenticatedApi(`/inventario/${encodeURIComponent(sucursalId)}`);
     return data.alertas || [];
     
   } catch (error) {
@@ -2974,6 +2914,7 @@ const exportToPDF = async () => {
   id="pdf-root"
   className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pb-12 bg-white"
 >
+        {dashboardError && <div role="alert" className="m-4 rounded border border-red-300 bg-red-50 p-3 text-red-700">{dashboardError}</div>}
         {loading ? (
           <div className="flex flex-col items-center justify-center h-64 bg-white rounded-2xl shadow-lg">
             <div className="animate-spin rounded-full h-16 w-16 border-b-4 border-blue-600 mb-4"></div>

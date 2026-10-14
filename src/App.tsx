@@ -3759,8 +3759,10 @@ const pagarLaboratorio = async (
 
 React.useEffect(() => {
   const refresh=(event:Event)=>{
-    const type=String((event as CustomEvent).detail?.type||'');
+    if(event.type==='dentalux:finance-changed' && (event as CustomEvent).detail?.canonical)return;
+    const type=String((event as CustomEvent).detail?.type||(event.type==='dentalux:finance-changed'?'finance_changed':''));
     const jobs:Promise<unknown>[]=[];
+    if(type==='appointments_changed') jobs.push(reloadAppointments());
     if(type==='doctors_changed') jobs.push(reloadDoctors());
     if(type==='services_changed') jobs.push(reloadServices());
     if(['payments_changed','expenses_changed','finance_changed'].includes(type)) jobs.push(reloadPayments(),reloadExpenses());
@@ -3770,8 +3772,9 @@ React.useEffect(() => {
     Promise.allSettled(jobs);
   };
   window.addEventListener('cliniqone:f1-data-changed',refresh);
-  return ()=>window.removeEventListener('cliniqone:f1-data-changed',refresh);
-},[reloadDoctors,reloadServices,reloadPayments,reloadExpenses,reloadLaboratorios,reloadTrabajos]);
+  window.addEventListener('dentalux:finance-changed',refresh);
+  return ()=>{window.removeEventListener('cliniqone:f1-data-changed',refresh);window.removeEventListener('dentalux:finance-changed',refresh)};
+},[reloadAppointments,reloadDoctors,reloadServices,reloadPayments,reloadExpenses,reloadLaboratorios,reloadTrabajos]);
 
 // Handler para cambio de sucursal
 const handleSucursalChange = async (nuevaSucursal: string) => {
@@ -7734,9 +7737,10 @@ function DoctorQuickEdit({ doctor, settings, onChange }:{
 
 
 React.useEffect(()=>{
-  const changed=(event:Event)=>{if(['productivity_changed','payments_changed','expenses_changed','doctors_changed','laboratory_changed'].includes((event as CustomEvent).detail?.type))void reloadAll()};
+  const changed=(event:Event)=>{if(event.type==='dentalux:finance-changed' && (event as CustomEvent).detail?.canonical)return;const type=(event as CustomEvent).detail?.type||(event.type==='dentalux:finance-changed'?'finance_changed':'');if(['productivity_changed','payments_changed','expenses_changed','finance_changed','doctors_changed','laboratory_changed'].includes(type))void reloadAll()};
   window.addEventListener('cliniqone:f1-data-changed',changed);
-  return ()=>window.removeEventListener('cliniqone:f1-data-changed',changed);
+  window.addEventListener('dentalux:finance-changed',changed);
+  return ()=>{window.removeEventListener('cliniqone:f1-data-changed',changed);window.removeEventListener('dentalux:finance-changed',changed)};
 },[reloadAll]);
 
 // ==============================

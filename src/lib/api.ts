@@ -1,3 +1,4 @@
+import {notifyApiMutation} from './f1-data-events';
 // Configuración de la API
 const API_BASE = import.meta.env.VITE_API_BASE || 'https://localhost:5173/';
 const USE_MELISSA = import.meta.env.VITE_USE_MELISSA === 'true';
@@ -25,6 +26,7 @@ export const setSucursal = (sucursalId: string) => {
 };
 
 export async function api(endpoint: string, options: RequestInit = {}) {
+  const requestSucursal=currentSucursal;
   let normalizedEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
   
   // Si USE_MELISSA es true, agregar prefijo /melissa
@@ -75,7 +77,7 @@ export async function api(endpoint: string, options: RequestInit = {}) {
 }
 
 // ✅ Si es 204 No Content (muy común en DELETE)
-if (response.status === 204) return null;
+if (response.status === 204) {if(requestSucursal===currentSucursal)notifyApiMutation(endpoint,options.method||'GET',null);return null;}
 
 // ✅ Leer body de forma segura
 const text = await response.text().catch(() => '');
@@ -83,7 +85,9 @@ if (!text) return null;
 
 // ✅ Si trae JSON lo parseamos, si no devolvemos texto
 try {
-  return JSON.parse(text);
+  const data=JSON.parse(text);
+  if(requestSucursal===currentSucursal)notifyApiMutation(endpoint,options.method||'GET',data);
+  return data;
 } catch {
   return text as any;
 }

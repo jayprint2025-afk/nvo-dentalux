@@ -1,3 +1,4 @@
+import {eventsForTool} from './lib/f1-data-events';
 import React from "react";
 import { MessagesSquare, Send, X, Trash2, Mic, MicOff, Bell, CalendarDays, Volume2, Settings2,
   Search, Filter, Lock, Unlock, MessageCircle, Instagram, RefreshCw, User, Inbox } from "lucide-react";
@@ -1019,6 +1020,8 @@ const buildLeadReport = React.useCallback(() => {
 
 
   const applyF1ClientActions = React.useCallback((actions: any[]) => {
+    const changedKeys=new Set<string>();
+    const notify=(event:any)=>{const key=`${event.type}:${event.record_id||''}`;if(changedKeys.has(key))return;changedKeys.add(key);window.dispatchEvent(new CustomEvent('cliniqone:f1-data-changed',{detail:{...event,source:'f1'}}))};
     // V19: las respuestas de /f1/actions pueden envolver result/client_event
     // en mÃ¡s de un nivel. Recorremos el resultado completo para no perder
     // appointments_changed cuando Hanna ejecuta una herramienta por voz.
@@ -1028,6 +1031,7 @@ const buildLeadReport = React.useCallback(() => {
 
       const clientAction = node?.client_action;
       const clientEvent = node?.client_event;
+      if(node?.name && node?.result){for(const event of eventsForTool(node.name,node.result||node,node.args||{})){notify(event)}}
 
       if (clientAction?.type === 'navigate' && clientAction?.target) {
         window.dispatchEvent(new CustomEvent('cliniqone:f1-navigate', {
@@ -1054,7 +1058,7 @@ const buildLeadReport = React.useCallback(() => {
         window.dispatchEvent(new CustomEvent('cliniqone:f1-open-medical-record',{detail:clientAction.patient}));
       }
       if (clientEvent?.type && clientEvent.type !== 'appointments_changed' && clientEvent.type !== 'finance_changed') {
-        window.dispatchEvent(new CustomEvent('cliniqone:f1-data-changed',{detail:{...clientEvent,source:'f1'}}));
+        notify(clientEvent);
       }
 
       if (clientEvent?.type === 'appointments_changed') {
@@ -1090,6 +1094,7 @@ const buildLeadReport = React.useCallback(() => {
         window.dispatchEvent(new CustomEvent('dentalux:finance-changed', {
           detail: {
             source: 'f1',
+            canonical: true,
             area: clientEvent.area || null,
             movement_id: clientEvent.movement_id || null,
           },
@@ -1148,6 +1153,8 @@ const buildLeadReport = React.useCallback(() => {
     }
 
     if (String(event.name).startsWith("appointment.")) {
+      window.dispatchEvent(new CustomEvent("cliniqone:f1-data-changed",{detail:{type:"appointments_changed",source:"event-bus"}}));
+      window.dispatchEvent(new CustomEvent("cliniqone:f1-data-changed",{detail:{type:"inventory_changed",source:"event-bus"}}));
       window.dispatchEvent(new CustomEvent("dentalux:appointments-changed", {
         detail: {
           source: "event-bus",
@@ -1158,9 +1165,11 @@ const buildLeadReport = React.useCallback(() => {
     }
 
     if (event.name === "payment.created" || event.name === "expense.created") {
+      window.dispatchEvent(new CustomEvent("cliniqone:f1-data-changed",{detail:{type:"finance_changed",source:"event-bus"}}));
       window.dispatchEvent(new CustomEvent("dentalux:finance-changed", {
         detail: {
           source: "event-bus",
+          canonical: true,
           event_name: event.name,
           movement_id: event?.payload?.payment_id || event?.payload?.expense_id || null,
         },

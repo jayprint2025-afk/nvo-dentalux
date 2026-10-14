@@ -2,11 +2,9 @@ import React, { useState, useEffect } from 'react';
 import { Building2, ChevronDown, CheckCircle, Wifi, WifiOff, RefreshCw } from 'lucide-react';
 import {
   api,
-  buildApiUrl,
   getSucursalActual,
   setSucursal,
   debugSucursalConfig,
-  testSucursalAPI,
   fetchBranches
 } from '../lib/api';
 
@@ -57,6 +55,7 @@ const SucursalSelector = ({ onSucursalChange, showDebug = false }) => {
     const handleSucursalChange = (event) => {
       setSucursalActual(event.detail.sucursal);
       setIsOpen(false);
+      void verificarEstadisticas();
     };
 
     const handleBranchesChanged = async () => {
@@ -66,6 +65,8 @@ const SucursalSelector = ({ onSucursalChange, showDebug = false }) => {
 
     window.addEventListener('sucursalChanged', handleSucursalChange);
     window.addEventListener('dentalux:branches-changed', handleBranchesChanged);
+    const dataChanged=(event:Event)=>{if(['appointments_changed','doctors_changed','services_changed'].includes((event as CustomEvent).detail?.type))void verificarEstadisticas()};
+    window.addEventListener('cliniqone:f1-data-changed',dataChanged);
 
     (async () => {
       await cargarSucursales();
@@ -75,37 +76,27 @@ const SucursalSelector = ({ onSucursalChange, showDebug = false }) => {
     return () => {
       window.removeEventListener('sucursalChanged', handleSucursalChange);
       window.removeEventListener('dentalux:branches-changed', handleBranchesChanged);
+      window.removeEventListener('cliniqone:f1-data-changed',dataChanged);
     };
   }, []);
 
   const verificarEstadisticas = async () => {
     setLoading(true);
     try {
-      // Probar conexión real al backend
-      const testResult = await testSucursalAPI();
-      setConnectionStatus(testResult?.ok ? 'connected' : 'disconnected');
-
-      // Cargar estadísticas desde el backend real
-      const s = getSucursalActual() || 'sucursal_1';
-      const data = await api(`/debug/sucursales?sucursal=${encodeURIComponent(s)}`);
-      setEstadisticas(data);
-      console.log('📊 Estadísticas cargadas:', data);
-    } catch (error) {
-      console.error('Error verificando estadísticas:', error);
+      const branch=getSucursalActual()||'sucursal_1';
+      const [doctors,appointments,services]=await Promise.all([api('/doctors'),api('/appointments'),api('/services')]);
+      if(branch!==getSucursalActual())return;
+      if(![doctors,appointments,services].every(Array.isArray))throw new Error('Respuesta de sucursal inválida');
+      setEstadisticas({estadisticas:{
+        doctors:[{sucursal_id:branch,count:doctors.length}],
+        appointments:[{sucursal_id:branch,count:appointments.length}],
+        services:[{sucursal_id:branch,count:services.length}]
+      }});
+      setConnectionStatus('connected');
+    } catch(error){
+      console.error('Error consultando la sucursal:',error);
       setConnectionStatus('disconnected');
-
-      // Mock para desarrollo si algo falla
-      setEstadisticas({
-        sucursales: ['sucursal_1', 'sucursal_2'],
-        estadisticas: {
-          doctors: [
-            { sucursal_id: 'sucursal_1', count: '3' },
-          ],
-          appointments: [
-            { sucursal_id: 'sucursal_1', count: '15' },
-          ]
-        }
-      });
+      setEstadisticas(null);
     } finally {
       setLoading(false);
     }
@@ -151,7 +142,8 @@ const SucursalSelector = ({ onSucursalChange, showDebug = false }) => {
   };
 
   const getSucursalStats = (sucursalId) => {
-    if (!estadisticas?.estadisticas) return 0;
+    if (!estadisticas?.estadisticas) return null;
+    if(!Object.values(estadisticas.estadisticas).some((rows:any)=>rows.some((row:any)=>row.sucursal_id===sucursalId)))return null;
     
     let totalRecords = 0;
     Object.values(estadisticas.estadisticas).forEach(table => {
@@ -182,7 +174,7 @@ const SucursalSelector = ({ onSucursalChange, showDebug = false }) => {
             {sucursalActualData?.nombre || sucursalActual || 'Sucursal'}
           </div>
           <div className="text-xs text-gray-500">
-            {getSucursalStats(sucursalActual)} registros
+            {getSucursalStats(sucursalActual)==null?'Sin consultar':`${getSucursalStats(sucursalActual)} registros`}
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -238,7 +230,7 @@ const SucursalSelector = ({ onSucursalChange, showDebug = false }) => {
                           {sucursal.descripcion}
                         </div>
                         <div className="text-xs text-gray-600 mt-1">
-                          {stats ? `${stats} registros` : 'Sin datos'}
+                          {stats==null?'Sin consultar':stats ? `${stats} registros` : 'Sin datos'}
                         </div>
                       </div>
                     </div>
@@ -289,16 +281,10 @@ const SucursalSelector = ({ onSucursalChange, showDebug = false }) => {
                     Config
                   </button>
                   <button
-                    onClick={() => {
-                      const s = getSucursalActual() || 'sucursal_1';
-                      window.open(
-                        buildApiUrl(`/debug/sucursales?sucursal=${encodeURIComponent(s)}`),
-                        '_blank'
-                      );
-                    }}
+                    onClick={()=>void verificarEstadisticas()}
                     className="px-2 py-1 text-xs bg-blue-100 text-blue-800 rounded hover:bg-blue-200"
                   >
-                    Stats API
+                    Actualizar datos
                   </button>
                 </div>
               </div>
