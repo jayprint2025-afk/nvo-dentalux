@@ -1323,8 +1323,18 @@ async function getProductivitySummary(q,ctx,args={}){
   for(const r of settings)setMap.set(String(r.doctor_id),r);
   const rows=docs.map(d=>{const k=String(d.id),p=payMap.get(k)||{cash:0,card:0,transfer:0,other:0,total:0},expense=expMap.get(k)||0,o=objMap.get(k)||null,st=setMap.get(k)||null,goal=Number(o?.meta||0),net=p.total-expense,progress=goal>0?(p.total/goal)*100:null,missing=goal>0?Math.max(0,goal-p.total):null,commissionPct=st?Number(st.comision_pct||0):null;return{doctor_id:d.id,doctor_name:d.name,income:p.total,income_cash:p.cash,income_card:p.card,income_transfer:p.transfer,income_other:p.other,expenses:expense,net,objective:o,goal,progress_pct:progress,missing_to_goal:missing,visible:st?.visible!==false,commission_pct:commissionPct,estimated_commission:commissionPct!=null?p.total*commissionPct:null}});
   const totals=rows.reduce((a,r)=>({income:a.income+r.income,expenses:a.expenses+r.expenses,net:a.net+r.net,goal:a.goal+r.goal}),{income:0,expenses:0,net:0,goal:0});
-  if(args.include_details===true && args.doctor_id!=null){const detp=(await q(`SELECT id,appointment_id,patient,service_id,amount,payment_method,date,doctor_id FROM payments WHERE tenant_id=$1::uuid AND (sucursal_id=$2 OR sucursal_id IS NULL) AND doctor_id=$3 AND date BETWEEN $4::date AND $5::date ORDER BY date,id`,[ctx.tenant_id,branch,Number(args.doctor_id),from,to])).rows;const dete=(await q(`SELECT id,concept,amount,date,doctor_id,payment_method FROM expenses WHERE tenant_id=$1::uuid AND (sucursal_id=$2 OR sucursal_id IS NULL) AND doctor_id=$3 AND date BETWEEN $4::date AND $5::date ORDER BY date,id`,[ctx.tenant_id,branch,Number(args.doctor_id),from,to])).rows;return{from,to,rows,totals,payments:detp,expenses:dete,assistant_message:`Productividad de ${doctor.name}: ingresos $${rows[0]?.income||0}, gastos $${rows[0]?.expenses||0}, neto $${rows[0]?.net||0}.`};}
-  return{from,to,rows,totals,assistant_message:`Del ${from} al ${to}: ingresos $${totals.income.toFixed(2)}, gastos $${totals.expenses.toFixed(2)}, neto $${totals.net.toFixed(2)}.`};
+  // Totales del período incluyen movimientos sin doctor, como el panel de Caja.
+  totals.income=pays.reduce((sum,r)=>sum+Number(r.total||0),0);
+  totals.expenses=exps.reduce((sum,r)=>sum+Number(r.total||0),0);
+  totals.net=totals.income-totals.expenses;
+  const activity=await require('./productivity-report').productivityActivity(q,ctx,{
+    branch,from,to,doctorId:args.doctor_id,
+    details:args.include_details===true || args.doctor_id!=null,
+  });
+  return{from,to,branch_key:branch,rows,totals,
+    unallocated:{income:totals.income-rows.reduce((s,r)=>s+r.income,0),expenses:totals.expenses-rows.reduce((s,r)=>s+r.expenses,0)},
+    ...activity,
+    assistant_message:`Del ${from} al ${to}: ingresos $${totals.income.toFixed(2)}, gastos $${totals.expenses.toFixed(2)}, neto $${totals.net.toFixed(2)}. ${activity.period_summary.appointment_count} citas en el rango, ${activity.period_summary.attended_appointments} atendidas. Consultar patients y service_analysis para el desglose; no deducir ausencia de citas a partir de pagos.`};
 }
 
 async function listObjectivesF1(q,ctx,args={}){const branch=branchOfF1(ctx,args),params=[ctx.tenant_id,branch],conds=['o.tenant_id=$1::uuid','(o.sucursal_id=$2 OR o.sucursal_id IS NULL)'];if(args.from){params.push(text(args.from));conds.push(`(o.periodo_fin IS NULL OR o.periodo_fin >= $${params.length}::date)`)}if(args.to){params.push(text(args.to));conds.push(`(o.periodo_inicio IS NULL OR o.periodo_inicio <= $${params.length}::date)`)}if(args.doctor_id!=null){await ensureDoctorInTenant(q,ctx,args.doctor_id,branch);params.push(Number(args.doctor_id));conds.push(`o.doctor_id=$${params.length}`)}const{rows}=await q(`SELECT o.id,o.doctor_id,d.name doctor_name,o.meta,o.sueldo_base,o.abonos,o.periodo_inicio,o.periodo_fin,o.created_at FROM objetivos o LEFT JOIN doctors d ON d.id=o.doctor_id AND d.tenant_id=o.tenant_id WHERE ${conds.join(' AND ')} ORDER BY COALESCE(o.periodo_inicio,o.created_at) DESC,o.id DESC`,params);return{objectives:rows,assistant_message:`Encontré ${rows.length} objetivo(s).`};}

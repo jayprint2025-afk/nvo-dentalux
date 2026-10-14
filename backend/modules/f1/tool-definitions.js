@@ -238,7 +238,7 @@ const tools = [
   {
     type: 'function',
     name: 'get_patient_history',
-    description: 'Consulta en tiempo real el historial de citas de un paciente, servicios, doctor, estado y pagos ligados. Úsala para revisar historial o expediente operativo.',
+    description: 'Consulta historial de UN PACIENTE por su nombre, servicios, doctor, estado y pagos ligados. No busca doctores. Para citas o pacientes de un doctor usa get_productivity_summary con doctor_id e include_details=true.',
     parameters: {
       type: 'object',
       properties: { patient: { type: 'string' }, branch_key: { type: 'string' }, limit: { type: 'number' } },
@@ -433,7 +433,7 @@ const tools = [
 
 
   // ===== Productividad / Objetivos =====
-  { type:'function', name:'get_productivity_summary', description:'Consulta productividad real por rango de fechas: ingresos, gastos, neto y desglose por doctor. Puede filtrar por doctor.', parameters:{type:'object',properties:{from:{type:'string'},to:{type:'string'},doctor_id:{type:['number','string']},include_details:{type:'boolean'},branch_key:{type:'string'}},required:['from','to']}},
+  { type:'function', name:'get_productivity_summary', description:'Consulta productividad por fechas: ingresos, gastos, neto, doctores, pacientes, estados de citas, métodos de pago, evolución diaria y rankings de servicios por pagos e ingresos. Para detalle completo usa include_details=true; doctor_id devuelve también citas y movimientos. No usar get_patient_history para buscar un doctor. No calcula utilidad después de costos ni ventas de productos.', parameters:{type:'object',properties:{from:{type:'string'},to:{type:'string'},doctor_id:{type:['number','string']},include_details:{type:'boolean'},branch_key:{type:'string'}},required:['from','to']}},
   { type:'function', name:'list_objectives', description:'Lista metas/objetivos configurados por doctor y período en la sucursal actual.', parameters:{type:'object',properties:{from:{type:'string'},to:{type:'string'},doctor_id:{type:['number','string']},branch_key:{type:'string'}}}},
   { type:'function', name:'create_objective', description:'Crea una meta para un doctor. Requiere doctor y meta; puede incluir sueldo base, abonos y período.', parameters:{type:'object',properties:{doctor_id:{type:['number','string']},meta:{type:'number'},base_salary:{type:'number'},abonos:{type:'number'},period_start:{type:'string'},period_end:{type:'string'},branch_key:{type:'string'}},required:['doctor_id','meta']}},
   { type:'function', name:'update_objective', description:'Actualiza una meta existente: doctor, monto de meta, sueldo base, abonos o período.', parameters:{type:'object',properties:{objective_id:{type:'number'},doctor_id:{type:['number','string']},meta:{type:'number'},base_salary:{type:'number'},abonos:{type:'number'},period_start:{type:'string'},period_end:{type:'string'},branch_key:{type:'string'}},required:['objective_id']}},
