@@ -1,3 +1,4 @@
+import {api as authenticatedApi, apiBlob} from './lib/api';
 // MedicalRecordModule.tsx - Módulo Completo de Expediente Médico Dental
 import React, { useState, useEffect, useRef } from 'react';
 import { 
@@ -122,7 +123,10 @@ interface DocumentoRadiografia {
 
 // ==================== COMPONENTE PRINCIPAL ====================
 
+type MedicalViewRequest={id:string;tab?:'datos'|'historia'|'odontograma'|'tratamientos'|'consentimientos'|'radiografias';printPreview?:boolean;consentId?:number;documentId?:number;documentAction?:'view'|'download'};
 interface MedicalRecordModuleProps {
+  viewRequest?:MedicalViewRequest;
+  recordId?:number;
   patientName: string;
   patientPhone?: string;
   appointmentId?: number;
@@ -134,6 +138,8 @@ interface MedicalRecordModuleProps {
 }
 
 export function MedicalRecordModule({
+  viewRequest,
+  recordId,
   patientName,
   patientPhone,
   appointmentId,
@@ -144,8 +150,31 @@ export function MedicalRecordModule({
   sucursalId
 }: MedicalRecordModuleProps) {
   
+  const [documentPreview,setDocumentPreview]=useState<{url:string;name:string;mime:string}|null>(null);
+  useEffect(()=>()=>{if(documentPreview?.url.startsWith('blob:'))URL.revokeObjectURL(documentPreview.url)},[documentPreview]);
+  const loadDocumentBlob=async(doc:DocumentoRadiografia)=>{
+    if(!doc.id || !/^\d+$/.test(String(doc.id)))throw new Error('Documento sin identificador válido');
+    return apiBlob(`/api/documento-radiografia/${doc.id}/download`);
+  };
+  const viewDocument=async(doc:DocumentoRadiografia)=>{
+    try{
+      if(doc.url){const url=new URL(doc.url);if(!['https:','http:'].includes(url.protocol))throw new Error('URL inválida');window.open(url.href,'_blank','noopener,noreferrer');return}
+      const blob=await loadDocumentBlob(doc);
+      if(!blob.type.startsWith('image/') && blob.type!=='application/pdf')throw new Error('Este formato se consulta descargando el documento');
+      setDocumentPreview({url:URL.createObjectURL(blob),name:doc.nombre,mime:blob.type});
+    }catch(error:any){alert(error.message)}
+  };
+  const downloadDocument=async(doc:DocumentoRadiografia)=>{
+    try{
+      if(doc.url){const url=new URL(doc.url);if(!['https:','http:'].includes(url.protocol))throw new Error('URL inválida');window.open(url.href,'_blank','noopener,noreferrer');return}
+      const blob=await loadDocumentBlob(doc),url=URL.createObjectURL(blob),link=document.createElement('a');
+      link.href=url;link.download=doc.nombre.replace(/[\\/]/g,'_');link.click();URL.revokeObjectURL(url);
+    }catch(error:any){alert(error.message)}
+  };
+
   // ==================== ESTADOS ====================
   
+  const lastViewRequest=useRef<string>();
   const [activeTab, setActiveTab] = useState<'datos' | 'historia' | 'odontograma' | 'tratamientos' | 'consentimientos' | 'radiografias'>('datos');
   const [loading, setLoading] = useState(false);
   const [expediente, setExpediente] = useState<ExpedienteMedico | null>(null);
@@ -183,37 +212,7 @@ const [selectedConsentimientoForPrint, setSelectedConsentimientoForPrint] = useS
   ) {
     const { method = 'GET', body, sucursalId: sucursalCustom } = options;
 
-    // el backend bueno en Render
-    const API_BASE = (import.meta as any).env?.VITE_API_BASE || '';
-
-    const url =
-      `${API_BASE}/api` +
-      (endpoint.startsWith('/') ? endpoint : `/${endpoint}`) +
-      ((sucursalCustom || sucursalId)
-        ? `?sucursal=${encodeURIComponent(sucursalCustom || sucursalId)}`
-        : '');
-
-    const fetchOptions: RequestInit = {
-      method,
-      headers: {
-        'Content-Type': 'application/json'
-      }
-    };
-
-    if (body && method !== 'GET') {
-      fetchOptions.body = JSON.stringify(body);
-    }
-
-    const res = await fetch(url, fetchOptions);
-
-    const text = await res.text();
-    const data = text ? JSON.parse(text) : null;
-
-    if (!res.ok) {
-      throw new Error(`HTTP ${res.status}: ${data?.error || 'Error inesperado'}`);
-    }
-
-    return data;
+    return authenticatedApi(endpoint,{method,headers:{'x-sucursal':sucursalCustom || sucursalId},...(body && method!=='GET'?{body:JSON.stringify(body)}:{})});
   }
 
   // preferimos el apiRequest que venga como prop, si existe
@@ -326,14 +325,38 @@ const [selectedConsentimientoForPrint, setSelectedConsentimientoForPrint] = useS
 
       cargarExpedienteMedico();
     }
-  }, [isOpen, patientName, patientPhone, appointmentId, sucursalId]);
+  }, [isOpen, patientName, patientPhone, appointmentId, sucursalId, recordId]);
+
+  useEffect(()=>{
+    const changed=(event:Event)=>{
+      const detail=(event as CustomEvent).detail;
+      if(isOpen && detail?.type==='medical_record_changed' && (!detail.record_id || String(detail.record_id)===String(expediente?.id)))void cargarExpedienteMedico();
+    };
+    window.addEventListener('cliniqone:f1-data-changed',changed);
+    return ()=>window.removeEventListener('cliniqone:f1-data-changed',changed);
+  },[isOpen,expediente?.id,patientName,sucursalId]);
+
+  useEffect(()=>{
+    if(recordId && String(expediente?.id)!==String(recordId))return;
+    if(!viewRequest || loading || !expediente?.id || expediente.nombre_paciente!==patientName || lastViewRequest.current===viewRequest.id)return;
+    const consent=viewRequest.consentId!=null ? consentimientos.find(c=>String(c.id)===String(viewRequest.consentId)):null;
+    if(viewRequest.consentId!=null && !consent)return;
+    const doc=viewRequest.documentId!=null ? radiografias.find(d=>String(d.id)===String(viewRequest.documentId)):null;
+    if(viewRequest.documentId!=null && !doc)return;
+    lastViewRequest.current=viewRequest.id;
+    setActiveTab(viewRequest.tab || 'datos');
+    if(doc){if(viewRequest.documentAction==='download')void downloadDocument(doc);else void viewDocument(doc)}
+    if(viewRequest.printPreview){
+      if(consent)openPrintConsentimiento(consent);else openPrintComplete();
+    }
+  },[viewRequest,loading,expediente,consentimientos,radiografias,patientName]);
 
   // ==================== FUNCIONES DE API ====================
   
   const cargarExpedienteMedico = async () => {
     setLoading(true);
     try {
-      const endpoint = appointmentId
+      const endpoint = recordId ? `/expediente-medico/id/${recordId}` : appointmentId
         ? `/expediente-medico/cita/${appointmentId}`
         : `/expediente-medico/paciente/${encodeURIComponent(patientName)}`;
       const response = await useApi(endpoint, {
@@ -372,7 +395,8 @@ const [selectedConsentimientoForPrint, setSelectedConsentimientoForPrint] = useS
       }
     } catch (error) {
       console.error('Error cargando expediente médico:', error);
-      await crearNuevoExpediente();
+      if(!recordId && /^HTTP 404:/.test(String((error as any)?.message||'')))await crearNuevoExpediente();
+      else alert((error as any)?.message||'No se pudo cargar el expediente');
     } finally {
       setLoading(false);
     }
@@ -2001,13 +2025,13 @@ const openPrintConsentimiento = (consentimiento: ConsentimientoInformado) => {
                       )}
                       
                       <div className="flex gap-2">
-                        <button
+                        <button onClick={() => viewDocument(doc)}
                           className="flex-1 px-3 py-2 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 flex items-center justify-center gap-2 text-sm"
                         >
                           <Eye className="w-4 h-4" />
                           Ver
                         </button>
-                        <button
+                        <button onClick={() => downloadDocument(doc)}
                           className="flex-1 px-3 py-2 bg-green-50 text-green-600 rounded-lg hover:bg-green-100 flex items-center justify-center gap-2 text-sm"
                         >
                           <Download className="w-4 h-4" />
@@ -2054,6 +2078,7 @@ const openPrintConsentimiento = (consentimiento: ConsentimientoInformado) => {
           </div>
         </div>
       </div>
+{documentPreview && <div className="fixed inset-0 z-[60] bg-black/60 p-4 flex items-center justify-center"><div className="bg-white rounded-lg p-4 w-full max-w-5xl"><div className="flex justify-between mb-3"><strong>{documentPreview.name}</strong><button onClick={()=>setDocumentPreview(null)}>Cerrar documento</button></div>{documentPreview.mime.startsWith('image/')?<img src={documentPreview.url} alt={documentPreview.name} className="max-h-[75vh] mx-auto"/>:<iframe title={documentPreview.name} src={documentPreview.url} className="w-full h-[75vh]"/>}</div></div>}
 {/* Modal de Impresión */}
 {showPrintModal && (
   <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
@@ -2319,9 +2344,11 @@ export function useMedicalRecord() {
     name: string;
     phone?: string;
     appointmentId?: number;
+    viewRequest?:MedicalViewRequest;
+  recordId?:number;
   } | null>(null);
 
-  const openMedicalRecord = (patient: { name: string; phone?: string; appointmentId?: number }) => {
+  const openMedicalRecord = (patient: { name: string; phone?: string; appointmentId?: number; recordId?:number; viewRequest?:MedicalViewRequest }) => {
     setSelectedPatient(patient);
     setShowMedicalRecord(true);
   };

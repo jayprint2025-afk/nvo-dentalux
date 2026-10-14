@@ -1,0 +1,66 @@
+{
+  "Limpieza Dental": [
+    {
+      "item": "Guantes de Látex",
+      "quantity": 2
+    },
+    {
+      "item": "Cubrebocas Tricapa",
+      "quantity": 1
+    },
+    {
+      "item": "Gasas Estériles",
+      "quantity": 3
+    }
+  ],
+  "Resina Dental": [
+    {
+      "item": "Guantes de Látex",
+      "quantity": 2
+    },
+    {
+      "item": "Cubrebocas Tricapa",
+      "quantity": 1
+    },
+    {
+      "item": "Resina A2",
+      "quantity": 0.5
+    },
+    {
+      "item": "Ácido Grabador",
+      "quantity": 0.3
+    }
+  ],
+  "Extracción Simple": [
+    {
+      "item": "Guantes de Látex",
+      "quantity": 2
+    },
+    {
+      "item": "Lidocaína 2%",
+      "quantity": 2
+    },
+    {
+      "item": "Gasas Estériles",
+      "quantity": 10
+    }
+  ],
+  "Endodoncia": [
+    {
+      "item": "Guantes de Látex",
+      "quantity": 4
+    },
+    {
+      "item": "Lidocaína 2%",
+      "quantity": 3
+    },
+    {
+      "item": "Limas K",
+      "quantity": 0.5
+    },
+    {
+      "item": "Gasas Estériles",
+      "quantity": 15
+    }
+  ]
+}

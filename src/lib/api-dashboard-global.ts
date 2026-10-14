@@ -113,11 +113,6 @@ const cryptoRandom = () => Math.random().toString(36).slice(2);
 // ===============================
 // Config de API (UNA sola vez)
 // ===============================
-const API_BASE_URL =
-  process.env.NODE_ENV === 'production'
-    ? 'http://localhost:4001'
-    : 'http://localhost:4001';
-
 // Request genérico (soporta headers de sucursal)
 async function apiRequest(
   endpoint: string,
@@ -128,28 +123,17 @@ async function apiRequest(
     body?: any;
   } = {}
 ) {
-  const url = new URL(`${API_BASE_URL}${endpoint}`);
-  if (query) {
-    Object.entries(query).forEach(([k, v]) => {
-      if (v !== undefined && v !== null && v !== '') url.searchParams.set(k, String(v));
-    });
-  }
-  const res = await fetch(url.toString(), {
-    method,
-    headers: {
-      'content-type': 'application/json',
-      ...(sucursalId ? { 'x-sucursal': sucursalId } : {}),
-    },
-    credentials: 'include',
-    ...(body ? { body: JSON.stringify(body) } : {}),
+  const params = new URLSearchParams();
+  if (query) Object.entries(query).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== '') params.set(key, String(value));
   });
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    throw new Error(`[${res.status}] ${res.statusText} :: ${text}`);
-  }
-  const ct = res.headers.get('content-type') || '';
-  if (ct.includes('application/json')) return res.json();
-  return res.text();
+  const separator = endpoint.includes('?') ? '&' : '?';
+  const target = params.size ? `${endpoint}${separator}${params}` : endpoint;
+  return api(target, {
+    method,
+    ...(sucursalId ? { headers: { 'x-sucursal': sucursalId } } : {}),
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+  });
 }
 
 // ===============================
@@ -442,7 +426,7 @@ const doctores: MetricasDoctores[] = Array.from(porDoctor.entries()).map(([docto
   const ingresosNum = Number.isFinite(v.ingresos) ? v.ingresos : 0;
   const citasNum = Number.isFinite(v.citas) ? v.citas : 0;
   return {
-    doctor_id: doctorKey,
+    doctorId: doctorKey,
     doctorName: v.name,
     citas: citasNum,
     ingresos: ingresosNum,
@@ -554,6 +538,7 @@ const doctores: MetricasDoctores[] = Array.from(porDoctor.entries()).map(([docto
   };
 
   return { financieras, operacionales, inventario, laboratorio, doctores, servicios };
+}
 
 // ===============================
 // FUNCIÓN PRINCIPAL (unificada, SOLO real)

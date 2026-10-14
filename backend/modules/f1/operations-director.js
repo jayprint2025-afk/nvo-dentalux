@@ -22,8 +22,8 @@ async function safeQuery(q, sql, params = [], fallback = []) {
     const result = await q(sql, params);
     return result.rows || fallback;
   } catch (error) {
-    console.warn('⚠️ F1 Operations query omitida:', error.message);
-    return fallback;
+    console.warn('⚠️ F1 Operations reporte no disponible:', error.message);
+    throw error;
   }
 }
 

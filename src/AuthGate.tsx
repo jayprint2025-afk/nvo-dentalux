@@ -109,7 +109,7 @@ export default function AuthGate() {
           Cerrar sesión
         </button>
       </div>
-      <MultiSucursalWrapper />
+      <MultiSucursalWrapper key={token} />
     </div>
   );
 }

@@ -1,4 +1,6 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import inventoryFormulas from './lib/inventory-formulas.json';
+import {scopedStorageKey} from './lib/tenant-scope';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   Package, Search, Filter, Plus, Edit, Trash2, ShoppingCart, 
   AlertTriangle, TrendingUp, DollarSign, BarChart3, FileText,
@@ -46,7 +48,7 @@ interface PurchaseOrder {
 type StockStatus = 'critical' | 'low' | 'medium' | 'good';
 type TabType = 'equipment' | 'materials' | 'formulas' | 'purchases' | 'analytics';
 
-export function InventoryModule({ onClose }: { onClose: () => void }) {
+export function InventoryModule({ onClose, viewRequest }: { onClose: () => void; viewRequest?: {id:string;tab?:TabType;query?:string;category?:string;stock?:StockStatus;export?:boolean} }) {
   // Estados principales
   const [activeTab, setActiveTab] = useState<TabType>('equipment');
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
@@ -57,12 +59,20 @@ export function InventoryModule({ onClose }: { onClose: () => void }) {
   const [editingItem, setEditingItem] = useState<InventoryItem | null>(null);
   const [purchases, setPurchases] = useState<PurchaseOrder[]>([]);
   const [loading, setLoading] = useState(false);
+  const [dataReady,setDataReady]=useState(false);
+  const lastViewRequest=useRef<string>();
 
   // Cargar datos iniciales
   useEffect(() => {
     loadInventoryData();
     loadPurchaseHistory();
   }, []);
+
+  useEffect(()=>{
+    const changed=(event:Event)=>{if((event as CustomEvent).detail?.type==='inventory_changed')void loadInventoryData()};
+    window.addEventListener('cliniqone:f1-data-changed',changed);
+    return ()=>window.removeEventListener('cliniqone:f1-data-changed',changed);
+  },[]);
 
   // 🔥 FUNCIÓN PRINCIPAL - Cargar desde backend
   const loadInventoryData = async () => {
@@ -76,9 +86,9 @@ export function InventoryModule({ onClose }: { onClose: () => void }) {
       name: item.name,
       category: item.category,
       type: item.type,
-      quantity: item.quantity,
-      minStock: item.min_stock,
-      maxStock: item.max_stock,
+      quantity: Number(item.quantity),
+      minStock: Number(item.min_stock),
+      maxStock: Number(item.max_stock),
       price: parseFloat(item.price),
       supplier: item.supplier || '',
       lastPurchase: item.last_purchase,
@@ -87,6 +97,7 @@ export function InventoryModule({ onClose }: { onClose: () => void }) {
     }));
     
     setInventory(transformedData);
+    setDataReady(true);
     console.log('✅ Inventario cargado desde backend:', transformedData.length, 'items');
   } catch (error) {
     console.error('❌ Error cargando inventario:', error);
@@ -112,44 +123,21 @@ export function InventoryModule({ onClose }: { onClose: () => void }) {
       }
     ];
 
-    const savedPurchases = localStorage.getItem('dentalux_purchases');
+    const savedPurchases = localStorage.getItem(scopedStorageKey('dentalux_purchases'));
     if (savedPurchases) {
       setPurchases(JSON.parse(savedPurchases));
     } else {
-      setPurchases(samplePurchases);
+      setPurchases([]);
     }
   };
 
   // Fórmulas de tratamiento
-  const treatmentFormulas: TreatmentFormula = {
-    "Limpieza Dental": [
-      { item: "Guantes de Látex", quantity: 2 },
-      { item: "Cubrebocas Tricapa", quantity: 1 },
-      { item: "Gasas Estériles", quantity: 3 }
-    ],
-    "Resina Dental": [
-      { item: "Guantes de Látex", quantity: 2 },
-      { item: "Cubrebocas Tricapa", quantity: 1 },
-      { item: "Resina A2", quantity: 0.5 },
-      { item: "Ácido Grabador", quantity: 0.3 }
-    ],
-    "Extracción Simple": [
-      { item: "Guantes de Látex", quantity: 2 },
-      { item: "Lidocaína 2%", quantity: 2 },
-      { item: "Gasas Estériles", quantity: 10 }
-    ],
-    "Endodoncia": [
-      { item: "Guantes de Látex", quantity: 4 },
-      { item: "Lidocaína 2%", quantity: 3 },
-      { item: "Limas K", quantity: 0.5 },
-      { item: "Gasas Estériles", quantity: 15 }
-    ]
-  };
+  const treatmentFormulas: TreatmentFormula = inventoryFormulas;
 
   // Funciones de utilidad
   const getStockStatus = (item: InventoryItem): StockStatus => {
     const percentage = (item.quantity / item.minStock) * 100;
-    if (percentage <= 50) return 'critical';
+    if (item.quantity <= 0) return 'critical';
     if (percentage <= 100) return 'low';
     if (percentage <= 150) return 'medium';
     return 'good';
@@ -213,7 +201,7 @@ export function InventoryModule({ onClose }: { onClose: () => void }) {
       criticalItems: critical,
       lowItems: low,
       totalValue,
-      optimalStock: Math.round((optimalStock / inventory.length) * 100)
+      optimalStock: inventory.length ? Math.round((optimalStock / inventory.length) * 100) : 0
     };
   }, [inventory]);
 
@@ -244,12 +232,11 @@ export function InventoryModule({ onClose }: { onClose: () => void }) {
 const handleApplyFormula = async (treatmentName: string) => {
   try {
     // Le pedimos al backend que aplique la fórmula y nos regrese el inventario actualizado
-    const updatedInventory: InventoryItem[] = await api('/inventory/apply-formula', {
-      method: 'POST',
-      body: JSON.stringify({ treatmentName })
-    });
-
-    setInventory(updatedInventory);
+    const items=treatmentFormulas[treatmentName];
+    if(!items)throw new Error('Fórmula no encontrada');
+    const result=await api('/inventory/apply-formula',{method:'POST',body:JSON.stringify({items})});
+    await loadInventoryData();
+    if(result.missing?.length)alert('Materiales no encontrados: '+result.missing.join(', '));
     console.log('✅ Fórmula aplicada desde backend:', treatmentName);
   } catch (error) {
     console.error('❌ Error aplicando fórmula:', error);
@@ -323,7 +310,18 @@ const handleApplyFormula = async (treatmentName: string) => {
     a.href = url;
     a.download = `inventario_${new Date().toISOString().split('T')[0]}.json`;
     a.click();
+    URL.revokeObjectURL(url);
   };
+
+  useEffect(()=>{
+    if(!viewRequest || !dataReady || loading || lastViewRequest.current===viewRequest.id)return;
+    lastViewRequest.current=viewRequest.id;
+    setActiveTab(viewRequest.tab || 'materials');
+    setSearchTerm(viewRequest.query || '');
+    setCategoryFilter(viewRequest.category || '');
+    setStockFilter(viewRequest.stock || '');
+    if(viewRequest.export)exportData();
+  },[viewRequest,dataReady,loading,inventory,purchases]);
 
   return (
     <div className="fixed inset-0 z-[10000] bg-gradient-to-br from-green-50 to-emerald-100">

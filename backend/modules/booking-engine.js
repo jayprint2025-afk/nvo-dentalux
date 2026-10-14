@@ -153,7 +153,7 @@ async function getDoctors(q, tenantOrBranch, maybeBranch) {
     `SELECT id, name
        FROM doctors
       WHERE tenant_id = $1::uuid
-        AND ($2::text IS NULL OR sucursal_id = $2::text)
+        AND ($2::text IS NULL OR sucursal_id = $2::text OR sucursal_id IS NULL)
       ORDER BY id ASC`,
     [tenantId, args.branch_key]
   );
@@ -172,7 +172,7 @@ async function getServices(q, tenantOrBranch, maybeBranch) {
     `SELECT id, name
        FROM services
       WHERE tenant_id = $1::uuid
-        AND ($2::text IS NULL OR sucursal_id = $2::text)
+        AND ($2::text IS NULL OR sucursal_id = $2::text OR sucursal_id IS NULL)
       ORDER BY id ASC`,
     [tenantId, args.branch_key]
   );
@@ -254,7 +254,7 @@ async function getAppointmentsForDay(q, { clinic_id, branch_key, date }) {
 }
 
 // Calcula slots libres (08:00-20:00 paso 30min)
-async function computeAvailability(q, { clinic_id, branch_key, date, duration_hours = 1, limit = 50, min_start_mins = null }) {
+async function computeAvailability(q, { clinic_id, branch_key, date, duration_hours = 1, limit = 50, min_start_mins = null, exact_start_mins = null, exclude_appointment_id = null }) {
   const doctors = await getDoctors(q, clinic_id, branch_key);
   if (!doctors.length) return { slots: [], doctors: [] };
 
@@ -263,7 +263,7 @@ async function computeAvailability(q, { clinic_id, branch_key, date, duration_ho
   const dayEnd = 20 * 60;
   const effectiveStart = Number.isFinite(min_start_mins) ? Math.max(dayStart, Math.min(dayEnd, Math.round(min_start_mins))) : dayStart;
 
-  const appts = await getAppointmentsForDay(q, { clinic_id, branch_key, date });
+  const appts = (await getAppointmentsForDay(q, { clinic_id, branch_key, date })).filter(a=>exclude_appointment_id==null || String(a.id)!==String(exclude_appointment_id));
 
   // Bloqueo por sucursal: cualquier cita activa ocupa su intervalo para toda
   // la sucursal, sin importar el doctor. Así la disponibilidad legacy coincide
@@ -275,7 +275,9 @@ async function computeAvailability(q, { clinic_id, branch_key, date, duration_ho
   }).sort((a, b) => a[0] - b[0]);
 
   const slots = [];
-  for (let t = effectiveStart; t + durationMins <= dayEnd; t += 30) {
+  const starts=exact_start_mins!=null ? [Number(exact_start_mins)] : Array.from({length:Math.max(0,Math.floor((dayEnd-durationMins-effectiveStart)/30)+1)},(_,i)=>effectiveStart+i*30);
+  for (const t of starts) {
+    if(!Number.isFinite(t)||t<effectiveStart||t+durationMins>dayEnd)continue;
     const slotStart = t;
     const slotEnd = t + durationMins;
     const branchBusy = branchIntervals.some(([s, e]) =>
@@ -305,7 +307,12 @@ async function computeAvailability(q, { clinic_id, branch_key, date, duration_ho
 }
 
 // ====== INSERT transaccional (SaaS-safe + legacy compatible) ======
-async function createAppointmentTransactional(q, {
+async function createAppointmentTransactional(q,args){
+  if(q.withTransaction && !q.inTransaction)return q.withTransaction(tx=>createAppointmentInTransaction(tx,args));
+  return createAppointmentInTransaction(q,args);
+}
+
+async function createAppointmentInTransaction(q, {
   tenant_id,
   clinic_id,
   branch_key,
@@ -424,7 +431,7 @@ async function createAppointmentTransactional(q, {
   // nombre de columna de paciente (tu app legacy suele usar patient)
   const patientCol = cols.hasPatient ? 'patient' : (cols.hasPaciente ? 'paciente' : 'patient');
 
-  await q('BEGIN');
+  if(!q.inTransaction)await q('BEGIN');
   try {
     // Serializamos confirmaciones de esta empresa+sucursal+fecha para que dos
     // solicitudes concurrentes no puedan insertar intervalos encimados.
@@ -521,7 +528,7 @@ async function createAppointmentTransactional(q, {
       );
 
       if (duplicateRows?.[0]?.id) {
-        await q('COMMIT');
+        if(!q.inTransaction)await q('COMMIT');
         return {
           ...duplicateRows[0],
           tenant_id: resolvedTenantId || null,
@@ -594,7 +601,7 @@ async function createAppointmentTransactional(q, {
       throw new Error('La cita se insertó pero no pudo verificarse para esta empresa');
     }
 
-    await q('COMMIT');
+    if(!q.inTransaction)await q('COMMIT');
 
     return {
       id: verifiedRows[0].id,
@@ -607,7 +614,7 @@ async function createAppointmentTransactional(q, {
       verified: true,
     };
   } catch (e) {
-    await q('ROLLBACK').catch(() => {});
+    if(!q.inTransaction)await q('ROLLBACK').catch(() => {});
     throw e;
   }
 }

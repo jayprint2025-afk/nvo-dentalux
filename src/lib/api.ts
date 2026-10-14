@@ -61,6 +61,8 @@ export async function api(endpoint: string, options: RequestInit = {}) {
       headers,
     });
 
+    if ((localStorage.getItem(AUTH_TOKEN_KEY) || '') !== token) throw new Error('La sesión cambió durante la consulta');
+
     if (response.status === 401) {
       try { localStorage.removeItem(AUTH_TOKEN_KEY); } catch {}
       window.dispatchEvent(new CustomEvent('dentalux:auth-expired'));
@@ -156,3 +158,32 @@ export const createCompany = (data: unknown) => api('/companies', { method: 'POS
 export const updateCompany = (id: string, data: unknown) => api(`/companies/${id}`, { method: 'PUT', body: JSON.stringify(data) });
 export const activateCompany = (id: string) => api(`/companies/${id}/activate`, { method: 'PATCH' });
 export const suspendCompany = (id: string) => api(`/companies/${id}/suspend`, { method: 'PATCH' });
+
+// Archivos privados: usar la misma sesión y sucursal que las consultas JSON.
+export async function apiBlob(endpoint: string): Promise<Blob> {
+  if(!/^\/api\/[a-z0-9_/-]+(?:\?[^#]*)?$/i.test(endpoint))throw new Error('Ruta de archivo inválida');
+  const token=localStorage.getItem(AUTH_TOKEN_KEY)||'';
+  const branch=currentSucursal;
+  const response=await fetch(`${API_BASE}${endpoint}`,{headers:{...(token?{Authorization:`Bearer ${token}`} : {}),'x-sucursal':branch}});
+  if((localStorage.getItem(AUTH_TOKEN_KEY)||'')!==token || currentSucursal!==branch)throw new Error('La sesión o sucursal cambió durante la descarga');
+  if(response.status===401){localStorage.removeItem(AUTH_TOKEN_KEY);window.dispatchEvent(new CustomEvent('dentalux:auth-expired'))}
+  if(!response.ok)throw new Error(`HTTP ${response.status}: no se pudo descargar el archivo`);
+  const blob=await response.blob();
+  if((localStorage.getItem(AUTH_TOKEN_KEY)||'')!==token || currentSucursal!==branch)throw new Error('La sesión o sucursal cambió durante la descarga');
+  return blob;
+}
+
+export async function downloadAppFile(endpoint:string,filename:string):Promise<void>{
+  const token=localStorage.getItem(AUTH_TOKEN_KEY)||'',branch=currentSucursal;
+  let blob=await apiBlob(endpoint);
+  if(blob.type.includes('application/json')){
+    const data=JSON.parse(await blob.text());
+    if(typeof data.base64!=='string'||!data.base64)throw new Error('La respuesta no contiene el archivo');
+    const bytes=Uint8Array.from(atob(data.base64),c=>c.charCodeAt(0));
+    const extension=filename.split('.').pop();
+    blob=new Blob([bytes],{type:extension==='pdf'?'application/pdf':extension==='xml'?'application/xml':'application/zip'});
+  }
+  if((localStorage.getItem(AUTH_TOKEN_KEY)||'')!==token||currentSucursal!==branch)throw new Error('La sesión o sucursal cambió durante la descarga');
+  const url=URL.createObjectURL(blob),link=document.createElement('a');
+  try{link.href=url;link.download=filename.replace(/[\\/]/g,'_');link.click()}finally{URL.revokeObjectURL(url)}
+}

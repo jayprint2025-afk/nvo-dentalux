@@ -327,6 +327,9 @@ export function PatientHistoryModule({ onClose }: { onClose: () => void }) {
     };
 
     load();
+    const changed=(event:Event)=>{if(['medical_record_changed','payments_changed','appointments_changed'].includes((event as CustomEvent).detail?.type))void load()};
+    window.addEventListener('cliniqone:f1-data-changed',changed);
+    return ()=>window.removeEventListener('cliniqone:f1-data-changed',changed);
   }, []);
 
   const filteredPatients = useMemo(() => {

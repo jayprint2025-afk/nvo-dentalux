@@ -1,3 +1,6 @@
+const {validateActionValues}=require('./validate-action-values');
+const inventoryFormulas=require('./inventory-formulas.json');
+const { assertTenantReferences } = require('./tenant-ownership');
 'use strict';
 
 const {
@@ -73,8 +76,8 @@ async function todaySummary(q, ctx, args = {}) {
     SELECT a.id, a.patient, a.phone, a.date, a.start_time::text AS start_time,
            a.status, a.doctor_id, d.name AS doctor_name, s.name AS service_name
       FROM appointments a
-      LEFT JOIN doctors d ON d.id = a.doctor_id
-      LEFT JOIN services s ON s.id = a.service_id
+      LEFT JOIN doctors d ON d.id = a.doctor_id AND d.tenant_id=a.tenant_id
+      LEFT JOIN services s ON s.id = a.service_id AND s.tenant_id=a.tenant_id
      WHERE a.tenant_id = $1::uuid
        AND a.date = $2::date
        ${branchSql}
@@ -101,11 +104,19 @@ async function todaySummary(q, ctx, args = {}) {
 }
 
 async function listDoctors(q, ctx, args = {}) {
-  return { doctors: await getDoctors(q, ctx.tenant_id, text(args.branch_key || ctx.branch_key) || null) };
+  const branch = text(args.branch_key || ctx.branch_key) || null;
+  const {rows} = await q(`SELECT id, name FROM doctors WHERE tenant_id=$1::uuid
+    AND ($2::text IS NULL OR sucursal_id=$2::text OR sucursal_id IS NULL) ORDER BY id ASC`,[ctx.tenant_id,branch]);
+  const doctors=rows.map(row=>({...row,id:String(row.id)}));
+  return {doctors,count:doctors.length,assistant_message:`Hay ${doctors.length} doctores registrados en la sucursal actual.`};
 }
 
 async function listServices(q, ctx, args = {}) {
-  return { services: await getServices(q, ctx.tenant_id, text(args.branch_key || ctx.branch_key) || null) };
+  const branch = text(args.branch_key || ctx.branch_key) || null;
+  const {rows} = await q(`SELECT id, name FROM services WHERE tenant_id=$1::uuid
+    AND ($2::text IS NULL OR sucursal_id=$2::text OR sucursal_id IS NULL) ORDER BY id ASC`,[ctx.tenant_id,branch]);
+  const services=rows.map(row=>({...row,id:String(row.id)}));
+  return {services,count:services.length,assistant_message:`Hay ${services.length} servicios registrados en la sucursal actual.`};
 }
 
 async function checkAvailability(q, ctx, args = {}) {
@@ -113,6 +124,9 @@ async function checkAvailability(q, ctx, args = {}) {
   if (!branchKey) throw new Error('Falta la sucursal');
   if (!args.date) throw new Error('Falta la fecha');
 
+  const exact=text(args.exact_time).slice(0,5);
+  if(exact && !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(exact))throw new Error('Hora inválida');
+  const exactMins=exact?Number(exact.slice(0,2))*60+Number(exact.slice(3,5)):null;
   const result = await computeAvailability(q, {
     clinic_id: ctx.tenant_id,
     branch_key: branchKey,
@@ -120,6 +134,8 @@ async function checkAvailability(q, ctx, args = {}) {
     duration_hours: Number(args.duration_hours || 1),
     limit: Number(args.limit || 80),
     min_start_mins: null,
+    exact_start_mins: exactMins,
+    exclude_appointment_id: args.appointment_id || null,
   });
 
   let slots = Array.isArray(result.slots) ? result.slots : [];
@@ -127,7 +143,13 @@ async function checkAvailability(q, ctx, args = {}) {
     const exact = text(args.exact_time).slice(0, 5);
     slots = slots.filter(slot => text(slot.start_time).slice(0, 5) === exact);
   }
-  if (args.doctor_id) slots = slots.filter(slot => String(slot.doctor_id) === String(args.doctor_id));
+  if (args.doctor_id) {
+    const requested = (await listDoctors(q, ctx, {branch_key: branchKey})).doctors
+      .find(doctor => String(doctor.id) === String(args.doctor_id));
+    if (!requested) throw new Error('Doctor no encontrado en esta empresa y sucursal');
+    // La disponibilidad es por sucursal; conservar el responsable solicitado.
+    slots = slots.map(slot => ({...slot, doctor_id: requested.id, doctor_name: requested.name}));
+  }
   const visibleSlots = slots.slice(0, 20);
   return {
     date: args.date,
@@ -235,8 +257,8 @@ async function findAppointments(q, ctx, args = {}) {
     SELECT a.id, a.patient, a.phone, a.date, a.start_time::text AS start_time,
            a.status, a.doctor_id, a.service_id, d.name AS doctor_name, s.name AS service_name
       FROM appointments a
-      LEFT JOIN doctors d ON d.id=a.doctor_id
-      LEFT JOIN services s ON s.id=a.service_id
+      LEFT JOIN doctors d ON d.id=a.doctor_id AND d.tenant_id=a.tenant_id
+      LEFT JOIN services s ON s.id=a.service_id AND s.tenant_id=a.tenant_id
      WHERE ${where.join(' AND ')}
      ORDER BY a.date ASC, a.start_time ASC
      LIMIT 100
@@ -275,7 +297,7 @@ async function rescheduleAppointment(q, ctx, args = {}) {
   if (!args.date || !args.start_time) throw new Error('Faltan fecha u hora');
 
   const { rows: currentRows } = await q(`
-    SELECT id, patient, phone, service_id, doctor_id, sucursal_id, date, start_time::text AS start_time
+    SELECT id, patient, phone, service_id, doctor_id, sucursal_id, date, duration_hours, start_time::text AS start_time
       FROM appointments
      WHERE id=$1 AND tenant_id=$2::uuid
      LIMIT 1
@@ -289,17 +311,18 @@ async function rescheduleAppointment(q, ctx, args = {}) {
     date: text(args.date),
     exact_time: text(args.start_time).slice(0, 5),
     doctor_id: args.doctor_id || current.doctor_id,
-    duration_hours: Number(args.duration_hours || 1),
+    duration_hours: Number(args.duration_hours || current.duration_hours || 1),
+    appointment_id:id,
   });
   if (!available.slots.length) throw new Error('Ese horario no está disponible');
   const slot = available.slots[0];
 
   const { rows } = await q(`
     UPDATE appointments
-       SET date=$1::date, start_time=$2, doctor_id=$3, sucursal_id=$4, status='Pendiente'
+       SET date=$1::date, start_time=$2, doctor_id=$3, sucursal_id=$4, status='Pendiente',duration_hours=$7
      WHERE id=$5 AND tenant_id=$6::uuid
      RETURNING id, patient, date, start_time::text AS start_time, doctor_id, status
-  `, [args.date, slot.start_time, slot.doctor_id, branchKey, id, ctx.tenant_id]);
+  `, [args.date, slot.start_time, slot.doctor_id, branchKey, id, ctx.tenant_id,Number(args.duration_hours || current.duration_hours || 1)]);
 
   emitAppointmentEvent('appointment.rescheduled', rows[0], {
     ...ctx,
@@ -438,27 +461,21 @@ async function getDailyNet(q, ctx, args = {}) {
   };
 }
 
-async function listRecentPayments(q, ctx, args = {}) {
-  const branch = text(args.branch_key || ctx.branch_key) || 'sucursal_1';
-  const limit = Math.max(1, Math.min(Number(args.limit || 10), 30));
-
-  const { rows } = await q(`
-    SELECT id, appointment_id, patient, service_id, amount,
-           payment_method, date, doctor_id, sucursal_id
-    FROM payments
-    WHERE tenant_id=$1::uuid
-      AND (sucursal_id=$2 OR sucursal_id IS NULL)
-    ORDER BY date DESC, id DESC
-    LIMIT $3
-  `, [ctx.tenant_id, branch, limit]);
-
-  return {
-    payments: rows,
-    assistant_message: rows.length
-      ? `Encontré ${rows.length} pago${rows.length === 1 ? '' : 's'} reciente${rows.length === 1 ? '' : 's'}.`
-      : 'No encontré pagos recientes en la sucursal actual.',
-  };
+async function listFinancialMovements(q,ctx,args,kind){
+ const branch=branchOf(ctx,args),table=kind==='payment'?'payments':'expenses',params=[ctx.tenant_id,branch],where=['tenant_id=$1::uuid','(sucursal_id=$2 OR sucursal_id IS NULL)'];
+ const from=text(args.from_date||args.date),to=text(args.to_date||args.date);
+ if(from){params.push(from);where.push(`date >= $${params.length}::date`)}
+ if(to){params.push(to);where.push(`date <= $${params.length}::date`)}
+ if(from&&to&&from>to)throw Error('Rango de fechas invertido');
+ if(args.doctor_id!=null){params.push(Number(args.doctor_id));where.push(`doctor_id=$${params.length}`)}
+ const query=text(kind==='payment'?args.patient:args.query);
+ if(query){params.push('%'+query+'%');where.push(`${kind==='payment'?'patient':'concept'} ILIKE $${params.length}`)}
+ if(args.payment_method){params.push(normalizePaymentMethod(args.payment_method));where.push(`LOWER(payment_method)=LOWER($${params.length})`)}
+ params.push(Math.max(1,Math.min(100,Number(args.limit)||20)));
+ const {rows}=await q(`SELECT * FROM ${table} WHERE ${where.join(' AND ')} ORDER BY date DESC,id DESC LIMIT $${params.length}`,params);
+ return {[kind==='payment'?'payments':'expenses']:rows,query_range:{from_date:from||null,to_date:to||null},assistant_message:`Encontré ${rows.length} ${kind==='payment'?'ingreso(s)':'gasto(s)'} con los filtros indicados.`};
 }
+async function listRecentPayments(q,ctx,args={}){return listFinancialMovements(q,ctx,args,'payment')}
 
 async function registerPayment(q, ctx, args = {}) {
   const patient = text(args.patient);
@@ -668,6 +685,17 @@ async function updateAppointmentStatus(q, ctx, args = {}) {
   if (!Number.isSafeInteger(id) || id <= 0) throw new Error('appointment_id inválido');
   if (!status) throw new Error('Estado inválido. Usa Pendiente, Confirmada, Cancelada o Atendida');
 
+  // La sesión de la app usa el mismo proceso que la edición manual:
+  // transición de estado, consumo de inventario y eventos del backend.
+  if (ctx.authorization) {
+    const appointment = await callInternalApiF1(ctx, `/api/appointments/${id}`, {
+      method: 'PUT', body: { status }, branchKey: text(args.branch_key || ctx.branch_key),
+    });
+    if (!appointment?.id) throw new Error('El backend no confirmó la actualización de la cita');
+    return { ok: true, appointment,
+      assistant_message: `Listo. La cita de ${appointment.patient} quedó en estado ${appointment.status}.`,
+      client_event: { type: 'appointments_changed', appointment_id: appointment.id } };
+  }
   const { rows } = await q(`
     UPDATE appointments
        SET status=$1
@@ -699,7 +727,7 @@ async function getPatientHistory(q, ctx, args = {}) {
   if (!patient) throw new Error('Falta el nombre del paciente');
 
   const { rows } = await q(`
-    SELECT a.id, a.patient, a.phone, a.email, a.date,
+    SELECT a.id, a.patient, a.phone, NULL::text AS email, a.date,
            a.start_time::text AS start_time, a.status,
            a.doctor_id, d.name AS doctor_name,
            a.service_id, s.name AS service_name,
@@ -710,8 +738,8 @@ async function getPatientHistory(q, ctx, args = {}) {
                 AND p.appointment_id=a.id
            ),0)::numeric AS paid_amount
       FROM appointments a
-      LEFT JOIN doctors d ON d.id=a.doctor_id
-      LEFT JOIN services s ON s.id=a.service_id
+      LEFT JOIN doctors d ON d.id=a.doctor_id AND d.tenant_id=a.tenant_id
+      LEFT JOIN services s ON s.id=a.service_id AND s.tenant_id=a.tenant_id
      WHERE a.tenant_id=$1::uuid
        AND (a.sucursal_id=$2 OR a.sucursal_id IS NULL)
        AND a.patient ILIKE $3
@@ -826,7 +854,7 @@ async function createLaboratory(q, ctx, args = {}) {
 async function listLabWorks(q, ctx, args = {}) {
   const branch = text(args.branch_key || ctx.branch_key) || 'sucursal_1';
   const patient = text(args.patient);
-  const laboratoryId = args.laboratory_id ? Number(args.laboratory_id) : null;
+  const laboratoryId = args.laboratory_id ? text(args.laboratory_id) : null;
   const params = [ctx.tenant_id, branch];
   const where = [
     'lt.tenant_id=$1::uuid',
@@ -839,15 +867,15 @@ async function listLabWorks(q, ctx, args = {}) {
     SELECT lt.id, lt.paciente, lt.laboratorio_id, l.nombre AS laboratorio,
            lt.servicio_id, s.name AS servicio,
            lt.presupuesto, lt.fecha_inicio, lt.fecha_entrega_estimada,
-           lt.etapa, lt.notas, lt.sucursal_id,
+           lt.etapa, lt.notas, lt.sucursal_id, lt.doctor_id, lt.payroll_paid,
            COALESCE((
              SELECT SUM(la.monto)::numeric
                FROM lab_abonos la
-              WHERE la.trabajo_id=lt.id
+              WHERE la.trabajo_id=lt.id AND la.tenant_id=lt.tenant_id
            ),0)::numeric AS total_abonado
       FROM lab_trabajos lt
-      LEFT JOIN laboratorios l ON l.id=lt.laboratorio_id
-      LEFT JOIN services s ON s.id=lt.servicio_id
+      LEFT JOIN laboratorios l ON l.id=lt.laboratorio_id AND l.tenant_id=lt.tenant_id
+      LEFT JOIN services s ON s.id::text=lt.servicio_id::text AND s.tenant_id=lt.tenant_id
      WHERE ${where.join(' AND ')}
      ORDER BY COALESCE(lt.fecha_entrega_estimada, lt.fecha_inicio) DESC, lt.id DESC
      LIMIT 50
@@ -863,7 +891,7 @@ async function listLabWorks(q, ctx, args = {}) {
 
 async function createLabWork(q, ctx, args = {}) {
   const patient = text(args.patient || args.paciente);
-  const labId = Number(args.laboratory_id || args.laboratorio_id);
+  const labId = text(args.laboratory_id || args.laboratorio_id);
   const budget = moneyValue(args.budget ?? args.presupuesto);
   const startDate = text(args.start_date || args.fecha_inicio) || localDate(ctx.timezone);
   const dueDate = text(args.due_date || args.fecha_entrega_estimada) || null;
@@ -873,7 +901,8 @@ async function createLabWork(q, ctx, args = {}) {
   const serviceId = args.service_id ? Number(args.service_id) : null;
 
   if (!patient) throw new Error('Falta el paciente');
-  if (!Number.isSafeInteger(labId) || labId <= 0) throw new Error('Falta seleccionar un laboratorio válido');
+  if (!labId) throw new Error('Falta seleccionar un laboratorio válido');
+  if (!dueDate) return {needs_input:true,missing:["due_date"],assistant_message:"¿Cuál es la fecha estimada de entrega del trabajo?"};
   if (budget < 0) throw new Error('El presupuesto no puede ser negativo');
 
   const lab = (await q(`
@@ -900,6 +929,40 @@ async function createLabWork(q, ctx, args = {}) {
     assistant_message: `Trabajo de laboratorio creado para ${patient} con ${lab.nombre}${dueDate ? `, entrega estimada ${dueDate}` : ''}.`,
     client_event: { type: 'laboratory_changed', work_id: work.id },
   };
+}
+
+async function getObjectivesPayrollReport(q,ctx,args={}) {
+  const branch=branchOf(ctx,args),from=text(args.from),to=text(args.to);
+  if(!from||!to)throw new Error('Indica el período de Objetivos');
+  const productivity=await getProductivitySummary(q,ctx,{...args,include_details:false});
+  const {rows:works}=await q(`SELECT t.id,t.paciente,t.doctor_id,t.presupuesto,t.fecha_inicio,t.payroll_paid,COALESCE(SUM(p.monto),0)::numeric AS paid_to_lab FROM lab_trabajos t LEFT JOIN pagos_laboratorio p ON p.trabajo_id=t.id AND p.tenant_id=t.tenant_id WHERE t.tenant_id=$1::uuid AND (t.sucursal_id=$2 OR t.sucursal_id IS NULL) AND LOWER(t.etapa)='entregado' AND t.fecha_inicio BETWEEN $3::date AND $4::date GROUP BY t.id`,[ctx.tenant_id,branch,from,to]);
+  const date=value=>value?new Date(value).toISOString().slice(0,10):null;
+  const objectives=(await listObjectivesF1(q,ctx,args)).objectives;
+  const rows=productivity.rows.filter(r=>r.visible).map(r=>{
+    const objective=objectives.find(o=>String(o.doctor_id)===String(r.doctor_id)&&date(o.periodo_inicio)===from&&date(o.periodo_fin)===to);
+    const labs=works.filter(w=>String(w.doctor_id)===String(r.doctor_id)&&w.payroll_paid!==true);
+    const tbe=labs.reduce((sum,w)=>sum+Math.max(0,Number(w.presupuesto)-Number(w.paid_to_lab)),0);
+    const salary=Number(objective?.sueldo_base||0),goal=Number(objective?.meta||0),commissionPct=r.commission_pct??0.20,commission=r.income*commissionPct,labPayroll=tbe*0.20;
+    return {...r,goal,base_salary:salary,commission_pct:commissionPct,commission,tbe,lab_payroll:labPayroll,payroll:salary+commission+labPayroll,progress_pct:goal>0?Math.min(100,Math.round(r.income/goal*100)):0};
+  });
+  const totals=rows.reduce((a,r)=>({income:a.income+r.income,commission:a.commission+r.commission,base_salary:a.base_salary+r.base_salary,lab_payroll:a.lab_payroll+r.lab_payroll,payroll:a.payroll+r.payroll}),{income:0,commission:0,base_salary:0,lab_payroll:0,payroll:0});
+  return {from,to,rows,totals,works,legacy_marks_pending:works.filter(w=>w.payroll_paid==null).length,assistant_message:`Objetivos del ${from} al ${to}: ingresos $${totals.income.toFixed(2)}, comisión $${totals.commission.toFixed(2)}, sueldo base $${totals.base_salary.toFixed(2)}, componente de laboratorio $${totals.lab_payroll.toFixed(2)}, nómina calculada $${totals.payroll.toFixed(2)}.`};
+}
+
+async function markLabPayrollPaid(q,ctx,args={}) {
+  if(typeof args.paid!=='boolean')throw new Error('Indica si la marca de nómina queda pagada o pendiente');
+  const id=text(args.work_id),branch=branchOf(ctx,args);
+  const {rows}=await q(`UPDATE lab_trabajos SET payroll_paid=$1 WHERE id=$2 AND tenant_id=$3::uuid AND (sucursal_id=$4 OR sucursal_id IS NULL) RETURNING *`,[args.paid,id,ctx.tenant_id,branch]);
+  if(!rows[0])throw new Error('Trabajo no encontrado');
+  return{ok:true,work:rows[0],assistant_message:args.paid?'Marca de nómina del trabajo guardada como pagada.':'Marca de nómina del trabajo guardada como pendiente.',client_event:{type:'laboratory_changed',work_id:id}};
+}
+
+async function assignLabWorkDoctor(q,ctx,args={}) {
+  const id=text(args.work_id),branch=branchOf(ctx,args);
+  const doctor=args.doctor_id==null?null:await ensureDoctorInTenant(q,ctx,args.doctor_id,branch);
+  const {rows}=await q(`UPDATE lab_trabajos SET doctor_id=$1 WHERE id=$2 AND tenant_id=$3::uuid AND (sucursal_id=$4 OR sucursal_id IS NULL) RETURNING *`,[doctor?.id||null,id,ctx.tenant_id,branch]);
+  if(!rows[0])throw new Error('Trabajo no encontrado');
+  return {ok:true,work:rows[0],assistant_message:doctor?`Trabajo asignado a ${doctor.name}.`:'Asignación de doctor retirada.',client_event:{type:'laboratory_changed',work_id:id}};
 }
 
 async function updateLabWorkStage(q, ctx, args = {}) {
@@ -931,6 +994,7 @@ async function registerLabPayment(q, ctx, args = {}) {
   const amount = moneyValue(args.amount || args.monto);
   const date = text(args.date || args.fecha) || localDate(ctx.timezone);
   const note = text(args.note || args.nota) || null;
+  const paymentMethod=normalizePaymentMethod(args.payment_method)||null;
   const branch = text(args.branch_key || ctx.branch_key) || 'sucursal_1';
   if (!workId) throw new Error('Falta el trabajo de laboratorio');
   if (amount <= 0) throw new Error('El abono debe ser mayor a 0');
@@ -943,16 +1007,16 @@ async function registerLabPayment(q, ctx, args = {}) {
   if (!work) throw new Error('Trabajo de laboratorio no encontrado');
 
   const { rows } = await q(`
-    INSERT INTO lab_abonos (trabajo_id,monto,fecha,nota,sucursal_id,tenant_id)
-    VALUES ($1,$2,$3::date,$4,$5,$6::uuid)
+    INSERT INTO lab_abonos (trabajo_id,monto,fecha,nota,sucursal_id,tenant_id,metodo_pago)
+    VALUES ($1,$2,$3::date,$4,$5,$6::uuid,$7)
     RETURNING *
-  `, [workId, amount, date, note, branch, ctx.tenant_id]);
+  `, [workId, amount, date, note, branch, ctx.tenant_id,paymentMethod]);
 
   const total = Number((await q(`
     SELECT COALESCE(SUM(monto),0)::numeric AS total
       FROM lab_abonos
-     WHERE trabajo_id=$1
-  `, [workId])).rows[0]?.total || 0);
+     WHERE trabajo_id=$1 AND tenant_id=$2::uuid
+  `, [workId,ctx.tenant_id])).rows[0]?.total || 0);
 
   return {
     ok: true,
@@ -1020,63 +1084,13 @@ function normalizePhoneForWhatsApp(value) {
   return text(value).replace(/[^\d]/g, '');
 }
 
-async function sendWhatsAppMessage(q, ctx, args = {}) {
-  const to = normalizePhoneForWhatsApp(args.phone || args.to);
-  const message = text(args.message);
-  if (!to) throw new Error('Falta el número de WhatsApp del destinatario');
-  if (!message) throw new Error('Falta el mensaje');
-
-  let phoneNumberId = text(args.phone_number_id);
-  if (!phoneNumberId) {
-    try {
-      const { rows } = await q(`
-        SELECT COALESCE(phone_number_id,external_id) AS phone_number_id
-          FROM clinic_channels
-         WHERE tenant_id=$1::uuid
-           AND LOWER(COALESCE(channel,''))='whatsapp'
-           AND COALESCE(active,TRUE)=TRUE
-           AND COALESCE(is_active,TRUE)=TRUE
-           AND (branch_key=$2 OR sucursal_id=$2 OR branch_key IS NULL)
-         ORDER BY CASE WHEN branch_key=$2 OR sucursal_id=$2 THEN 0 ELSE 1 END, id DESC
-         LIMIT 1
-      `, [ctx.tenant_id, ctx.branch_key || 'sucursal_1']);
-      phoneNumberId = text(rows[0]?.phone_number_id);
-    } catch (_) {}
-  }
-
-  const token = text(
-    process.env.WHATSAPP_ACCESS_TOKEN ||
-    process.env.WHATSAPP_TOKEN ||
-    process.env.META_WHATSAPP_TOKEN
-  );
-  if (!phoneNumberId) throw new Error('No hay un número de WhatsApp configurado para esta sucursal');
-  if (!token) throw new Error('No está configurado el token de WhatsApp en el servidor');
-
-  const version = text(process.env.META_GRAPH_VERSION) || 'v23.0';
-  const response = await fetch(`https://graph.facebook.com/${version}/${encodeURIComponent(phoneNumberId)}/messages`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      messaging_product: 'whatsapp',
-      to,
-      type: 'text',
-      text: { body: message },
-    }),
-  });
-  const raw = await response.text();
-  let data = {};
-  try { data = raw ? JSON.parse(raw) : {}; } catch (_) { data = { raw }; }
-  if (!response.ok) throw new Error(`WhatsApp no pudo enviar el mensaje (${response.status})`);
-
-  return {
-    ok: true,
-    to,
-    message_id: data?.messages?.[0]?.id || null,
-    assistant_message: `Mensaje enviado por WhatsApp al ${to}.`,
-  };
+async function sendWhatsAppMessage(_q,ctx,args={}) {
+  const to=normalizePhoneForWhatsApp(args.phone||args.to),message=text(args.message),branch=branchOf(ctx,args);
+  if(to.length<7||!message)throw Error('Necesito teléfono válido y mensaje');
+  const result=await callInternalApiF1(ctx,'/api/whatsapp/send-message',{method:'POST',body:{phone:to,message},branchKey:branch});
+  const messageId=result?.data?.messages?.[0]?.id;
+  if(!messageId)throw Error('WhatsApp no devolvió un identificador de envío; no confirmo el mensaje');
+  return {ok:true,to,message_id:messageId,assistant_message:`WhatsApp aceptó el envío al ${to}.`,client_event:{type:'whatsapp_changed'}};
 }
 
 function openModule(_q, _ctx, args = {}) {
@@ -1084,7 +1098,7 @@ function openModule(_q, _ctx, args = {}) {
   const aliases = {
     agenda: 'agenda', citas: 'agenda', calendario: 'agenda',
     caja: 'pagos', pagos: 'pagos', ingresos: 'pagos', egresos: 'pagos',
-    reportes: 'analytics', reporte: 'analytics', productividad: 'analytics', dashboard: 'analytics',
+    reportes: 'analytics', reporte: 'analytics', productividad: 'analytics', objetivos: 'objetivos', metas: 'objetivos', dashboard: 'analytics',
     laboratorio: 'laboratorios', laboratorios: 'laboratorios',
     whatsapp: 'whatsapp', mensajes: 'whatsapp',
     facturacion: 'facturacion', factura: 'facturacion',
@@ -1099,6 +1113,42 @@ function openModule(_q, _ctx, args = {}) {
     client_action: { type: 'navigate', target },
     assistant_message: `Abriendo ${raw}.`,
   };
+}
+
+async function searchMedicalPatients(q,ctx,args={}) {
+  const query=text(args.query); if(query.length<2) throw new Error('Escribe al menos dos caracteres del paciente');
+  const {rows}=await q(`SELECT id,nombre_paciente,telefono,email,edad FROM expedientes_medicos WHERE tenant_id=$1::uuid AND (sucursal_id=$2 OR sucursal_id IS NULL) AND (nombre_paciente ILIKE $3 OR telefono ILIKE $3) ORDER BY nombre_paciente LIMIT 20`,[ctx.tenant_id,branchOf(ctx,args),`%${query}%`]);
+  return {patients:rows,assistant_message:`Encontré ${rows.length} paciente(s).`};
+}
+async function openInventoryView(q,ctx,args={}) {
+  const tab=text(args.tab)||'materials';
+  if(!['equipment','materials','formulas','purchases','analytics'].includes(tab))throw new Error('Pestaña de inventario inválida');
+  if(args.stock && !['critical','low','medium','good'].includes(args.stock))throw new Error('Filtro de stock inválido');
+  return {ok:true,client_action:{type:'inventory_view',request:{id:`${Date.now()}-${Math.random()}`,tab,query:text(args.query),category:text(args.category),stock:text(args.stock),export:args.export===true}},assistant_message:args.export===true?'Solicité abrir inventario y exportar los datos cargados en la pantalla.':'Solicité abrir la vista de inventario.'};
+}
+async function openMedicalRecord(q,ctx,args={}) {
+  const result=await getMedicalRecord(q,ctx,args);
+  if(!result.found) return result;
+  const tab=text(args.tab)||'datos';
+  if(!['datos','historia','odontograma','tratamientos','consentimientos','radiografias'].includes(tab))throw new Error('Pestaña clínica inválida');
+  if(args.document_id!=null && !result.documents.some(d=>String(d.id)===String(args.document_id)))throw new Error('Documento no encontrado en este expediente');
+  if(args.consent_id!=null && !result.consents.some(c=>String(c.id)===String(args.consent_id)))throw new Error('Consentimiento no encontrado en este expediente');
+  return {...result,ok:true,assistant_message:args.print_preview?'Solicité abrir la vista de impresión del expediente.':result.assistant_message,client_action:{type:'open_medical_record',patient:{name:result.record.nombre_paciente,phone:result.record.telefono||'',recordId:result.record.id,viewRequest:{id:`${Date.now()}-${Math.random()}`,tab,printPreview:args.print_preview===true,consentId:args.consent_id,documentId:args.document_id,documentAction:args.document_action}}}};
+}
+
+async function addMedicalDocument(q,ctx,args={}){
+  const url=text(args.url);let parsed;
+  try{parsed=new URL(url)}catch{throw new Error('Necesito una URL válida del documento')}
+  if(!['https:','http:'].includes(parsed.protocol))throw new Error('El documento debe tener una URL HTTP o HTTPS');
+  if(!text(args.name))throw new Error('Falta el nombre del documento');
+  const {rows}=await q(`INSERT INTO documentos_radiografias(expediente_id,tenant_id,tipo,nombre,descripcion,fecha_toma,url,doctor_id,sucursal_id) VALUES($1,$2::uuid,$3,$4,$5,$6::date,$7,$8,$9) RETURNING id,nombre,tipo,url`,[Number(args.record_id),ctx.tenant_id,text(args.type)||'documento',text(args.name),text(args.description),text(args.date)||localDate(ctx.timezone),url,args.doctor_id||null,branchOf(ctx,args)]);
+  return {ok:true,document:rows[0],assistant_message:'Documento vinculado al expediente.',client_event:{type:'medical_record_changed',record_id:Number(args.record_id)}};
+}
+async function deleteMedicalDocument(q,ctx,args={}){
+  const confirmation=requireConfirm(args,'¿Confirmas eliminar este documento del expediente?');if(confirmation)return confirmation;
+  const {rows}=await q('DELETE FROM documentos_radiografias WHERE id=$1 AND tenant_id=$2::uuid RETURNING id,expediente_id',[Number(args.document_id),ctx.tenant_id]);
+  if(!rows[0])throw new Error('Documento no encontrado');
+  return{ok:true,assistant_message:'Documento eliminado.',client_event:{type:'medical_record_changed',record_id:rows[0].expediente_id}};
 }
 
 async function operationsReport(q, ctx, args = {}) {
@@ -1188,31 +1238,42 @@ async function createDoctor(q,ctx,args={}){ const branch=branchOf(ctx,args),name
 async function updateDoctor(q,ctx,args={}){const branch=branchOf(ctx,args),id=Number(args.doctor_id);const {rows}=await q(`UPDATE doctors SET name=COALESCE($1,name),color=COALESCE($2,color) WHERE id=$3 AND tenant_id=$4::uuid AND (sucursal_id=$5 OR sucursal_id IS NULL) RETURNING *`,[text(args.name)||null,text(args.color)||null,id,ctx.tenant_id,branch]);if(!rows[0])throw new Error('Doctor no encontrado');return{ok:true,doctor:rows[0],assistant_message:`Actualicé al doctor ${rows[0].name}.`,client_event:{type:'doctors_changed',doctor_id:id}};}
 async function deleteDoctor(q,ctx,args={}){const branch=branchOf(ctx,args),id=Number(args.doctor_id);const r=await q(`SELECT id,name FROM doctors WHERE id=$1 AND tenant_id=$2::uuid AND (sucursal_id=$3 OR sucursal_id IS NULL)`,[id,ctx.tenant_id,branch]);if(!r.rows[0])throw new Error('Doctor no encontrado');const c=requireConfirm(args,`¿Confirmas eliminar al doctor ${r.rows[0].name}?`);if(c)return c;try{await q(`DELETE FROM doctors WHERE id=$1 AND tenant_id=$2::uuid AND (sucursal_id=$3 OR sucursal_id IS NULL)`,[id,ctx.tenant_id,branch]);}catch(e){if(e.code==='23503')return{blocked:true,assistant_message:'No puedo eliminar ese doctor porque tiene citas, pagos, gastos u otros registros relacionados. Primero deben reasignarse o conservarse.'};throw e;}return{ok:true,assistant_message:`Doctor ${r.rows[0].name} eliminado.`,client_event:{type:'doctors_changed',doctor_id:id}};}
 async function createService(q,ctx,args={}){const branch=branchOf(ctx,args),name=text(args.name);if(!name)throw new Error('Falta el nombre del servicio');const {rows}=await q(`INSERT INTO services(name,price,duration_hours,description,active,sucursal_id,tenant_id) VALUES($1,$2,$3,$4,$5,$6,$7::uuid) RETURNING *`,[name,args.price==null?null:Number(args.price),safeNum(args.duration_hours,1),text(args.description),args.active!==false,branch,ctx.tenant_id]);return{ok:true,service:rows[0],assistant_message:`Servicio ${name} creado.`,client_event:{type:'services_changed',service_id:rows[0].id}};}
-async function updateService(q,ctx,args={}){const branch=branchOf(ctx,args),id=Number(args.service_id);const fields={name:args.name,price:args.price,duration_hours:args.duration_hours,description:args.description,active:args.active},sets=[],vals=[];for(const[k,v]of Object.entries(fields)){if(v!==undefined){vals.push(v);sets.push(`${k}=$${vals.length}`)}}if(!sets.length)throw new Error('No hay cambios');vals.push(id,ctx.tenant_id,branch);const{rows}=await q(`UPDATE services SET ${sets.join(',')} WHERE id=$${vals.length-2} AND tenant_id=$${vals.length-1}::uuid AND (sucursal_id=$${vals.length} OR sucursal_id IS NULL) RETURNING *`,vals);if(!rows[0])throw new Error('Servicio no encontrado');return{ok:true,service:rows[0],assistant_message:`Servicio ${rows[0].name} actualizado.`,client_event:{type:'services_changed',service_id:id}};}
+async function updateService(q,ctx,args={}){const branch=branchOf(ctx,args),id=Number(args.service_id);const fields={name:args.name,price:args.price,duration_hours:args.duration_hours,description:args.description,active:args.active},sets=[],vals=[];for(const[k,v]of Object.entries(fields)){if(v!==undefined){vals.push(v);sets.push(`${k}=$${vals.length}`)}}if(!sets.length)throw new Error('No hay cambios');
+  vals.push(id,ctx.tenant_id,branch);const{rows}=await q(`UPDATE services SET ${sets.join(',')} WHERE id=$${vals.length-2} AND tenant_id=$${vals.length-1}::uuid AND (sucursal_id=$${vals.length} OR sucursal_id IS NULL) RETURNING *`,vals);if(!rows[0])throw new Error('Servicio no encontrado');return{ok:true,service:rows[0],assistant_message:`Servicio ${rows[0].name} actualizado.`,client_event:{type:'services_changed',service_id:id}};}
 async function deleteService(q,ctx,args={}){const branch=branchOf(ctx,args),id=Number(args.service_id);const r=await q(`SELECT id,name FROM services WHERE id=$1 AND tenant_id=$2::uuid AND (sucursal_id=$3 OR sucursal_id IS NULL)`,[id,ctx.tenant_id,branch]);if(!r.rows[0])throw new Error('Servicio no encontrado');const c=requireConfirm(args,`¿Confirmas eliminar el servicio ${r.rows[0].name}?`);if(c)return c;try{await q(`DELETE FROM services WHERE id=$1 AND tenant_id=$2::uuid AND (sucursal_id=$3 OR sucursal_id IS NULL)`,[id,ctx.tenant_id,branch]);}catch(e){if(e.code==='23503')return{blocked:true,assistant_message:'No puedo eliminar ese servicio porque está relacionado con citas, trabajos u otros registros. Puedes desactivarlo en lugar de eliminarlo.'};throw e;}return{ok:true,assistant_message:`Servicio ${r.rows[0].name} eliminado.`,client_event:{type:'services_changed',service_id:id}};}
 
 async function updateAppointmentFull(q,ctx,args={}){const id=Number(args.appointment_id),branch=branchOf(ctx,args);const cur=(await q(`SELECT * FROM appointments WHERE id=$1 AND tenant_id=$2::uuid AND (sucursal_id=$3 OR sucursal_id IS NULL)`,[id,ctx.tenant_id,branch])).rows[0];if(!cur)throw new Error('Cita no encontrada');
-  if(args.date||args.start_time||args.doctor_id){const availability=await checkAvailability(q,ctx,{branch_key:branch,date:text(args.date)||String(cur.date).slice(0,10),exact_time:text(args.start_time)||text(cur.start_time).slice(0,5),doctor_id:args.doctor_id||cur.doctor_id,duration_hours:safeNum(args.duration_hours,cur.duration_hours||1),limit:100});const conflict=availability.slots.filter(s=>String(s.doctor_id)===String(args.doctor_id||cur.doctor_id)&&text(s.start_time).slice(0,5)===(text(args.start_time)||text(cur.start_time).slice(0,5)));if(!conflict.length && (args.date||args.start_time||args.doctor_id)) return{blocked:true,assistant_message:'Ese cambio de horario/doctor no aparece disponible. Puedo buscarte alternativas.'};}
-  const fields={patient:args.patient,phone:args.phone,doctor_id:args.doctor_id,service_id:args.service_id,date:args.date,start_time:args.start_time,duration_hours:args.duration_hours,status:args.status},sets=[],vals=[];for(const[k,v]of Object.entries(fields)){if(v!==undefined){vals.push(v);sets.push(`${k}=$${vals.length}`)}}if(!sets.length)throw new Error('No hay cambios');vals.push(id,ctx.tenant_id,branch);const{rows}=await q(`UPDATE appointments SET ${sets.join(',')} WHERE id=$${vals.length-2} AND tenant_id=$${vals.length-1}::uuid AND (sucursal_id=$${vals.length} OR sucursal_id IS NULL) RETURNING *`,vals);emitAppointmentEvent('appointment.updated',rows[0],ctx);return{ok:true,appointment:rows[0],assistant_message:`Cita de ${rows[0].patient} actualizada.`,client_event:{type:'appointments_changed',appointment_id:id}};}
+  if(args.date||args.start_time||args.doctor_id||args.duration_hours){
+    const date=text(args.date)||(cur.date instanceof Date?cur.date.toISOString().slice(0,10):String(cur.date).slice(0,10));
+    const availability=await checkAvailability(q,ctx,{branch_key:branch,date,exact_time:text(args.start_time)||text(cur.start_time).slice(0,5),doctor_id:args.doctor_id||cur.doctor_id,duration_hours:safeNum(args.duration_hours,cur.duration_hours||1),appointment_id:id,limit:100});
+    if(!availability.slots.length)return{blocked:true,assistant_message:'Ese cambio de horario/doctor/duración no aparece disponible. Puedo buscarte alternativas.'};
+  }
+  const fields={patient:args.patient,phone:args.phone,doctor_id:args.doctor_id,service_id:args.service_id,date:args.date,start_time:args.start_time,duration_hours:args.duration_hours,status:args.status},sets=[],vals=[];for(const[k,v]of Object.entries(fields)){if(v!==undefined){vals.push(v);sets.push(`${k}=$${vals.length}`)}}if(!sets.length)throw new Error('No hay cambios');
+  if(ctx.authorization){const body=Object.fromEntries(Object.entries(fields).filter(([,value])=>value!==undefined));const appointment=await callInternalApiF1(ctx,`/api/appointments/${id}`,{method:'PUT',body,branchKey:branch});if(!appointment?.id)throw new Error('El backend no confirmó la actualización de la cita');return{ok:true,appointment,assistant_message:`Cita de ${appointment.patient} actualizada.`,client_event:{type:'appointments_changed',appointment_id:id}};}
+vals.push(id,ctx.tenant_id,branch);const{rows}=await q(`UPDATE appointments SET ${sets.join(',')} WHERE id=$${vals.length-2} AND tenant_id=$${vals.length-1}::uuid AND (sucursal_id=$${vals.length} OR sucursal_id IS NULL) RETURNING *`,vals);emitAppointmentEvent('appointment.updated',rows[0],ctx);return{ok:true,appointment:rows[0],assistant_message:`Cita de ${rows[0].patient} actualizada.`,client_event:{type:'appointments_changed',appointment_id:id}};}
 async function deleteAppointmentFull(q,ctx,args={}){const id=Number(args.appointment_id),r=await q(`SELECT id,patient,date,start_time FROM appointments WHERE id=$1 AND tenant_id=$2::uuid`,[id,ctx.tenant_id]);if(!r.rows[0])throw new Error('Cita no encontrada');const c=requireConfirm(args,`¿Confirmas eliminar definitivamente la cita de ${r.rows[0].patient}?`);if(c)return c;try{await q(`DELETE FROM appointments WHERE id=$1 AND tenant_id=$2::uuid`,[id,ctx.tenant_id]);}catch(e){if(e.code==='23503')return{blocked:true,assistant_message:'No puedo eliminar la cita porque tiene pagos u otros registros relacionados. Puedes marcarla Cancelada.'};throw e;}return{ok:true,assistant_message:`Cita de ${r.rows[0].patient} eliminada.`,client_event:{type:'appointments_changed',appointment_id:id}};}
 
-async function listExpenses(q,ctx,args={}){const branch=branchOf(ctx,args),limit=Math.min(100,Math.max(1,Number(args.limit)||20));const{rows}=await q(`SELECT id,concept,amount,date,doctor_id,payment_method,sucursal_id FROM expenses WHERE tenant_id=$1::uuid AND (sucursal_id=$2 OR sucursal_id IS NULL) ORDER BY date DESC,id DESC LIMIT $3`,[ctx.tenant_id,branch,limit]);return{expenses:rows,assistant_message:`Encontré ${rows.length} gastos recientes.`};}
+async function listExpenses(q,ctx,args={}){return listFinancialMovements(q,ctx,args,'expense')}
+
 async function updatePayment(q,ctx,args={}){const branch=branchOf(ctx,args),id=Number(args.payment_id),r=(await q(`SELECT * FROM payments WHERE id=$1 AND tenant_id=$2::uuid AND (sucursal_id=$3 OR sucursal_id IS NULL)`,[id,ctx.tenant_id,branch])).rows[0];if(!r)throw new Error('Ingreso no encontrado');const c=requireConfirm(args,`Vas a modificar el ingreso #${id} de ${r.patient} por $${r.amount}. ¿Confirmas?`);if(c)return c;const f={patient:args.patient,amount:args.amount,payment_method:args.payment_method,date:args.date},sets=[],vals=[];for(const[k,v]of Object.entries(f)){if(v!==undefined){vals.push(v);sets.push(`${k}=$${vals.length}`)}}if(!sets.length)throw new Error('No hay cambios');vals.push(id,ctx.tenant_id,branch);const{rows}=await q(`UPDATE payments SET ${sets.join(',')} WHERE id=$${vals.length-2} AND tenant_id=$${vals.length-1}::uuid AND (sucursal_id=$${vals.length} OR sucursal_id IS NULL) RETURNING *`,vals);return{ok:true,payment:rows[0],assistant_message:'Ingreso actualizado.',client_event:{type:'payments_changed',payment_id:id}};}
 async function deletePayment(q,ctx,args={}){const branch=branchOf(ctx,args),id=Number(args.payment_id),r=(await q(`SELECT * FROM payments WHERE id=$1 AND tenant_id=$2::uuid AND (sucursal_id=$3 OR sucursal_id IS NULL)`,[id,ctx.tenant_id,branch])).rows[0];if(!r)throw new Error('Ingreso no encontrado');const c=requireConfirm(args,`¿Confirmas eliminar el ingreso #${id} de ${r.patient} por $${r.amount}?`);if(c)return c;await q(`DELETE FROM payments WHERE id=$1 AND tenant_id=$2::uuid AND (sucursal_id=$3 OR sucursal_id IS NULL)`,[id,ctx.tenant_id,branch]);return{ok:true,assistant_message:'Ingreso eliminado.',client_event:{type:'payments_changed',payment_id:id}};}
 async function updateExpense(q,ctx,args={}){const branch=branchOf(ctx,args),id=Number(args.expense_id),r=(await q(`SELECT * FROM expenses WHERE id=$1 AND tenant_id=$2::uuid AND (sucursal_id=$3 OR sucursal_id IS NULL)`,[id,ctx.tenant_id,branch])).rows[0];if(!r)throw new Error('Gasto no encontrado');const c=requireConfirm(args,`Vas a modificar el gasto #${id} (${r.concept}) por $${r.amount}. ¿Confirmas?`);if(c)return c;const f={concept:args.concept,amount:args.amount,date:args.date,doctor_id:args.doctor_id,payment_method:args.payment_method},sets=[],vals=[];for(const[k,v]of Object.entries(f)){if(v!==undefined){vals.push(v);sets.push(`${k}=$${vals.length}`)}}if(!sets.length)throw new Error('No hay cambios');vals.push(id,ctx.tenant_id,branch);const{rows}=await q(`UPDATE expenses SET ${sets.join(',')} WHERE id=$${vals.length-2} AND tenant_id=$${vals.length-1}::uuid AND (sucursal_id=$${vals.length} OR sucursal_id IS NULL) RETURNING *`,vals);return{ok:true,expense:rows[0],assistant_message:'Gasto actualizado.',client_event:{type:'expenses_changed',expense_id:id}};}
 async function deleteExpense(q,ctx,args={}){const branch=branchOf(ctx,args),id=Number(args.expense_id),r=(await q(`SELECT * FROM expenses WHERE id=$1 AND tenant_id=$2::uuid AND (sucursal_id=$3 OR sucursal_id IS NULL)`,[id,ctx.tenant_id,branch])).rows[0];if(!r)throw new Error('Gasto no encontrado');const c=requireConfirm(args,`¿Confirmas eliminar el gasto #${id} (${r.concept}) por $${r.amount}?`);if(c)return c;await q(`DELETE FROM expenses WHERE id=$1 AND tenant_id=$2::uuid AND (sucursal_id=$3 OR sucursal_id IS NULL)`,[id,ctx.tenant_id,branch]);return{ok:true,assistant_message:'Gasto eliminado.',client_event:{type:'expenses_changed',expense_id:id}};}
 
-async function updateLaboratory(q,ctx,args={}){const branch=branchOf(ctx,args),id=Number(args.laboratory_id);const{rows}=await q(`UPDATE laboratorios SET nombre=COALESCE($1,nombre),contacto=COALESCE($2,contacto) WHERE id=$3 AND tenant_id=$4::uuid AND (sucursal_id=$5 OR sucursal_id IS NULL) RETURNING *`,[text(args.name)||null,text(args.contact)||null,id,ctx.tenant_id,branch]);if(!rows[0])throw new Error('Laboratorio no encontrado');return{ok:true,laboratory:rows[0],assistant_message:`Laboratorio ${rows[0].nombre} actualizado.`,client_event:{type:'laboratory_changed',laboratory_id:id}};}
-async function deleteLaboratory(q,ctx,args={}){const branch=branchOf(ctx,args),id=Number(args.laboratory_id),lab=(await q(`SELECT * FROM laboratorios WHERE id=$1 AND tenant_id=$2::uuid AND (sucursal_id=$3 OR sucursal_id IS NULL)`,[id,ctx.tenant_id,branch])).rows[0];if(!lab)throw new Error('Laboratorio no encontrado');const works=(await q(`SELECT COUNT(*)::int count FROM lab_trabajos WHERE laboratorio_id=$1 AND tenant_id=$2::uuid`,[id,ctx.tenant_id])).rows[0].count;if(works>0)return{blocked:true,related_works:works,assistant_message:`No puedo eliminar ${lab.nombre} porque tiene ${works} trabajo(s) asociado(s). Primero debes reasignarlos o eliminar esos trabajos.`};const c=requireConfirm(args,`¿Confirmas eliminar el laboratorio ${lab.nombre}?`);if(c)return c;await q(`DELETE FROM laboratorios WHERE id=$1 AND tenant_id=$2::uuid`,[id,ctx.tenant_id]);return{ok:true,assistant_message:`Laboratorio ${lab.nombre} eliminado.`,client_event:{type:'laboratory_changed',laboratory_id:id}};}
+async function updateLaboratory(q,ctx,args={}){const branch=branchOf(ctx,args),id=text(args.laboratory_id);const{rows}=await q(`UPDATE laboratorios SET nombre=COALESCE($1,nombre),contacto=COALESCE($2,contacto) WHERE id=$3 AND tenant_id=$4::uuid AND (sucursal_id=$5 OR sucursal_id IS NULL) RETURNING *`,[text(args.name)||null,text(args.contact)||null,id,ctx.tenant_id,branch]);if(!rows[0])throw new Error('Laboratorio no encontrado');return{ok:true,laboratory:rows[0],assistant_message:`Laboratorio ${rows[0].nombre} actualizado.`,client_event:{type:'laboratory_changed',laboratory_id:id}};}
+async function deleteLaboratory(q,ctx,args={}){const branch=branchOf(ctx,args),id=text(args.laboratory_id),lab=(await q(`SELECT * FROM laboratorios WHERE id=$1 AND tenant_id=$2::uuid AND (sucursal_id=$3 OR sucursal_id IS NULL)`,[id,ctx.tenant_id,branch])).rows[0];if(!lab)throw new Error('Laboratorio no encontrado');const works=(await q(`SELECT COUNT(*)::int count FROM lab_trabajos WHERE laboratorio_id=$1 AND tenant_id=$2::uuid`,[id,ctx.tenant_id])).rows[0].count;if(works>0)return{blocked:true,related_works:works,assistant_message:`No puedo eliminar ${lab.nombre} porque tiene ${works} trabajo(s) asociado(s). Primero debes reasignarlos o eliminar esos trabajos.`};const c=requireConfirm(args,`¿Confirmas eliminar el laboratorio ${lab.nombre}?`);if(c)return c;await q(`DELETE FROM laboratorios WHERE id=$1 AND tenant_id=$2::uuid`,[id,ctx.tenant_id]);return{ok:true,assistant_message:`Laboratorio ${lab.nombre} eliminado.`,client_event:{type:'laboratory_changed',laboratory_id:id}};}
 async function updateLabWork(q,ctx,args={}){const branch=branchOf(ctx,args),id=text(args.work_id);if(!id)throw new Error('Falta el trabajo');const f={paciente:args.patient,laboratorio_id:args.laboratory_id,servicio_id:args.service_id,presupuesto:args.budget,fecha_inicio:args.start_date,fecha_entrega_estimada:args.due_date,etapa:args.stage,notas:args.notes},sets=[],vals=[];for(const[k,v]of Object.entries(f)){if(v!==undefined){vals.push(v);sets.push(`${k}=$${vals.length}`)}}if(!sets.length)throw new Error('No hay cambios');vals.push(id,ctx.tenant_id,branch);const{rows}=await q(`UPDATE lab_trabajos SET ${sets.join(',')} WHERE id=$${vals.length-2} AND tenant_id=$${vals.length-1}::uuid AND (sucursal_id=$${vals.length} OR sucursal_id IS NULL) RETURNING *`,vals);if(!rows[0])throw new Error('Trabajo no encontrado');return{ok:true,work:rows[0],assistant_message:`Trabajo de ${rows[0].paciente} actualizado.`,client_event:{type:'laboratory_changed',work_id:id}};}
-async function deleteLabWork(q,ctx,args={}){const branch=branchOf(ctx,args),id=text(args.work_id),work=(await q(`SELECT * FROM lab_trabajos WHERE id=$1 AND tenant_id=$2::uuid AND (sucursal_id=$3 OR sucursal_id IS NULL)`,[id,ctx.tenant_id,branch])).rows[0];if(!work)throw new Error('Trabajo no encontrado');const c=requireConfirm(args,`¿Confirmas eliminar el trabajo de laboratorio de ${work.paciente} y sus abonos asociados?`);if(c)return c;await q(`DELETE FROM lab_abonos WHERE trabajo_id=$1 AND tenant_id=$2::uuid`,[id,ctx.tenant_id]);await q(`DELETE FROM pagos_laboratorio WHERE trabajo_id=$1 AND tenant_id=$2::uuid`,[id,ctx.tenant_id]).catch(()=>{});await q(`DELETE FROM lab_trabajos WHERE id=$1 AND tenant_id=$2::uuid`,[id,ctx.tenant_id]);return{ok:true,assistant_message:'Trabajo de laboratorio eliminado.',client_event:{type:'laboratory_changed',work_id:id}};}
+async function deleteLabWork(q,ctx,args={}){const branch=branchOf(ctx,args),id=text(args.work_id),work=(await q(`SELECT * FROM lab_trabajos WHERE id=$1 AND tenant_id=$2::uuid AND (sucursal_id=$3 OR sucursal_id IS NULL)`,[id,ctx.tenant_id,branch])).rows[0];if(!work)throw new Error('Trabajo no encontrado');const c=requireConfirm(args,`¿Confirmas eliminar el trabajo de laboratorio de ${work.paciente} y sus abonos asociados?`);if(c)return c;await q(`DELETE FROM lab_abonos WHERE trabajo_id=$1 AND tenant_id=$2::uuid`,[id,ctx.tenant_id]);await q(`DELETE FROM pagos_laboratorio WHERE trabajo_id=$1 AND tenant_id=$2::uuid`,[id,ctx.tenant_id]);await q(`DELETE FROM lab_trabajos WHERE id=$1 AND tenant_id=$2::uuid`,[id,ctx.tenant_id]);return{ok:true,assistant_message:'Trabajo de laboratorio eliminado.',client_event:{type:'laboratory_changed',work_id:id}};}
 async function listLabPayments(q,ctx,args={}){const branch=branchOf(ctx,args),id=text(args.work_id),work=(await q(`SELECT id,paciente,presupuesto FROM lab_trabajos WHERE id=$1 AND tenant_id=$2::uuid AND (sucursal_id=$3 OR sucursal_id IS NULL)`,[id,ctx.tenant_id,branch])).rows[0];if(!work)throw new Error('Trabajo no encontrado');const{rows}=await q(`SELECT id,monto,fecha,nota,metodo_pago FROM lab_abonos WHERE trabajo_id=$1 AND tenant_id=$2::uuid ORDER BY fecha,id`,[id,ctx.tenant_id]);const total=rows.reduce((s,r)=>s+Number(r.monto||0),0),budget=Number(work.presupuesto||0);return{work,payments:rows,total_paid:total,balance:Math.max(0,budget-total),assistant_message:`${work.paciente}: abonado $${total.toFixed(2)} de $${budget.toFixed(2)}; saldo $${Math.max(0,budget-total).toFixed(2)}.`};}
 
 async function findMedicalRecordRow(q,ctx,patient,branch){const{rows}=await q(`SELECT * FROM expedientes_medicos WHERE tenant_id=$1::uuid AND (sucursal_id=$2 OR sucursal_id IS NULL) AND (LOWER(nombre_paciente)=LOWER($3) OR nombre_paciente ILIKE $4 OR COALESCE(telefono,'') LIKE $4) ORDER BY CASE WHEN LOWER(nombre_paciente)=LOWER($3) THEN 0 ELSE 1 END,created_at DESC LIMIT 10`,[ctx.tenant_id,branch,patient,`%${patient}%`]);return rows;}
-async function getMedicalRecord(q,ctx,args={}){const branch=branchOf(ctx,args),patient=text(args.patient);if(!patient)throw new Error('Falta el paciente');const matches=await findMedicalRecordRow(q,ctx,patient,branch);if(!matches.length)return{found:false,assistant_message:`No encontré expediente médico de ${patient}. Puedo crear uno si lo necesitas.`};if(matches.length>1&&matches[0].nombre_paciente.toLowerCase()!==patient.toLowerCase())return{ambiguous:true,matches:matches.map(x=>({id:x.id,name:x.nombre_paciente,phone:x.telefono})),assistant_message:`Encontré ${matches.length} expedientes parecidos. Dime cuál paciente deseas.`};const e=matches[0];const [h,o,t,c,d]=await Promise.all([q(`SELECT * FROM historia_clinica_dental WHERE expediente_id=$1 AND tenant_id=$2::uuid ORDER BY created_at DESC LIMIT 1`,[e.id,ctx.tenant_id]),q(`SELECT * FROM odontograma WHERE expediente_id=$1 AND tenant_id=$2::uuid ORDER BY diente_numero`,[e.id,ctx.tenant_id]),q(`SELECT * FROM tratamientos_dentales WHERE expediente_id=$1 AND tenant_id=$2::uuid ORDER BY fecha DESC,created_at DESC`,[e.id,ctx.tenant_id]),q(`SELECT * FROM consentimientos_informados WHERE expediente_id=$1 AND tenant_id=$2::uuid ORDER BY fecha_consentimiento DESC,created_at DESC`,[e.id,ctx.tenant_id]),q(`SELECT id,tipo,nombre,descripcion,fecha_toma,doctor_id,created_at FROM documentos_radiografias WHERE expediente_id=$1 AND tenant_id=$2::uuid ORDER BY fecha_toma DESC,created_at DESC`,[e.id,ctx.tenant_id])]);return{found:true,record:e,clinical_history:h.rows[0]||null,odontogram:o.rows,treatments:t.rows,consents:c.rows,documents:d.rows,assistant_message:`Expediente de ${e.nombre_paciente} encontrado con ${t.rows.length} tratamientos, ${o.rows.length} dientes registrados y ${d.rows.length} documentos.`};}
+async function getMedicalRecord(q,ctx,args={}){const branch=branchOf(ctx,args),patient=text(args.patient);if(!patient&&!args.record_id)throw new Error('Falta el paciente o expediente');const matches=args.record_id?(await q('SELECT * FROM expedientes_medicos WHERE id=$1 AND tenant_id=$2::uuid AND (sucursal_id=$3 OR sucursal_id IS NULL)',[Number(args.record_id),ctx.tenant_id,branch])).rows:await findMedicalRecordRow(q,ctx,patient,branch);if(!matches.length)return{found:false,assistant_message:`No encontré expediente médico de ${patient}. Puedo crear uno si lo necesitas.`};if(matches.length>1)return{ambiguous:true,matches:matches.map(x=>({id:x.id,name:x.nombre_paciente,phone:x.telefono})),assistant_message:`Encontré ${matches.length} expedientes parecidos. Dime cuál paciente deseas.`};const e=matches[0];const [h,o,t,c,d]=await Promise.all([q(`SELECT * FROM historia_clinica_dental WHERE expediente_id=$1 AND tenant_id=$2::uuid ORDER BY created_at DESC LIMIT 1`,[e.id,ctx.tenant_id]),q(`SELECT * FROM odontograma WHERE expediente_id=$1 AND tenant_id=$2::uuid ORDER BY diente_numero`,[e.id,ctx.tenant_id]),q(`SELECT * FROM tratamientos_dentales WHERE expediente_id=$1 AND tenant_id=$2::uuid ORDER BY fecha DESC,created_at DESC`,[e.id,ctx.tenant_id]),q(`SELECT * FROM consentimientos_informados WHERE expediente_id=$1 AND tenant_id=$2::uuid ORDER BY fecha_consentimiento DESC,created_at DESC`,[e.id,ctx.tenant_id]),q(`SELECT id,tipo,nombre,descripcion,fecha_toma,doctor_id,created_at FROM documentos_radiografias WHERE expediente_id=$1 AND tenant_id=$2::uuid ORDER BY fecha_toma DESC,created_at DESC`,[e.id,ctx.tenant_id])]);return{found:true,record:e,clinical_history:h.rows[0]||null,odontogram:o.rows,treatments:t.rows,consents:c.rows,documents:d.rows,assistant_message:`Expediente de ${e.nombre_paciente} encontrado con ${t.rows.length} tratamientos, ${o.rows.length} dientes registrados y ${d.rows.length} documentos.`};}
 async function createMedicalRecord(q,ctx,args={}){const branch=branchOf(ctx,args),patient=text(args.patient);if(!patient)throw new Error('Falta el nombre del paciente');const existing=await findMedicalRecordRow(q,ctx,patient,branch);if(existing.some(x=>x.nombre_paciente.toLowerCase()===patient.toLowerCase()))return{blocked:true,record:existing[0],assistant_message:`Ya existe un expediente para ${patient}. Puedo actualizarlo en lugar de crear otro.`};const{rows}=await q(`INSERT INTO expedientes_medicos(paciente_id,nombre_paciente,telefono,email,fecha_nacimiento,edad,genero,direccion,ocupacion,estado_civil,contacto_emergencia,telefono_emergencia,sucursal_id,tenant_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::uuid) RETURNING *`,[`f1_${Date.now()}_${Math.random().toString(36).slice(2,8)}`,patient,text(args.phone)||null,text(args.email)||null,text(args.birth_date)||null,args.age??null,text(args.gender)||null,text(args.address)||null,text(args.occupation)||null,text(args.marital_status)||null,text(args.emergency_contact)||null,text(args.emergency_phone)||null,branch,ctx.tenant_id]);if(args.appointment_id){await q(`INSERT INTO expediente_citas(expediente_id,appointment_id,tenant_id,sucursal_id) VALUES($1,$2,$3::uuid,$4) ON CONFLICT(tenant_id,appointment_id) DO UPDATE SET expediente_id=EXCLUDED.expediente_id,sucursal_id=EXCLUDED.sucursal_id`,[rows[0].id,Number(args.appointment_id),ctx.tenant_id,branch]);}return{ok:true,record:rows[0],assistant_message:`Expediente médico creado para ${patient}.`,client_event:{type:'medical_record_changed',record_id:rows[0].id}};}
 async function updateMedicalRecord(q,ctx,args={}){const branch=branchOf(ctx,args),id=Number(args.record_id),f={nombre_paciente:args.patient,telefono:args.phone,email:args.email,fecha_nacimiento:args.birth_date,edad:args.age,genero:args.gender,direccion:args.address,ocupacion:args.occupation,estado_civil:args.marital_status,contacto_emergencia:args.emergency_contact,telefono_emergencia:args.emergency_phone},sets=[],vals=[];for(const[k,v]of Object.entries(f)){if(v!==undefined){vals.push(v===''?null:v);sets.push(`${k}=$${vals.length}`)}}if(!sets.length)throw new Error('No hay cambios');sets.push('updated_at=NOW()');vals.push(id,ctx.tenant_id,branch);const{rows}=await q(`UPDATE expedientes_medicos SET ${sets.join(',')} WHERE id=$${vals.length-2} AND tenant_id=$${vals.length-1}::uuid AND (sucursal_id=$${vals.length} OR sucursal_id IS NULL) RETURNING *`,vals);if(!rows[0])throw new Error('Expediente no encontrado');return{ok:true,record:rows[0],assistant_message:`Expediente de ${rows[0].nombre_paciente} actualizado.`,client_event:{type:'medical_record_changed',record_id:id}};}
-async function upsertClinicalHistory(q,ctx,args={}){const branch=branchOf(ctx,args),recordId=Number(args.record_id);const f=[args.appointment_id||null,ctx.tenant_id,text(args.reason),text(args.current_illness),text(args.personal_history),text(args.family_history),text(args.dental_history),text(args.harmful_habits),text(args.allergies),text(args.current_medications),text(args.extraoral_exam),text(args.intraoral_exam),text(args.presumptive_diagnosis),text(args.treatment_plan),text(args.observations),args.doctor_id||null,text(args.date)||localDate(ctx.timezone),branch];let row;if(args.history_id){const{rows}=await q(`UPDATE historia_clinica_dental SET appointment_id=$1,motivo_consulta=$3,enfermedad_actual=$4,antecedentes_personales=$5,antecedentes_familiares=$6,antecedentes_odontologicos=$7,habitos_nocivos=$8,alergias=$9,medicamentos_actuales=$10,examen_extraoral=$11,examen_intraoral=$12,diagnostico_presuntivo=$13,plan_tratamiento=$14,observaciones=$15,doctor_id=$16,fecha_registro=$17,sucursal_id=$18 WHERE id=$19 AND expediente_id=$20 AND tenant_id=$2::uuid RETURNING *`,[...f,Number(args.history_id),recordId]);row=rows[0];}else{const{rows}=await q(`INSERT INTO historia_clinica_dental(expediente_id,appointment_id,tenant_id,motivo_consulta,enfermedad_actual,antecedentes_personales,antecedentes_familiares,antecedentes_odontologicos,habitos_nocivos,alergias,medicamentos_actuales,examen_extraoral,examen_intraoral,diagnostico_presuntivo,plan_tratamiento,observaciones,doctor_id,fecha_registro,sucursal_id) VALUES($1,$2,$3::uuid,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) RETURNING *`,[recordId,...f]);row=rows[0];}if(!row)throw new Error('No se pudo actualizar la historia clínica');return{ok:true,history:row,assistant_message:'Historia clínica actualizada.',client_event:{type:'medical_record_changed',record_id:recordId}};}
+async function upsertClinicalHistory(q,ctx,args={}){
+const existing=(await q(`SELECT * FROM historia_clinica_dental WHERE expediente_id=$1 AND tenant_id=$2::uuid AND ($3::integer IS NULL OR appointment_id=$3) AND ($4::integer IS NULL OR id=$4) ORDER BY created_at DESC,id DESC LIMIT 1`,[Number(args.record_id),ctx.tenant_id,args.appointment_id||null,args.history_id||null])).rows[0];
+if(existing){const fields={reason:'motivo_consulta',current_illness:'enfermedad_actual',personal_history:'antecedentes_personales',family_history:'antecedentes_familiares',dental_history:'antecedentes_odontologicos',harmful_habits:'habitos_nocivos',allergies:'alergias',current_medications:'medicamentos_actuales',extraoral_exam:'examen_extraoral',intraoral_exam:'examen_intraoral',presumptive_diagnosis:'diagnostico_presuntivo',treatment_plan:'plan_tratamiento',observations:'observaciones'};const defaults={history_id:existing.id,appointment_id:existing.appointment_id,doctor_id:existing.doctor_id,date:existing.fecha_registro?new Date(existing.fecha_registro).toISOString().slice(0,10):undefined};for(const[k,v]of Object.entries(fields))defaults[k]=existing[v];args={...defaults,...args,history_id:existing.id};}
+const branch=branchOf(ctx,args),recordId=Number(args.record_id);const f=[args.appointment_id||null,ctx.tenant_id,text(args.reason),text(args.current_illness),text(args.personal_history),text(args.family_history),text(args.dental_history),text(args.harmful_habits),text(args.allergies),text(args.current_medications),text(args.extraoral_exam),text(args.intraoral_exam),text(args.presumptive_diagnosis),text(args.treatment_plan),text(args.observations),args.doctor_id||null,text(args.date)||localDate(ctx.timezone),branch];let row;if(args.history_id){const{rows}=await q(`UPDATE historia_clinica_dental SET appointment_id=$1,motivo_consulta=$3,enfermedad_actual=$4,antecedentes_personales=$5,antecedentes_familiares=$6,antecedentes_odontologicos=$7,habitos_nocivos=$8,alergias=$9,medicamentos_actuales=$10,examen_extraoral=$11,examen_intraoral=$12,diagnostico_presuntivo=$13,plan_tratamiento=$14,observaciones=$15,doctor_id=$16,fecha_registro=$17,sucursal_id=$18 WHERE id=$19 AND expediente_id=$20 AND tenant_id=$2::uuid RETURNING *`,[...f,Number(args.history_id),recordId]);row=rows[0];}else{const{rows}=await q(`INSERT INTO historia_clinica_dental(expediente_id,appointment_id,tenant_id,motivo_consulta,enfermedad_actual,antecedentes_personales,antecedentes_familiares,antecedentes_odontologicos,habitos_nocivos,alergias,medicamentos_actuales,examen_extraoral,examen_intraoral,diagnostico_presuntivo,plan_tratamiento,observaciones,doctor_id,fecha_registro,sucursal_id) VALUES($1,$2,$3::uuid,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) RETURNING *`,[recordId,...f]);row=rows[0];}if(!row)throw new Error('No se pudo actualizar la historia clínica');return{ok:true,history:row,assistant_message:'Historia clínica actualizada.',client_event:{type:'medical_record_changed',record_id:recordId}};}
 async function upsertOdontogramTooth(q,ctx,args={}){const branch=branchOf(ctx,args),recordId=Number(args.record_id),tooth=Number(args.tooth_number);if(tooth<11||tooth>48)throw new Error('Número de diente inválido');const{rows}=await q(`INSERT INTO odontograma(expediente_id,appointment_id,tenant_id,diente_numero,estado,superficie,observaciones,fecha_registro,doctor_id,sucursal_id) VALUES($1,$2,$3::uuid,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT(expediente_id,diente_numero) DO UPDATE SET appointment_id=EXCLUDED.appointment_id,tenant_id=EXCLUDED.tenant_id,estado=EXCLUDED.estado,superficie=EXCLUDED.superficie,observaciones=EXCLUDED.observaciones,fecha_registro=EXCLUDED.fecha_registro,doctor_id=EXCLUDED.doctor_id,sucursal_id=EXCLUDED.sucursal_id RETURNING *`,[recordId,args.appointment_id||null,ctx.tenant_id,tooth,text(args.status),text(args.surface)||null,text(args.observations)||null,text(args.date)||localDate(ctx.timezone),args.doctor_id||null,branch]);return{ok:true,tooth:rows[0],assistant_message:`Diente ${tooth} actualizado a ${args.status}.`,client_event:{type:'medical_record_changed',record_id:recordId}};}
 async function addDentalTreatment(q,ctx,args={}){const branch=branchOf(ctx,args),recordId=Number(args.record_id),procedure=text(args.procedure);if(!procedure)throw new Error('Falta el procedimiento');const{rows}=await q(`INSERT INTO tratamientos_dentales(expediente_id,appointment_id,tenant_id,fecha,diente_numero,procedimiento,descripcion,materiales_usados,duracion_minutos,costo,estado,observaciones,doctor_id,sucursal_id) VALUES($1,$2,$3::uuid,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *`,[recordId,args.appointment_id||null,ctx.tenant_id,text(args.date)||localDate(ctx.timezone),args.tooth_number||null,procedure,text(args.description)||null,text(args.materials)||null,args.duration_minutes??null,args.cost??null,text(args.status)||'planificado',text(args.observations)||null,args.doctor_id||null,branch]);return{ok:true,treatment:rows[0],assistant_message:`Tratamiento ${procedure} registrado.`,client_event:{type:'medical_record_changed',record_id:recordId}};}
 async function updateDentalTreatment(q,ctx,args={}){const branch=branchOf(ctx,args),id=Number(args.treatment_id),f={fecha:args.date,diente_numero:args.tooth_number,procedimiento:args.procedure,descripcion:args.description,materiales_usados:args.materials,duracion_minutos:args.duration_minutes,costo:args.cost,estado:args.status,observaciones:args.observations,doctor_id:args.doctor_id},sets=[],vals=[];for(const[k,v]of Object.entries(f)){if(v!==undefined){vals.push(v);sets.push(`${k}=$${vals.length}`)}}if(!sets.length)throw new Error('No hay cambios');vals.push(id,ctx.tenant_id,branch);const{rows}=await q(`UPDATE tratamientos_dentales SET ${sets.join(',')} WHERE id=$${vals.length-2} AND tenant_id=$${vals.length-1}::uuid AND (sucursal_id=$${vals.length} OR sucursal_id IS NULL) RETURNING *`,vals);if(!rows[0])throw new Error('Tratamiento no encontrado');return{ok:true,treatment:rows[0],assistant_message:'Tratamiento actualizado.',client_event:{type:'medical_record_changed',record_id:rows[0].expediente_id}};}
@@ -1267,14 +1328,14 @@ async function getProductivitySummary(q,ctx,args={}){
 }
 
 async function listObjectivesF1(q,ctx,args={}){const branch=branchOfF1(ctx,args),params=[ctx.tenant_id,branch],conds=['o.tenant_id=$1::uuid','(o.sucursal_id=$2 OR o.sucursal_id IS NULL)'];if(args.from){params.push(text(args.from));conds.push(`(o.periodo_fin IS NULL OR o.periodo_fin >= $${params.length}::date)`)}if(args.to){params.push(text(args.to));conds.push(`(o.periodo_inicio IS NULL OR o.periodo_inicio <= $${params.length}::date)`)}if(args.doctor_id!=null){await ensureDoctorInTenant(q,ctx,args.doctor_id,branch);params.push(Number(args.doctor_id));conds.push(`o.doctor_id=$${params.length}`)}const{rows}=await q(`SELECT o.id,o.doctor_id,d.name doctor_name,o.meta,o.sueldo_base,o.abonos,o.periodo_inicio,o.periodo_fin,o.created_at FROM objetivos o LEFT JOIN doctors d ON d.id=o.doctor_id AND d.tenant_id=o.tenant_id WHERE ${conds.join(' AND ')} ORDER BY COALESCE(o.periodo_inicio,o.created_at) DESC,o.id DESC`,params);return{objectives:rows,assistant_message:`Encontré ${rows.length} objetivo(s).`};}
-async function createObjectiveF1(q,ctx,args={}){const branch=branchOfF1(ctx,args);if(args.doctor_id==null||args.meta==null)return{needs_input:true,missing:[args.doctor_id==null?'doctor_id':null,args.meta==null?'meta':null].filter(Boolean),assistant_message:'Necesito el doctor y el monto de la meta.'};const d=await ensureDoctorInTenant(q,ctx,args.doctor_id,branch),start=text(args.period_start)||null,end=text(args.period_end)||null;const ex=(await q(`SELECT id FROM objetivos WHERE tenant_id=$1::uuid AND sucursal_id=$2 AND doctor_id=$3 AND periodo_inicio IS NOT DISTINCT FROM $4::date AND periodo_fin IS NOT DISTINCT FROM $5::date LIMIT 1`,[ctx.tenant_id,branch,Number(args.doctor_id),start,end])).rows[0];if(ex)return{ok:false,conflict:true,objective_id:ex.id,assistant_message:`Ya existe una meta para ${d.name} en ese período.`};const{rows}=await q(`INSERT INTO objetivos(doctor_id,meta,sueldo_base,abonos,periodo_inicio,periodo_fin,sucursal_id,tenant_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8::uuid) RETURNING *`,[Number(args.doctor_id),Number(args.meta),Number(args.base_salary||0),Number(args.abonos||0),start,end,branch,ctx.tenant_id]);return{ok:true,objective:rows[0],assistant_message:`Meta de ${d.name} creada por $${Number(args.meta).toFixed(2)}.`,client_event:{type:'productivity_changed'}};}
-async function updateObjectiveF1(q,ctx,args={}){const branch=branchOfF1(ctx,args),id=Number(args.objective_id);const cur=(await q(`SELECT o.*,d.name doctor_name FROM objetivos o LEFT JOIN doctors d ON d.id=o.doctor_id WHERE o.id=$1 AND o.tenant_id=$2::uuid AND (o.sucursal_id=$3 OR o.sucursal_id IS NULL)`,[id,ctx.tenant_id,branch])).rows[0];if(!cur)throw new Error('Objetivo no encontrado');if(args.doctor_id!=null)await ensureDoctorInTenant(q,ctx,args.doctor_id,branch);const f={doctor_id:args.doctor_id!=null?Number(args.doctor_id):undefined,meta:args.meta,sueldo_base:args.base_salary,abonos:args.abonos,periodo_inicio:args.period_start,periodo_fin:args.period_end},sets=[],vals=[];for(const[k,v]of Object.entries(f)){if(v!==undefined){vals.push(v);sets.push(`${k}=$${vals.length}`)}}if(!sets.length)return{needs_input:true,assistant_message:'Dime qué dato de la meta quieres cambiar.'};vals.push(id,ctx.tenant_id,branch);const{rows}=await q(`UPDATE objetivos SET ${sets.join(',')} WHERE id=$${vals.length-2} AND tenant_id=$${vals.length-1}::uuid AND (sucursal_id=$${vals.length} OR sucursal_id IS NULL) RETURNING *`,vals);return{ok:true,objective:rows[0],assistant_message:'Objetivo actualizado.',client_event:{type:'productivity_changed'}};}
-async function deleteObjectiveF1(q,ctx,args={}){const branch=branchOfF1(ctx,args),id=Number(args.objective_id),cur=(await q(`SELECT o.id,o.meta,d.name doctor_name FROM objetivos o LEFT JOIN doctors d ON d.id=o.doctor_id WHERE o.id=$1 AND o.tenant_id=$2::uuid AND (o.sucursal_id=$3 OR o.sucursal_id IS NULL)`,[id,ctx.tenant_id,branch])).rows[0];if(!cur)throw new Error('Objetivo no encontrado');const c=requireConfirm(args,`¿Confirmas eliminar la meta de ${cur.doctor_name||'este doctor'} por $${Number(cur.meta||0).toFixed(2)}?`);if(c)return c;await q(`DELETE FROM objetivos WHERE id=$1 AND tenant_id=$2::uuid AND (sucursal_id=$3 OR sucursal_id IS NULL)`,[id,ctx.tenant_id,branch]);return{ok:true,assistant_message:'Objetivo eliminado.',client_event:{type:'productivity_changed'}};}
+async function createObjectiveF1(q,ctx,args={}){const branch=branchOfF1(ctx,args);if(args.doctor_id==null||args.meta==null)return{needs_input:true,missing:[args.doctor_id==null?'doctor_id':null,args.meta==null?'meta':null].filter(Boolean),assistant_message:'Necesito el doctor y el monto de la meta.'};const d=await ensureDoctorInTenant(q,ctx,args.doctor_id,branch),start=text(args.period_start)||null,end=text(args.period_end)||null;const ex=(await q(`SELECT id FROM objetivos WHERE tenant_id=$1::uuid AND sucursal_id=$2 AND doctor_id=$3 AND periodo_inicio IS NOT DISTINCT FROM $4::date AND periodo_fin IS NOT DISTINCT FROM $5::date LIMIT 1`,[ctx.tenant_id,branch,Number(args.doctor_id),start,end])).rows[0];if(ex)return{ok:false,conflict:true,objective_id:ex.id,assistant_message:`Ya existe una meta para ${d.name} en ese período.`};const{rows}=await q(`INSERT INTO objetivos(doctor_id,meta,sueldo_base,abonos,periodo_inicio,periodo_fin,sucursal_id,tenant_id,nombre) VALUES($1,$2,$3,$4,$5,$6,$7,$8::uuid,$9) RETURNING *`,[Number(args.doctor_id),Number(args.meta),Number(args.base_salary||0),Number(args.abonos||0),start,end,branch,ctx.tenant_id,`Meta de ${d.name}`]);return{ok:true,objective:rows[0],assistant_message:`Meta de ${d.name} creada por $${Number(args.meta).toFixed(2)}.`,client_event:{type:'productivity_changed'}};}
+async function updateObjectiveF1(q,ctx,args={}){const branch=branchOfF1(ctx,args),id=Number(args.objective_id);const cur=(await q(`SELECT o.*,d.name doctor_name FROM objetivos o LEFT JOIN doctors d ON d.id=o.doctor_id AND d.tenant_id=o.tenant_id WHERE o.id=$1 AND o.tenant_id=$2::uuid AND (o.sucursal_id=$3 OR o.sucursal_id IS NULL)`,[id,ctx.tenant_id,branch])).rows[0];if(!cur)throw new Error('Objetivo no encontrado');if(args.doctor_id!=null)await ensureDoctorInTenant(q,ctx,args.doctor_id,branch);const f={doctor_id:args.doctor_id!=null?Number(args.doctor_id):undefined,meta:args.meta,sueldo_base:args.base_salary,abonos:args.abonos,periodo_inicio:args.period_start,periodo_fin:args.period_end},sets=[],vals=[];for(const[k,v]of Object.entries(f)){if(v!==undefined){vals.push(v);sets.push(`${k}=$${vals.length}`)}}if(!sets.length)return{needs_input:true,assistant_message:'Dime qué dato de la meta quieres cambiar.'};vals.push(id,ctx.tenant_id,branch);const{rows}=await q(`UPDATE objetivos SET ${sets.join(',')} WHERE id=$${vals.length-2} AND tenant_id=$${vals.length-1}::uuid AND (sucursal_id=$${vals.length} OR sucursal_id IS NULL) RETURNING *`,vals);return{ok:true,objective:rows[0],assistant_message:'Objetivo actualizado.',client_event:{type:'productivity_changed'}};}
+async function deleteObjectiveF1(q,ctx,args={}){const branch=branchOfF1(ctx,args),id=Number(args.objective_id),cur=(await q(`SELECT o.id,o.meta,d.name doctor_name FROM objetivos o LEFT JOIN doctors d ON d.id=o.doctor_id AND d.tenant_id=o.tenant_id WHERE o.id=$1 AND o.tenant_id=$2::uuid AND (o.sucursal_id=$3 OR o.sucursal_id IS NULL)`,[id,ctx.tenant_id,branch])).rows[0];if(!cur)throw new Error('Objetivo no encontrado');const c=requireConfirm(args,`¿Confirmas eliminar la meta de ${cur.doctor_name||'este doctor'} por $${Number(cur.meta||0).toFixed(2)}?`);if(c)return c;await q(`DELETE FROM objetivos WHERE id=$1 AND tenant_id=$2::uuid AND (sucursal_id=$3 OR sucursal_id IS NULL)`,[id,ctx.tenant_id,branch]);return{ok:true,assistant_message:'Objetivo eliminado.',client_event:{type:'productivity_changed'}};}
 async function getDoctorProductivitySettings(q,ctx,args={}){const branch=branchOfF1(ctx,args);if(args.doctor_id!=null)await ensureDoctorInTenant(q,ctx,args.doctor_id,branch);const params=[ctx.tenant_id,branch],cond=args.doctor_id!=null?' AND d.id=$3':'';if(args.doctor_id!=null)params.push(Number(args.doctor_id));const{rows}=await q(`SELECT d.id doctor_id,d.name doctor_name,COALESCE(s.visible,true) visible,COALESCE(s.comision_pct,0.20)::numeric comision_pct FROM doctors d LEFT JOIN objetivos_doctor_settings s ON s.doctor_id=d.id AND s.tenant_id=d.tenant_id AND s.sucursal_id=$2 WHERE d.tenant_id=$1::uuid AND (d.sucursal_id=$2 OR d.sucursal_id IS NULL)${cond} ORDER BY d.name`,params);return{settings:rows,assistant_message:`Configuración de productividad de ${rows.length} doctor(es).`};}
 async function updateDoctorProductivitySettings(q,ctx,args={}){const branch=branchOfF1(ctx,args),d=await ensureDoctorInTenant(q,ctx,args.doctor_id,branch);let pct=args.commission_pct!==undefined?pctFraction(args.commission_pct):null;const existing=(await q(`SELECT visible,comision_pct FROM objetivos_doctor_settings WHERE tenant_id=$1::uuid AND sucursal_id=$2 AND doctor_id=$3`,[ctx.tenant_id,branch,Number(args.doctor_id)])).rows[0];const visible=args.visible!==undefined?Boolean(args.visible):(existing?.visible??true);if(pct==null)pct=Number(existing?.comision_pct??0.20);const{rows}=await q(`INSERT INTO objetivos_doctor_settings(tenant_id,sucursal_id,doctor_id,visible,comision_pct) VALUES($1::uuid,$2,$3,$4,$5) ON CONFLICT(tenant_id,sucursal_id,doctor_id) DO UPDATE SET visible=EXCLUDED.visible,comision_pct=EXCLUDED.comision_pct,updated_at=NOW() RETURNING doctor_id,visible,comision_pct`,[ctx.tenant_id,branch,Number(args.doctor_id),visible,pct]);return{ok:true,setting:{...rows[0],doctor_name:d.name},assistant_message:`Configuración de ${d.name} actualizada: comisión ${(pct*100).toFixed(1)}%.`,client_event:{type:'productivity_changed'}};}
 
 async function getBillingConfigF1(q,ctx,args={}){const branch=branchOfF1(ctx,args);const{rows}=await q(`SELECT rfc,razon_social,regimen_fiscal,codigo_postal,pac_proveedor,serie_facturas,ultimo_folio,ambiente,activo,logo_url,cer_file IS NOT NULL tiene_cer,key_file IS NOT NULL tiene_key,COALESCE(key_password,'')<>'' tiene_password FROM facturacion_configuracion WHERE tenant_id=$1::uuid AND sucursal_id=$2 LIMIT 1`,[ctx.tenant_id,branch]);const cfg=rows[0]||{rfc:'',razon_social:'',regimen_fiscal:'',codigo_postal:'',pac_proveedor:'facturama',serie_facturas:'',ultimo_folio:1,ambiente:'pruebas',activo:false,tiene_cer:false,tiene_key:false,tiene_password:false};return{config:cfg,certificates_ready:Boolean(cfg.tiene_cer&&cfg.tiene_key&&cfg.tiene_password),assistant_message:cfg.rfc?`Configuración fiscal: ${cfg.razon_social||''}, RFC ${cfg.rfc}, régimen ${cfg.regimen_fiscal||'sin configurar'}.`:'La configuración fiscal todavía no tiene RFC registrado.'};}
-async function updateBillingConfigF1(q,ctx,args={}){const branch=branchOfF1(ctx,args),current=(await getBillingConfigF1(q,ctx,{branch_key:branch})).config;const rfc=text(args.rfc)||current.rfc,bn=text(args.business_name)||current.razon_social,tr=text(args.tax_regime)||current.regimen_fiscal,pc=text(args.postal_code)||current.codigo_postal;if(!rfc||!bn||!tr||!pc)return{needs_input:true,missing:[!rfc?'rfc':null,!bn?'business_name':null,!tr?'tax_regime':null,!pc?'postal_code':null].filter(Boolean),assistant_message:'Para guardar la configuración fiscal necesito RFC, razón social, régimen fiscal y código postal.'};const{rows}=await q(`INSERT INTO facturacion_configuracion(tenant_id,sucursal_id,rfc,razon_social,regimen_fiscal,codigo_postal,pac_proveedor,serie_facturas,ultimo_folio,ambiente,activo,updated_at) VALUES($1::uuid,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,NOW()) ON CONFLICT(tenant_id,sucursal_id) DO UPDATE SET rfc=EXCLUDED.rfc,razon_social=EXCLUDED.razon_social,regimen_fiscal=EXCLUDED.regimen_fiscal,codigo_postal=EXCLUDED.codigo_postal,pac_proveedor=EXCLUDED.pac_proveedor,serie_facturas=EXCLUDED.serie_facturas,ambiente=EXCLUDED.ambiente,activo=EXCLUDED.activo,updated_at=NOW() RETURNING rfc,razon_social,regimen_fiscal,codigo_postal,pac_proveedor,serie_facturas,ultimo_folio,ambiente,activo`,[ctx.tenant_id,branch,rfc.toUpperCase(),bn,tr,pc,text(args.pac_provider)||current.pac_proveedor||'facturama',args.invoice_series!==undefined?text(args.invoice_series):(current.serie_facturas||''),Number(current.ultimo_folio||1),args.environment||current.ambiente||'pruebas',args.active!==undefined?Boolean(args.active):(current.activo!==false)]);return{ok:true,config:rows[0],assistant_message:'Configuración fiscal actualizada.',client_event:{type:'billing_changed'}};}
+async function updateBillingConfigF1(q,ctx,args={}){const branch=branchOfF1(ctx,args),current=(await getBillingConfigF1(q,ctx,{branch_key:branch})).config;const rfc=text(args.rfc)||current.rfc,bn=text(args.business_name)||current.razon_social,tr=text(args.tax_regime)||current.regimen_fiscal,pc=text(args.postal_code)||current.codigo_postal;if(!rfc||!bn||!tr||!pc)return{needs_input:true,missing:[!rfc?'rfc':null,!bn?'business_name':null,!tr?'tax_regime':null,!pc?'postal_code':null].filter(Boolean),assistant_message:'Para guardar la configuración fiscal necesito RFC, razón social, régimen fiscal y código postal.'};const{rows}=await q(`INSERT INTO facturacion_configuracion(tenant_id,sucursal_id,rfc,razon_social,regimen_fiscal,codigo_postal,pac_proveedor,serie_facturas,ultimo_folio,ambiente,activo,pac_usuario,pac_password,updated_at) VALUES($1::uuid,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'','',NOW()) ON CONFLICT(tenant_id,sucursal_id) DO UPDATE SET rfc=EXCLUDED.rfc,razon_social=EXCLUDED.razon_social,regimen_fiscal=EXCLUDED.regimen_fiscal,codigo_postal=EXCLUDED.codigo_postal,pac_proveedor=EXCLUDED.pac_proveedor,serie_facturas=EXCLUDED.serie_facturas,ambiente=EXCLUDED.ambiente,activo=EXCLUDED.activo,updated_at=NOW() RETURNING rfc,razon_social,regimen_fiscal,codigo_postal,pac_proveedor,serie_facturas,ultimo_folio,ambiente,activo`,[ctx.tenant_id,branch,rfc.toUpperCase(),bn,tr,pc,text(args.pac_provider)||current.pac_proveedor||'facturama',args.invoice_series!==undefined?text(args.invoice_series):(current.serie_facturas||''),Number(current.ultimo_folio||1),args.environment||current.ambiente||'pruebas',args.active!==undefined?Boolean(args.active):(current.activo===true)]);return{ok:true,config:rows[0],assistant_message:'Configuración fiscal actualizada.',client_event:{type:'billing_changed'}};}
 async function listTaxClientsF1(q,ctx,args={}){const branch=branchOfF1(ctx,args),query=text(args.query),limit=Math.min(Math.max(Number(args.limit||50),1),100),params=[ctx.tenant_id,branch],cond=query?' AND (rfc ILIKE $3 OR razon_social ILIKE $3 OR COALESCE(email,\'\') ILIKE $3 OR COALESCE(telefono,\'\') ILIKE $3)':'';if(query)params.push(`%${query}%`);params.push(limit);const{rows}=await q(`SELECT id,rfc,razon_social,email,telefono,direccion,uso_cfdi,codigo_postal,regimen_fiscal,created_at FROM facturacion_clientes WHERE tenant_id=$1::uuid AND (sucursal_id=$2 OR sucursal_id IS NULL)${cond} ORDER BY created_at DESC LIMIT $${params.length}`,params);return{clients:rows,assistant_message:`Encontré ${rows.length} cliente(s) fiscal(es).`};}
 async function createTaxClientF1(q,ctx,args={}){const branch=branchOfF1(ctx,args),rfc=text(args.rfc).toUpperCase(),bn=text(args.business_name);if(!rfc||!bn)return{needs_input:true,missing:[!rfc?'rfc':null,!bn?'business_name':null].filter(Boolean),assistant_message:'Necesito RFC y razón social para crear el cliente fiscal.'};const dupe=(await q(`SELECT id,razon_social FROM facturacion_clientes WHERE tenant_id=$1::uuid AND sucursal_id=$2 AND UPPER(rfc)=UPPER($3) LIMIT 1`,[ctx.tenant_id,branch,rfc])).rows[0];if(dupe)return{ok:false,conflict:true,client:dupe,assistant_message:`Ese RFC ya está registrado como ${dupe.razon_social}.`};const{rows}=await q(`INSERT INTO facturacion_clientes(rfc,razon_social,email,telefono,direccion,uso_cfdi,codigo_postal,regimen_fiscal,sucursal_id,tenant_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::uuid) RETURNING *`,[rfc,bn,text(args.email)||null,text(args.phone)||null,text(args.address)||null,text(args.cfdi_use)||null,text(args.postal_code)||null,text(args.tax_regime)||null,branch,ctx.tenant_id]);return{ok:true,client:rows[0],assistant_message:`Cliente fiscal ${bn} creado.`,client_event:{type:'billing_changed'}};}
 async function updateTaxClientF1(q,ctx,args={}){const branch=branchOfF1(ctx,args),id=String(args.client_id),f={rfc:args.rfc?text(args.rfc).toUpperCase():undefined,razon_social:args.business_name,email:args.email,telefono:args.phone,direccion:args.address,uso_cfdi:args.cfdi_use,codigo_postal:args.postal_code,regimen_fiscal:args.tax_regime},sets=[],vals=[];for(const[k,v]of Object.entries(f)){if(v!==undefined){vals.push(v);sets.push(`${k}=$${vals.length}`)}}if(!sets.length)return{needs_input:true,assistant_message:'Dime qué dato fiscal quieres modificar.'};vals.push(id,ctx.tenant_id,branch);const{rows}=await q(`UPDATE facturacion_clientes SET ${sets.join(',')} WHERE id=$${vals.length-2} AND tenant_id=$${vals.length-1}::uuid AND (sucursal_id=$${vals.length} OR sucursal_id IS NULL) RETURNING *`,vals);if(!rows[0])throw new Error('Cliente fiscal no encontrado');return{ok:true,client:rows[0],assistant_message:'Cliente fiscal actualizado.',client_event:{type:'billing_changed'}};}
@@ -1286,11 +1347,11 @@ async function listInvoicesF1(q,ctx,args={}){const branch=branchOfF1(ctx,args),p
 async function getInvoiceF1(q,ctx,args={}){const branch=branchOfF1(ctx,args),id=String(args.invoice_id),f=(await q(`SELECT * FROM facturas WHERE id=$1 AND tenant_id=$2::uuid AND (sucursal_id=$3 OR sucursal_id IS NULL) LIMIT 1`,[id,ctx.tenant_id,branch])).rows[0];if(!f)throw new Error('Factura no encontrada');const c=(await q(`SELECT id,descripcion,cantidad,valor_unitario,importe,clave_prod_serv,unidad,objeto_imp FROM factura_conceptos WHERE factura_id=$1 AND tenant_id=$2::uuid AND (sucursal_id=$3 OR sucursal_id IS NULL) ORDER BY id`,[id,ctx.tenant_id,branch])).rows;return{invoice:{...f,concepts:c},assistant_message:`Factura de ${f.cliente} por $${Number(f.total||0).toFixed(2)}; estado ${f.estado||'borrador'}.`};}
 function normalizeInvoiceConcepts(concepts){return(Array.isArray(concepts)?concepts:[]).map(c=>{const q=Math.max(Number(c.quantity||1),0),uv=Number(c.unit_value||0),amt=c.amount!=null?Number(c.amount):q*uv;return{description:text(c.description)||'Concepto',quantity:q,unit_value:uv,amount:amt,sat_product_key:text(c.sat_product_key)||null,unit_key:text(c.unit_key)||null,tax_object:text(c.tax_object)||null}})}
 async function createInvoiceF1(q,ctx,args={}){const branch=branchOfF1(ctx,args),client=text(args.client),type=text(args.type);if(!client||!type)return{needs_input:true,missing:[!client?'client':null,!type?'type':null].filter(Boolean),assistant_message:'Necesito cliente y tipo de factura.'};if(args.appointment_id){const ap=(await q(`SELECT id,patient,status FROM appointments WHERE id=$1 AND tenant_id=$2::uuid AND (sucursal_id=$3 OR sucursal_id IS NULL)`,[Number(args.appointment_id),ctx.tenant_id,branch])).rows[0];if(!ap)return{ok:false,assistant_message:'La cita indicada no pertenece a esta empresa/sucursal.'}}const concepts=normalizeInvoiceConcepts(args.concepts),calc=concepts.reduce((a,c)=>a+c.amount,0),total=args.total!=null?Number(args.total):calc;if(!concepts.length && !(total>0))return{needs_input:true,missing:['concepts_or_total'],assistant_message:'Necesito al menos un concepto o el total de la factura.'};const{rows}=await q(`INSERT INTO facturas(cliente,tipo,forma_pago,metodo_pago,cita_id,notas,total,sucursal_id,tenant_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::uuid) RETURNING *`,[client,type,text(args.payment_form)||null,text(args.payment_method)||null,args.appointment_id||null,text(args.notes)||null,total,branch,ctx.tenant_id]);const f=rows[0];for(const c of concepts)await q(`INSERT INTO factura_conceptos(factura_id,descripcion,cantidad,valor_unitario,importe,clave_prod_serv,unidad,objeto_imp,sucursal_id,tenant_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::uuid)`,[f.id,c.description,c.quantity,c.unit_value,c.amount,c.sat_product_key,c.unit_key,c.tax_object,branch,ctx.tenant_id]);return{ok:true,invoice:{...f,concepts},assistant_message:`Factura creada para ${client} por $${total.toFixed(2)}.`,client_event:{type:'billing_changed'}};}
-async function updateInvoiceF1(q,ctx,args={}){const branch=branchOfF1(ctx,args),id=String(args.invoice_id),current=(await getInvoiceF1(q,ctx,{invoice_id:id,branch_key:branch})).invoice;if(['timbrada','cancelada'].includes(normalizeStatus(current.estado)) && !args.confirmed)return{ok:false,blocked:true,assistant_message:`La factura está ${current.estado}; no modificaré sus datos fiscales directamente.`};if(args.appointment_id){const ap=(await q(`SELECT id FROM appointments WHERE id=$1 AND tenant_id=$2::uuid AND (sucursal_id=$3 OR sucursal_id IS NULL)`,[Number(args.appointment_id),ctx.tenant_id,branch])).rows[0];if(!ap)throw new Error('La cita no pertenece a esta empresa/sucursal')}const f={cliente:args.client,tipo:args.type,forma_pago:args.payment_form,metodo_pago:args.payment_method,cita_id:args.appointment_id,notas:args.notes,total:args.total},sets=[],vals=[];for(const[k,v]of Object.entries(f)){if(v!==undefined){vals.push(v);sets.push(`${k}=$${vals.length}`)}}let out=current;if(sets.length){vals.push(id,ctx.tenant_id,branch);out=(await q(`UPDATE facturas SET ${sets.join(',')} WHERE id=$${vals.length-2} AND tenant_id=$${vals.length-1}::uuid AND (sucursal_id=$${vals.length} OR sucursal_id IS NULL) RETURNING *`,vals)).rows[0]}if(Array.isArray(args.concepts)){const concepts=normalizeInvoiceConcepts(args.concepts);await q(`DELETE FROM factura_conceptos WHERE factura_id=$1 AND tenant_id=$2::uuid AND (sucursal_id=$3 OR sucursal_id IS NULL)`,[id,ctx.tenant_id,branch]);for(const c of concepts)await q(`INSERT INTO factura_conceptos(factura_id,descripcion,cantidad,valor_unitario,importe,clave_prod_serv,unidad,objeto_imp,sucursal_id,tenant_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::uuid)`,[id,c.description,c.quantity,c.unit_value,c.amount,c.sat_product_key,c.unit_key,c.tax_object,branch,ctx.tenant_id]);if(args.total===undefined){const total=concepts.reduce((a,c)=>a+c.amount,0);out=(await q(`UPDATE facturas SET total=$1 WHERE id=$2 AND tenant_id=$3::uuid RETURNING *`,[total,id,ctx.tenant_id])).rows[0]}}return{ok:true,invoice:out,assistant_message:'Factura actualizada.',client_event:{type:'billing_changed'}};}
-async function deleteInvoiceF1(q,ctx,args={}){const branch=branchOfF1(ctx,args),id=String(args.invoice_id),f=(await getInvoiceF1(q,ctx,{invoice_id:id,branch_key:branch})).invoice;const c=requireConfirm(args,`¿Confirmas eliminar definitivamente la factura de ${f.cliente} por $${Number(f.total||0).toFixed(2)}?`);if(c)return c;if(normalizeStatus(f.estado)==='timbrada')return{ok:false,blocked:true,assistant_message:'Una factura timbrada no debe eliminarse. Debe cancelarse fiscalmente.'};await q(`DELETE FROM factura_conceptos WHERE factura_id=$1 AND tenant_id=$2::uuid AND (sucursal_id=$3 OR sucursal_id IS NULL)`,[id,ctx.tenant_id,branch]);await q(`DELETE FROM facturas WHERE id=$1 AND tenant_id=$2::uuid AND (sucursal_id=$3 OR sucursal_id IS NULL)`,[id,ctx.tenant_id,branch]);return{ok:true,assistant_message:'Factura eliminada.',client_event:{type:'billing_changed'}};}
-async function cancelInvoiceF1(q,ctx,args={}){const branch=branchOfF1(ctx,args),id=String(args.invoice_id),f=(await getInvoiceF1(q,ctx,{invoice_id:id,branch_key:branch})).invoice;const c=requireConfirm(args,`¿Confirmas cancelar la factura de ${f.cliente}${f.folio?` folio ${f.folio}`:''}?`);if(c)return c;if(normalizeStatus(f.estado)==='cancelada')return{ok:true,invoice:f,assistant_message:'La factura ya estaba cancelada.'};const{rows}=await q(`UPDATE facturas SET estado='cancelada',status=COALESCE(status,'Cancelada'),cancelada_at=NOW(),motivo_cancelacion=COALESCE($1,motivo_cancelacion) WHERE id=$2 AND tenant_id=$3::uuid AND (sucursal_id=$4 OR sucursal_id IS NULL) RETURNING *`,[text(args.reason)||null,id,ctx.tenant_id,branch]);return{ok:true,invoice:rows[0],assistant_message:'Factura marcada como cancelada en CliniqOne. Si estaba timbrada, verifica también la confirmación fiscal del PAC.',client_event:{type:'billing_changed'}};}
-async function stampInvoiceF1(q,ctx,args={}){const branch=branchOfF1(ctx,args),id=String(args.invoice_id),f=(await getInvoiceF1(q,ctx,{invoice_id:id,branch_key:branch})).invoice;const c=requireConfirm(args,`¿Confirmas timbrar fiscalmente la factura de ${f.cliente} por $${Number(f.total||0).toFixed(2)}?`);if(c)return c;if(normalizeStatus(f.estado)==='timbrada'&&f.uuid)return{ok:true,invoice:f,assistant_message:`La factura ya está timbrada con UUID ${f.uuid}.`};const cfg=await getBillingConfigF1(q,ctx,{branch_key:branch});if(!cfg.config.rfc||!cfg.config.razon_social||!cfg.config.regimen_fiscal||!cfg.config.codigo_postal)return{ok:false,blocked:true,assistant_message:'Faltan datos fiscales del emisor. Completa RFC, razón social, régimen y código postal antes de timbrar.'};const base=text(process.env.F1_INTERNAL_API_BASE||process.env.RENDER_EXTERNAL_URL||process.env.PUBLIC_BASE_URL).replace(/\/$/,'');if(!base||!ctx.authorization)return{ok:false,blocked:true,assistant_message:'El timbrado requiere el conector PAC del backend y una sesión autenticada. No marcaré la factura como timbrada sin respuesta real del PAC.'};let lastErr='';for(const path of ['/api/facturama/timbrar','/facturama/timbrar']){try{const r=await fetch(base+path,{method:'POST',headers:{'Content-Type':'application/json','Authorization':ctx.authorization,'x-sucursal':branch},body:JSON.stringify({factura_id:id,sucursal_id:branch})});const raw=await r.text();let data={};try{data=raw?JSON.parse(raw):{}}catch{data={raw}}if(!r.ok){lastErr=data?.error||data?.message||`HTTP ${r.status}`;continue}const uuid=data?.uuid||data?.Uuid||data?.cfdi_uuid||data?.data?.uuid||data?.factura?.uuid;const cfdiId=data?.cfdi_id||data?.id||data?.facturama?.Id||data?.data?.id;if(!uuid&&!cfdiId&&!data?.ok){lastErr='El PAC no devolvió confirmación verificable';continue}const updated=(await q(`UPDATE facturas SET estado='timbrada',uuid=COALESCE($1,uuid),cfdi_id=COALESCE($2,cfdi_id),fecha_timbrado=COALESCE(fecha_timbrado,NOW()) WHERE id=$3 AND tenant_id=$4::uuid AND (sucursal_id=$5 OR sucursal_id IS NULL) RETURNING *`,[uuid||null,cfdiId||null,id,ctx.tenant_id,branch])).rows[0];return{ok:true,invoice:updated,pac_response:data,assistant_message:uuid?`Factura timbrada correctamente. UUID ${uuid}.`:'Factura timbrada correctamente por el PAC.',client_event:{type:'billing_changed'}}}catch(e){lastErr=e.message}}return{ok:false,pac_error:lastErr,assistant_message:`No pude confirmar el timbrado con el PAC${lastErr?`: ${lastErr}`:''}. La factura no se reportará como timbrada.`};}
-async function getInvoiceDownloadLinksF1(q,ctx,args={}){const branch=branchOfF1(ctx,args),f=(await getInvoiceF1(q,ctx,args)).invoice,ref=f.cfdi_id||f.uuid||f.id;if(!ref)return{ok:false,assistant_message:'La factura no tiene identificador fiscal disponible para descarga.'};const enc=encodeURIComponent(String(ref)),qs=`?sucursal=${encodeURIComponent(branch)}`;return{ok:true,invoice_id:f.id,reference:ref,links:{pdf:`/api/facturama/${enc}/pdf${qs}`,xml:`/api/facturama/${enc}/xml${qs}`,zip:`/api/facturama/${enc}/zip${qs}`},assistant_message:'Preparé las rutas de descarga de PDF, XML y ZIP.'};}
+async function updateInvoiceF1(q,ctx,args={}){const branch=branchOfF1(ctx,args),id=String(args.invoice_id),current=(await getInvoiceF1(q,ctx,{invoice_id:id,branch_key:branch})).invoice;if(['timbrada','cancelada'].includes(normalizeStatus(current.estado)) )return{ok:false,blocked:true,assistant_message:`La factura está ${current.estado}; no modificaré sus datos fiscales directamente.`};if(args.appointment_id){const ap=(await q(`SELECT id FROM appointments WHERE id=$1 AND tenant_id=$2::uuid AND (sucursal_id=$3 OR sucursal_id IS NULL)`,[Number(args.appointment_id),ctx.tenant_id,branch])).rows[0];if(!ap)throw new Error('La cita no pertenece a esta empresa/sucursal')}const f={cliente:args.client,tipo:args.type,forma_pago:args.payment_form,metodo_pago:args.payment_method,cita_id:args.appointment_id,notas:args.notes,total:args.total},sets=[],vals=[];for(const[k,v]of Object.entries(f)){if(v!==undefined){vals.push(v);sets.push(`${k}=$${vals.length}`)}}let out=current;if(sets.length){vals.push(id,ctx.tenant_id,branch);out=(await q(`UPDATE facturas SET ${sets.join(',')} WHERE id=$${vals.length-2} AND tenant_id=$${vals.length-1}::uuid AND (sucursal_id=$${vals.length} OR sucursal_id IS NULL) RETURNING *`,vals)).rows[0]}if(Array.isArray(args.concepts)){const concepts=normalizeInvoiceConcepts(args.concepts);await q(`DELETE FROM factura_conceptos WHERE factura_id=$1 AND tenant_id=$2::uuid AND (sucursal_id=$3 OR sucursal_id IS NULL)`,[id,ctx.tenant_id,branch]);for(const c of concepts)await q(`INSERT INTO factura_conceptos(factura_id,descripcion,cantidad,valor_unitario,importe,clave_prod_serv,unidad,objeto_imp,sucursal_id,tenant_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::uuid)`,[id,c.description,c.quantity,c.unit_value,c.amount,c.sat_product_key,c.unit_key,c.tax_object,branch,ctx.tenant_id]);if(args.total===undefined){const total=concepts.reduce((a,c)=>a+c.amount,0);out=(await q(`UPDATE facturas SET total=$1 WHERE id=$2 AND tenant_id=$3::uuid RETURNING *`,[total,id,ctx.tenant_id])).rows[0]}}return{ok:true,invoice:out,assistant_message:'Factura actualizada.',client_event:{type:'billing_changed'}};}
+async function deleteInvoiceF1(q,ctx,args={}){const branch=branchOfF1(ctx,args),id=String(args.invoice_id),f=(await getInvoiceF1(q,ctx,{invoice_id:id,branch_key:branch})).invoice;const c=requireConfirm(args,`¿Confirmas eliminar definitivamente la factura de ${f.cliente} por $${Number(f.total||0).toFixed(2)}?`);if(c)return c;if(f.uuid||f.cfdi_id||normalizeStatus(f.estado)==='timbrada')return{ok:false,blocked:true,assistant_message:'Una factura timbrada no debe eliminarse. Debe cancelarse fiscalmente.'};await q(`DELETE FROM factura_conceptos WHERE factura_id=$1 AND tenant_id=$2::uuid AND (sucursal_id=$3 OR sucursal_id IS NULL)`,[id,ctx.tenant_id,branch]);await q(`DELETE FROM facturas WHERE id=$1 AND tenant_id=$2::uuid AND (sucursal_id=$3 OR sucursal_id IS NULL)`,[id,ctx.tenant_id,branch]);return{ok:true,assistant_message:'Factura eliminada.',client_event:{type:'billing_changed'}};}
+async function cancelInvoiceF1(q,ctx,args={}){const branch=branchOfF1(ctx,args),id=String(args.invoice_id),f=(await getInvoiceF1(q,ctx,{invoice_id:id,branch_key:branch})).invoice;const c=requireConfirm(args,`¿Confirmas cancelar la factura de ${f.cliente}${f.folio?` folio ${f.folio}`:''}?`);if(c)return c;if(normalizeStatus(f.estado)==='cancelada')return{ok:true,invoice:f,assistant_message:'La factura ya estaba cancelada.'};if(f.uuid||f.cfdi_id||normalizeStatus(f.estado)==='timbrada')return{ok:false,blocked:true,assistant_message:'Esta factura tiene un CFDI. Se necesita el conector de cancelación fiscal para confirmar su cancelación; no cambiaré el estado solo en la base local.'};const{rows}=await q(`UPDATE facturas SET estado='cancelada',status=COALESCE(status,'Cancelada'),cancelada_at=NOW(),motivo_cancelacion=COALESCE($1,motivo_cancelacion) WHERE id=$2 AND tenant_id=$3::uuid AND (sucursal_id=$4 OR sucursal_id IS NULL) RETURNING *`,[text(args.reason)||null,id,ctx.tenant_id,branch]);return{ok:true,invoice:rows[0],assistant_message:'Factura marcada como cancelada en CliniqOne. Si estaba timbrada, verifica también la confirmación fiscal del PAC.',client_event:{type:'billing_changed'}};}
+async function stampInvoiceF1(q,ctx,args={}){const branch=branchOfF1(ctx,args),id=String(args.invoice_id),f=(await getInvoiceF1(q,ctx,{invoice_id:id,branch_key:branch})).invoice;const c=requireConfirm(args,`¿Confirmas timbrar fiscalmente la factura de ${f.cliente} por $${Number(f.total||0).toFixed(2)}?`);if(c)return c;if(normalizeStatus(f.estado)==='timbrada'&&f.uuid)return{ok:true,invoice:f,assistant_message:`La factura ya está timbrada con UUID ${f.uuid}.`};const cfg=await getBillingConfigF1(q,ctx,{branch_key:branch});if(!cfg.config.rfc||!cfg.config.razon_social||!cfg.config.regimen_fiscal||!cfg.config.codigo_postal)return{ok:false,blocked:true,assistant_message:'Faltan datos fiscales del emisor. Completa RFC, razón social, régimen y código postal antes de timbrar.'};const base=text(process.env.F1_INTERNAL_API_BASE||process.env.RENDER_EXTERNAL_URL||process.env.PUBLIC_BASE_URL).replace(/\/$/,'');if(!base||!ctx.authorization)return{ok:false,blocked:true,assistant_message:'El timbrado requiere el conector PAC del backend y una sesión autenticada. No marcaré la factura como timbrada sin respuesta real del PAC.'};let lastErr='';for(const path of ['/api/facturama/timbrar','/facturama/timbrar']){try{const r=await fetch(base+path,{method:'POST',headers:{'Content-Type':'application/json','Authorization':ctx.authorization,'x-sucursal':branch},body:JSON.stringify({factura_id:id,sucursal_id:branch})});const raw=await r.text();let data={};try{data=raw?JSON.parse(raw):{}}catch{data={raw}}if(!r.ok){lastErr=data?.error||data?.message||`HTTP ${r.status}`;if(r.status===404)continue;break}const uuid=data?.uuid||data?.Uuid||data?.cfdi_uuid||data?.data?.uuid||data?.factura?.uuid;const cfdiId=data?.cfdi_id||data?.cfdiId||data?.facturama?.Id||data?.data?.cfdi_id;const validUuid=typeof uuid==='string'&&/^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(uuid);if(!validUuid&&!text(cfdiId)){lastErr='El PAC no devolvió UUID o identificador CFDI verificable';break}const updated=(await q(`UPDATE facturas SET estado='timbrada',uuid=COALESCE($1,uuid),cfdi_id=COALESCE($2,cfdi_id),fecha_timbrado=COALESCE(fecha_timbrado,NOW()) WHERE id=$3 AND tenant_id=$4::uuid AND (sucursal_id=$5 OR sucursal_id IS NULL) RETURNING *`,[validUuid?uuid:null,cfdiId||null,id,ctx.tenant_id,branch])).rows[0];return{ok:true,invoice:updated,pac_response:data,assistant_message:validUuid?`Factura timbrada correctamente. UUID ${uuid}.`:'Factura timbrada correctamente por el PAC.',client_event:{type:'billing_changed'}}}catch(e){lastErr=e.message;break}}return{ok:false,pac_error:lastErr,assistant_message:`No pude confirmar el timbrado con el PAC${lastErr?`: ${lastErr}`:''}. La factura no se reportará como timbrada.`};}
+async function getInvoiceDownloadLinksF1(q,ctx,args={}){const branch=branchOfF1(ctx,args),f=(await getInvoiceF1(q,ctx,args)).invoice,ref=f.cfdi_id||f.uuid;if(!ref)return{ok:false,assistant_message:'La factura no tiene identificador fiscal disponible para descarga.'};const enc=encodeURIComponent(String(ref)),qs=`?sucursal=${encodeURIComponent(branch)}`;return{ok:true,invoice_id:f.id,reference:ref,links:{pdf:`/api/facturama/${enc}/pdf${qs}`,xml:`/api/facturama/${enc}/xml${qs}`,zip:`/api/facturama/${enc}/zip${qs}`},assistant_message:'Preparé las rutas de descarga de PDF, XML y ZIP.'};}
 
 
 // ==============================
@@ -1307,7 +1368,7 @@ async function callInternalApiF1(ctx, path, { method='GET', body=null, branchKey
   const response=await fetch(base+path,{method,headers,body:body===null?undefined:JSON.stringify(body)});
   const raw=await response.text();
   let data={}; try{data=raw?JSON.parse(raw):{}}catch{data={raw}};
-  if(!response.ok) throw new Error(data?.error||data?.message||`HTTP ${response.status}`);
+  if(!response.ok || data.ok===false) throw new Error(data?.error||data?.message||`HTTP ${response.status}: operación rechazada`);
   return data;
 }
 
@@ -1361,7 +1422,11 @@ async function compareBranchesF1(q,ctx,args={}){
 }
 
 async function applyInventoryFormulaF1(q,ctx,args={}){
-  const branch=branchOfV5(ctx,args),items=Array.isArray(args.items)?args.items:[];
+  const branch=branchOfV5(ctx,args);
+  const formulaName=text(args.treatment);
+  const key=Object.keys(inventoryFormulas).find(k=>normalizeStatus(k)===normalizeStatus(formulaName));
+  if(formulaName && !key)throw new Error('Fórmula no encontrada; consulta list_inventory_formulas');
+  const items=Array.isArray(args.items)?args.items:(key?inventoryFormulas[key]:[]);
   if(!items.length)return{needs_input:true,missing:['items'],assistant_message:'Necesito los productos y cantidades que consume el tratamiento.'};
   const clean=items.map(i=>({item:text(i.item||i.name),quantity:Number(i.quantity||0)})).filter(i=>i.item&&i.quantity>0);
   if(!clean.length)throw new Error('La fórmula no contiene cantidades válidas');
@@ -1371,12 +1436,13 @@ async function applyInventoryFormulaF1(q,ctx,args={}){
 
 async function getWhatsAppStatusF1(q,ctx,args={}){
   const branch=branchOfV5(ctx,args);
-  const channel=(await q(`SELECT id,phone_number_id,channel,name,clinic_name,branch_key,sucursal_id,active,is_active
+  const channel=(await q(`SELECT id,phone_number_id,channel,name,clinic_name,branch_key,sucursal_id,active,is_active,config,metadata
     FROM clinic_channels WHERE tenant_id=$1::uuid AND COALESCE(channel,'whatsapp')='whatsapp'
       AND (sucursal_id=$2 OR branch_key=$2 OR sucursal_id IS NULL) ORDER BY updated_at DESC NULLS LAST,id DESC LIMIT 1`,[ctx.tenant_id,branch])).rows[0]||null;
-  const tokenSet=Boolean(text(process.env.WHATSAPP_ACCESS_TOKEN||process.env.WHATSAPP_TOKEN||process.env.META_WHATSAPP_TOKEN));
+  const tokenSet=Boolean(text(channel?.config?.accessToken||channel?.config?.access_token||channel?.metadata?.accessToken||channel?.metadata?.access_token||process.env.WHATSAPP_ACCESS_TOKEN||process.env.WHATSAPP_TOKEN||process.env.META_WHATSAPP_TOKEN));
+  const publicChannel=channel?Object.fromEntries(Object.entries(channel).filter(([key])=>!['config','metadata'].includes(key))):null;
   const configured=Boolean(channel?.phone_number_id&&tokenSet&&channel.active!==false&&channel.is_active!==false);
-  return {configured,channel:channel?{...channel,token_configured:tokenSet}:null,assistant_message:configured?'WhatsApp está configurado y activo para esta sucursal.':'WhatsApp no está completamente configurado para esta sucursal.'};
+  return {configured,channel:publicChannel?{...publicChannel,token_configured:tokenSet}:null,assistant_message:configured?'WhatsApp está configurado y activo para esta sucursal.':'WhatsApp no está completamente configurado para esta sucursal.'};
 }
 
 async function listWhatsAppMessagesF1(q,ctx,args={}){
@@ -1406,7 +1472,7 @@ async function getWhatsAppStatsF1(q,ctx,args={}){
 async function lookupAppointmentsByPhoneF1(q,ctx,args={}){
   const branch=branchOfV5(ctx,args),phone=text(args.phone).replace(/\D/g,''); if(phone.length<7)throw new Error('Necesito un teléfono válido');
   const{rows}=await q(`SELECT a.id,a.patient,a.phone,a.date,a.start_time::text,a.status,a.doctor_id,d.name doctor_name,a.service_id,s.name service_name
-    FROM appointments a LEFT JOIN doctors d ON d.id=a.doctor_id LEFT JOIN services s ON s.id=a.service_id
+    FROM appointments a LEFT JOIN doctors d ON d.id=a.doctor_id AND d.tenant_id=a.tenant_id LEFT JOIN services s ON s.id=a.service_id AND s.tenant_id=a.tenant_id
     WHERE a.tenant_id=$1::uuid AND (a.sucursal_id=$2 OR a.sucursal_id IS NULL)
       AND RIGHT(regexp_replace(COALESCE(a.phone,''),'\\D','','g'),10)=RIGHT($3,10)
     ORDER BY a.date DESC,a.start_time DESC LIMIT 30`,[ctx.tenant_id,branch,phone]);
@@ -1417,14 +1483,16 @@ async function sendWhatsAppTemplateF1(_q,ctx,args={}){
   const branch=branchOfV5(ctx,args),phone=text(args.phone),template=text(args.template); if(!phone||!template)return{needs_input:true,missing:[!phone?'phone':null,!template?'template':null].filter(Boolean),assistant_message:'Necesito teléfono y nombre de plantilla.'};
   const body={phone,template,lang:text(args.language)||'es_MX',bodyParams:Array.isArray(args.body_params)?args.body_params:[]};
   const result=await callInternalApiF1(ctx,'/api/whatsapp/send-template',{method:'POST',body,branchKey:branch});
-  return {ok:true,result,assistant_message:'Plantilla de WhatsApp enviada correctamente.'};
+  if(!result?.data?.messages?.[0]?.id)throw Error('WhatsApp no devolvió un identificador de envío para la plantilla');
+  return {ok:true,result,assistant_message:'WhatsApp aceptó el envío de la plantilla.',client_event:{type:'whatsapp_changed'}};
 }
 
 async function sendTodayConfirmationsF1(q,ctx,args={}){
   const branch=branchOfV5(ctx,args),date=text(args.date)||localDate(ctx.timezone);
-  const count=(await q(`SELECT COUNT(*)::int n FROM appointments WHERE tenant_id=$1::uuid AND (sucursal_id=$2 OR sucursal_id IS NULL) AND date=$3::date AND LOWER(COALESCE(status,'')) NOT LIKE 'cancel%'`,[ctx.tenant_id,branch,date])).rows[0]?.n||0;
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(date))throw Error('Fecha inválida');
+  const count=(await q(`SELECT LEAST(COUNT(DISTINCT phone),$4)::int n FROM appointments WHERE tenant_id=$1::uuid AND (sucursal_id=$2 OR sucursal_id IS NULL) AND date=$3::date AND UPPER(status)='PENDIENTE' AND TRIM(COALESCE(phone,''))<>''`,[ctx.tenant_id,branch,date,Math.max(1,Math.min(1000,Number(args.limit)||500))])).rows[0]?.n||0;
   if(args.confirmed!==true)return{requires_confirmation:true,targeted:Number(count),assistant_message:`Hay ${count} cita(s) no canceladas para ${date}. ¿Confirmas enviar las confirmaciones por WhatsApp?`};
-  const qs=new URLSearchParams({when:'today',sucursal_id:branch,limit:String(args.limit||500),buttons:'false',use_template:'true'});
+  const qs=new URLSearchParams({when:date,sucursal_id:branch,limit:String(Math.max(1,Math.min(1000,Number(args.limit)||500))),buttons:'false',use_template:'true'});
   const result=await callInternalApiF1(ctx,`/api/whatsapp/broadcast/confirmations?${qs.toString()}`,{method:'POST',body:{},branchKey:branch});
   return {ok:true,result,assistant_message:`Proceso de confirmaciones terminado: ${Number(result.sent||0)} enviada(s) de ${Number(result.targeted||count)} objetivo(s).`};
 }
@@ -1452,11 +1520,13 @@ async function registerLaboratoryPayoutF1(q,ctx,args={}){
 
 
 const handlers = {
+  open_operation_view:(_q,_ctx,args)=>require('./operation-view').operationView(args),
   list_branches: listBranchesF1,
   select_branch: selectBranchF1,
   get_dashboard_summary: dashboardSummaryF1,
   compare_branches: compareBranchesF1,
   apply_inventory_formula: applyInventoryFormulaF1,
+  list_inventory_formulas:async()=>({formulas:inventoryFormulas,assistant_message:'Fórmulas disponibles: '+Object.keys(inventoryFormulas).join(', ')+'.'}),
   get_whatsapp_status: getWhatsAppStatusF1,
   list_whatsapp_messages: listWhatsAppMessagesF1,
   get_whatsapp_stats: getWhatsAppStatsF1,
@@ -1490,6 +1560,7 @@ const handlers = {
   cancel_invoice: cancelInvoiceF1,
   stamp_invoice: stampInvoiceF1,
   get_invoice_download_links: getInvoiceDownloadLinksF1,
+  download_invoice:async(q,ctx,args)=>{const r=await getInvoiceDownloadLinksF1(q,ctx,args);if(!r.ok)return r;const format=text(args.format)||'pdf';if(!['pdf','xml','zip'].includes(format))throw new Error('Formato de factura inválido');return{...r,assistant_message:`Solicité descargar la factura en ${format.toUpperCase()}.`,client_action:{type:'download_file',endpoint:r.links[format],filename:`factura_${r.reference}.${format}`}}},
 
   get_inventory_alerts: getInventoryAlerts,
   get_inventory_item: getInventoryItem,
@@ -1516,6 +1587,12 @@ const handlers = {
   delete_lab_work: deleteLabWork,
   list_lab_payments: listLabPayments,
   get_medical_record: getMedicalRecord,
+  open_medical_record: openMedicalRecord,
+  search_medical_patients:searchMedicalPatients,
+  open_medical_document:(q,ctx,args)=>openMedicalRecord(q,ctx,{...args,tab:'radiografias'}),
+  open_inventory_view:openInventoryView,
+  add_medical_document:addMedicalDocument,
+  delete_medical_document:deleteMedicalDocument,
   create_medical_record: createMedicalRecord,
   update_medical_record: updateMedicalRecord,
   upsert_clinical_history: upsertClinicalHistory,
@@ -1551,6 +1628,9 @@ const handlers = {
   create_laboratory: createLaboratory,
   list_lab_works: listLabWorks,
   create_lab_work: createLabWork,
+  assign_lab_work_doctor:assignLabWorkDoctor,
+  mark_lab_payroll_paid:markLabPayrollPaid,
+  get_objectives_payroll_report:getObjectivesPayrollReport,
   update_lab_work_stage: updateLabWorkStage,
   register_lab_payment: registerLabPayment,
   list_inventory: listInventory,
@@ -1559,8 +1639,12 @@ const handlers = {
 };
 
 async function executeTool(q, ctx, name, args) {
+  if(require('./action-scope').isExcludedAction(name,args||{}))return {ok:false,blocked:true,assistant_message:'Ese módulo está fuera del alcance de Hanna.'};
   const handler = handlers[name];
   if (!handler) throw new Error(`Herramienta F1 no permitida: ${name}`);
+  validateActionValues(name,args||{});
+  await assertTenantReferences(q, ctx?.tenant_id, args || {});
+  if(q?.withTransaction && !q.inTransaction && ['create_invoice','update_invoice','delete_invoice','delete_lab_work','create_appointment','adjust_inventory_stock'].includes(name))return q.withTransaction(tx=>handler(tx,ctx,args||{}));
   return handler(q, ctx, args || {});
 }
 

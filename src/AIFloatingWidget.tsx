@@ -1,7 +1,7 @@
 import React from "react";
 import { MessagesSquare, Send, X, Trash2, Mic, MicOff, Bell, CalendarDays, Volume2, Settings2,
   Search, Filter, Lock, Unlock, MessageCircle, Instagram, RefreshCw, User, Inbox } from "lucide-react";
-import { api } from "./lib/api";
+import { api, setSucursal, downloadAppFile } from "./lib/api";
 import { F1VoiceEngine, type F1VoiceEngineStatus } from "./services/f1-voice";
 import { F1AudioSessionController, F1RealtimeClient, type F1AudioSnapshot } from "./services/f1-realtime";
 import {
@@ -1033,6 +1033,28 @@ const buildLeadReport = React.useCallback(() => {
         window.dispatchEvent(new CustomEvent('cliniqone:f1-navigate', {
           detail: { target: String(clientAction.target) },
         }));
+      }
+
+      if (clientAction?.type === 'select_branch' && clientAction?.target) {
+        const branch=String(clientAction.target);
+        setSucursal(branch);
+        localStorage.setItem('dentalux_sucursal_actual',branch);
+        window.dispatchEvent(new CustomEvent('sucursalChanged',{detail:{sucursal:branch}}));
+      }
+      if (clientAction?.type === 'download_file' && /^\/api\/facturama\/[^/]+\/(pdf|xml|zip)(?:\?|$)/.test(clientAction.endpoint || '')) {
+        void downloadAppFile(clientAction.endpoint,String(clientAction.filename||'factura')).catch(error=>setF1Error(error.message));
+      }
+      if (clientAction?.type === 'operation_view' && clientAction.request) {
+        window.dispatchEvent(new CustomEvent('cliniqone:f1-operation-view',{detail:clientAction.request}));
+      }
+      if (clientAction?.type === 'inventory_view' && clientAction.request) {
+        window.dispatchEvent(new CustomEvent('cliniqone:f1-inventory-view',{detail:clientAction.request}));
+      }
+      if (clientAction?.type === 'open_medical_record' && clientAction?.patient?.name) {
+        window.dispatchEvent(new CustomEvent('cliniqone:f1-open-medical-record',{detail:clientAction.patient}));
+      }
+      if (clientEvent?.type && clientEvent.type !== 'appointments_changed' && clientEvent.type !== 'finance_changed') {
+        window.dispatchEvent(new CustomEvent('cliniqone:f1-data-changed',{detail:{...clientEvent,source:'f1'}}));
       }
 
       if (clientEvent?.type === 'appointments_changed') {

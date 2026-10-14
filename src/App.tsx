@@ -1,3 +1,5 @@
+import {applyOperationView} from './lib/f1-operation-view';
+import {scopedStorageKey,sessionScope} from './lib/tenant-scope';
 import React, { useEffect, useMemo, useState } from "react";
 import logo from "./assets/logo.png";
 import {
@@ -49,15 +51,10 @@ function readJwtPayloadsFromStorage(): any[] {
   if (typeof window === 'undefined') return [];
   const payloads: any[] = [];
   try {
-    for (let i = 0; i < window.localStorage.length; i += 1) {
-      const key = window.localStorage.key(i);
-      const value = key ? window.localStorage.getItem(key) : null;
-      if (!value || value.split('.').length !== 3) continue;
-      try {
-        const part = value.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
-        const padded = part + '='.repeat((4 - (part.length % 4)) % 4);
-        payloads.push(JSON.parse(decodeURIComponent(escape(window.atob(padded)))));
-      } catch {}
+    const value = window.localStorage.getItem('dentalux_auth_token');
+    if(value){
+      const part=value.split('.')[1]?.replace(/-/g,'+').replace(/_/g,'/');
+      if(part)payloads.push(JSON.parse(decodeURIComponent(escape(window.atob(part.padEnd(Math.ceil(part.length/4)*4,'='))))));
     }
   } catch {}
   return payloads;
@@ -493,7 +490,7 @@ const EXTRA_SERVICE_KEY = 'dentalux_extra_service_v1'; // appointmentId -> servi
 
 function loadExtraServiceMap(): Record<string, string> {
   try {
-    const raw = localStorage.getItem(EXTRA_SERVICE_KEY);
+    const raw = localStorage.getItem(scopedStorageKey(EXTRA_SERVICE_KEY));
     const obj = raw ? JSON.parse(raw) : {};
     return (obj && typeof obj === 'object') ? obj : {};
   } catch {
@@ -502,7 +499,7 @@ function loadExtraServiceMap(): Record<string, string> {
 }
 
 function saveExtraServiceMap(map: Record<string, string>) {
-  try { localStorage.setItem(EXTRA_SERVICE_KEY, JSON.stringify(map)); } catch {}
+  try { localStorage.setItem(scopedStorageKey(EXTRA_SERVICE_KEY), JSON.stringify(map)); } catch {}
 }
 
 function getExtraServiceForAppointment(appointmentId: string): string | undefined {
@@ -881,7 +878,7 @@ const createLaboratorio = async (laboratorioData: Partial<Laboratorio>) => {
     return transformLaboratorioFromDB(created);
   } catch (error) {
     console.error('Error creating laboratorio:', error);
-    return { id: Date.now().toString(), ...laboratorioData } as Laboratorio;
+    throw error;
   }
 };
 
@@ -914,11 +911,7 @@ const createTrabajo = async (trabajoData: Partial<TrabajoLaboratorio>) => {
     return transformTrabajoFromDB(created);
   } catch (error) {
     console.error('Error creating trabajo:', error);
-    return {
-      id: Date.now().toString(),
-      ...trabajoData,
-      abonos: []
-    } as TrabajoLaboratorio;
+    throw error;
   }
 };
 
@@ -934,7 +927,7 @@ const updateTrabajo = async (id: string, trabajoData: Partial<TrabajoLaboratorio
     return transformTrabajoFromDB(updated);
   } catch (error) {
     console.error('Error updating trabajo:', error);
-    return trabajoData;
+    throw error;
   }
 };
 
@@ -946,17 +939,14 @@ const createAbono = async (trabajoId: string, abonoData: Partial<Abono>) => {
     monto: abonoData.monto,
     fecha: abonoData.fecha,
     nota: abonoData.nota,
-    payment_method: abonoData.paymentMethod // ← NUEVO
+    metodo_pago: abonoData.paymentMethod
   })
 });
 
     return transformAbonoFromDB(created);
   } catch (error) {
     console.error('Error creating abono:', error);
-    return {
- id: Date.now().toString(),
- ...abonoData,
- } as Abono;
+    throw error;
   }
 };
 
@@ -2667,6 +2657,13 @@ export default function App(){
 
 // 🆕 Estados para módulos adicionales
 const [showInventory, setShowInventory] = useState(false);
+const [inventoryViewRequest,setInventoryViewRequest]=useState<any>(null);
+React.useEffect(()=>{
+  const open=(event:Event)=>{setInventoryViewRequest((event as CustomEvent).detail);setShowInventory(true)};
+  window.addEventListener('cliniqone:f1-inventory-view',open);
+  return ()=>window.removeEventListener('cliniqone:f1-inventory-view',open);
+},[]);
+
 const [showPatientHistory, setShowPatientHistory] = useState(false);
 const [showFacturacion, setShowFacturacion] = useState(false);
 const [mostrarDashboardGlobal, setMostrarDashboardGlobal] = useState(false);  // ← AGREGAR ESTA LÍNEA
@@ -2705,6 +2702,15 @@ const {
   openMedicalRecord, 
   closeMedicalRecord 
 } = useMedicalRecord();
+
+React.useEffect(() => {
+  const open = (event:Event) => {
+    const patient=(event as CustomEvent).detail;
+    if(patient?.name) openMedicalRecord(patient);
+  };
+  window.addEventListener('cliniqone:f1-open-medical-record',open);
+  return () => window.removeEventListener('cliniqone:f1-open-medical-record',open);
+},[openMedicalRecord]);
 
 // 🔍 DEBUG TEMPORAL
 console.log('🩺 MedicalRecord State:', { 
@@ -3031,7 +3037,10 @@ const waFromTo = useMemo(() => {
 
   // ===================== CAJA MODULE CALCULATIONS =====================
   const cajaRangeFromTo = useMemo(() => {
-  const base = new Date(cajaAnchor);
+  // Las fechas del formulario son días civiles, no instantes UTC.
+  const [year, month, day] = cajaAnchor.split('-').map(Number);
+  const base = new Date(year, month - 1, day, 12);
+  const fmtDate = (value: Date) => `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`;
 
   if (cajaRange === 'dia') {
     const d = fmtDate(base);
@@ -3274,7 +3283,7 @@ const loadWhatsappData = async () => {
     if (activeTab === 'whatsapp') {
       loadWhatsappData();
     }
-  }, [activeTab]);
+  }, [activeTab,waFromTo.from,waFromTo.to]);
 
 // Cargar datos de facturación al cambiar al tab
 useEffect(() => {
@@ -3376,42 +3385,8 @@ useEffect(() => {
 // ==================== API REQUEST GLOBAL ====================
 // Función central para todas las llamadas al backend (médico, facturación, inventario, etc.)
 const apiRequest = async (endpoint: string, options: any = {}) => {
-  const { method = 'GET', body, sucursalId: optionSucursalId } = options;
-  const currentSucursal = optionSucursalId || getSucursalActual() || 'sucursal_1';
-
-  // URL base para ambientes en Render o local
-  const API_BASE =
-    window.location.hostname.includes('onrender.com')
-      ? 'https://backenddemo-fve8.onrender.com'
-      : '';
-
-  const url =
-    `${API_BASE}/api` +
-    (endpoint.startsWith('/') ? endpoint : `/${endpoint}`);
-
-  const config: RequestInit = {
-    method,
-    headers: {
-      'Content-Type': 'application/json',
-      'x-sucursal': currentSucursal,
-    },
-  };
-
-  if (body && method !== 'GET') {
-    config.body = JSON.stringify(body);
-  }
-
-  const response = await fetch(url, config);
-
-  // Si no hay respuesta válida o el backend devolvió error
-  const text = await response.text();
-  const data = text ? JSON.parse(text) : null;
-
-  if (!response.ok) {
-    throw new Error(`HTTP ${response.status}: ${data?.error || response.statusText}`);
-  }
-
-  return data;
+  const {method='GET',body,sucursalId}=options;
+  return api(endpoint,{method,headers:{'x-sucursal':sucursalId || getSucursalActual()},...(body && method!=='GET'?{body:JSON.stringify(body)}:{})});
 };
 
 
@@ -3728,7 +3703,7 @@ const handleAddAbono = async () => {
       metodo_pago: newAbono.metodo_pago || 'efectivo'
     };
     
-    await api.post(`/trabajos-laboratorio/${newAbono.trabajoId}/abonos`, abonoData);
+    await api(`/trabajos-laboratorio/${newAbono.trabajoId}/abonos`,{method:'POST',body:JSON.stringify(abonoData)});
     
     // Limpiar formulario
     setNewAbono({
@@ -3781,6 +3756,22 @@ const pagarLaboratorio = async (
 
   // Helper functions for laboratorios
   const laboratorioById = (id: string) => laboratorios?.find(l => l.id === id);
+
+React.useEffect(() => {
+  const refresh=(event:Event)=>{
+    const type=String((event as CustomEvent).detail?.type||'');
+    const jobs:Promise<unknown>[]=[];
+    if(type==='doctors_changed') jobs.push(reloadDoctors());
+    if(type==='services_changed') jobs.push(reloadServices());
+    if(['payments_changed','expenses_changed','finance_changed'].includes(type)) jobs.push(reloadPayments(),reloadExpenses());
+    if(type==='whatsapp_changed') jobs.push(loadWhatsappData());
+    if(type==='billing_changed') jobs.push(reloadClientes(),reloadFacturas());
+    if(['laboratory_changed','laboratories_changed'].includes(type)) jobs.push(reloadLaboratorios(),reloadTrabajos());
+    Promise.allSettled(jobs);
+  };
+  window.addEventListener('cliniqone:f1-data-changed',refresh);
+  return ()=>window.removeEventListener('cliniqone:f1-data-changed',refresh);
+},[reloadDoctors,reloadServices,reloadPayments,reloadExpenses,reloadLaboratorios,reloadTrabajos]);
 
 // Handler para cambio de sucursal
 const handleSucursalChange = async (nuevaSucursal: string) => {
@@ -4497,6 +4488,8 @@ const { from: defaultFrom, to: defaultTo } = getWeekRange();
 // 🗓️ Rango por defecto: semana actual (lunes a domingo)
 const [from, setFrom] = useState<string>(defaultFrom);
 const [to, setTo] = useState<string>(defaultTo);
+useEffect(()=>{const view=(event:Event)=>applyOperationView((event as CustomEvent).detail,{setActiveTab,setSelectedDate,setSelectedDoctor,setCajaRange,setCajaFrom,setCajaTo,setRangeKey,setFrom,setTo,setLaboratorioFilter,setSelectedLaboratorioFilter,setMsgFilter,setWaRange,setWaFrom,setWaTo});window.addEventListener('cliniqone:f1-operation-view',view);return ()=>window.removeEventListener('cliniqone:f1-operation-view',view)},[]);
+
 
   const applyQuickRange = (k:RangeKey)=>{
     setRangeKey(k);
@@ -4666,7 +4659,7 @@ const [to, setTo] = useState<string>(defaultTo);
  return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-3 sm:p-6">
       {/* 🆕 MÓDULOS FLOTANTES */}
-      {showInventory && <InventoryModule onClose={() => setShowInventory(false)} />}
+      {showInventory && <InventoryModule viewRequest={inventoryViewRequest} onClose={() => setShowInventory(false)} />}
       {showPatientHistory && <PatientHistoryModule onClose={() => setShowPatientHistory(false)} />}
       {showFacturacion && <FacturacionModule onClose={() => setShowFacturacion(false)} />}
  {/* Dashboard Global Integration */}
@@ -7292,6 +7285,8 @@ const [to, setTo] = useState<string>(defaultTo);
 {/* 🆕 Módulo de Expediente Médico Dental Completo */}
 {showMedicalRecord && selectedPatientMedical && (
   <MedicalRecordModule
+    recordId={selectedPatientMedical.recordId}
+    viewRequest={selectedPatientMedical.viewRequest}
     patientName={selectedPatientMedical.name}
     patientPhone={selectedPatientMedical.phone}
     appointmentId={selectedPatientMedical.appointmentId}
@@ -7346,13 +7341,13 @@ const [to, setTo] = useState<string>(defaultTo);
 
   const OBJ_LS_KEY = 'dentalux_objetivos_v1';
   const LAB_MAP_KEY = 'dentalux_labjob_doctor_map_v1';
-  const lsLoad = ()=>{ try{ return JSON.parse(localStorage.getItem(OBJ_LS_KEY)||'[]'); }catch{return [];} };
-  const lsSave = (rows)=>{ try{ localStorage.setItem(OBJ_LS_KEY, JSON.stringify(rows)); }catch{} };
-  const lsMapLoad = ()=>{ try{ return JSON.parse(localStorage.getItem(LAB_MAP_KEY)||'{}'); }catch{return {};} };
-  const lsMapSave = (m)=>{ try{ localStorage.setItem(LAB_MAP_KEY, JSON.stringify(m)); }catch{} };
+  const lsLoad = ()=>{ try{ return JSON.parse(localStorage.getItem(scopedStorageKey(OBJ_LS_KEY))||'[]'); }catch{return [];} };
+  const lsSave = (rows)=>{ try{ localStorage.setItem(scopedStorageKey(OBJ_LS_KEY), JSON.stringify(rows)); }catch{} };
+  const lsMapLoad = ()=>{ try{ return JSON.parse(localStorage.getItem(scopedStorageKey(LAB_MAP_KEY))||'{}'); }catch{return {};} };
+  const lsMapSave = (m)=>{ try{ localStorage.setItem(scopedStorageKey(LAB_MAP_KEY), JSON.stringify(m)); }catch{} };
   const LAB_PAID_KEY = 'dentalux_labjob_paid_v1';
-  const paidLoad = () => { try { return JSON.parse(localStorage.getItem(LAB_PAID_KEY) || '{}'); } catch { return {}; } };
-  const paidSave = (m: Record<string, boolean>) => { try { localStorage.setItem(LAB_PAID_KEY, JSON.stringify(m)); } catch {} };
+  const paidLoad = () => { try { return JSON.parse(localStorage.getItem(scopedStorageKey(LAB_PAID_KEY)) || '{}'); } catch { return {}; } };
+  const paidSave = (m: Record<string, boolean>) => { try { localStorage.setItem(scopedStorageKey(LAB_PAID_KEY), JSON.stringify(m)); } catch {} };
 
 
 // Reemplazar por esta versión
@@ -7456,6 +7451,26 @@ async function objetivosFetch(from, to){
   // 3) Mapa local para doctor asignado (si el backend no lo trae)
   const localMap = lsMapLoad();
 
+  for (const job of jobs) {
+    const savedDoctor=localMap[String(job.id)];
+    if (job.doctor_id==null && savedDoctor) {
+      const updated=await api(`/trabajos-laboratorio/${job.id}`,{method:"PATCH",body:JSON.stringify({doctor_id:Number(savedDoctor)})});
+      job.doctor_id=updated.doctor_id;
+    }
+    delete localMap[String(job.id)];
+  }
+  lsMapSave(localMap);
+
+  // Recuperar marcas antiguas de este tenant y persistirlas en los trabajos propios.
+  const legacyPaid=paidLoad();
+  for(const job of jobs){
+    const marker=`${job.id}-tbe`;
+    if(job.payroll_paid==null && Object.prototype.hasOwnProperty.call(legacyPaid,marker)){
+      const updated=await api(`/trabajos-laboratorio/${job.id}`,{method:'PATCH',body:JSON.stringify({payroll_paid:Boolean(legacyPaid[marker])})});
+      job.payroll_paid=updated.payroll_paid;
+    }
+  }
+
   // 4) Construir salida: **UN registro por trabajo** con el **TBE**
   const out = [];
   jobs.forEach((job)=>{
@@ -7465,7 +7480,7 @@ async function objetivosFetch(from, to){
     // Doctor asignado: backend o localStorage
     const doctorId = job.doctor_id != null
       ? String(job.doctor_id)
-      : (localMap[jobId] || undefined);
+      : undefined;
 
     // Datos de apoyo para la tabla
     // Datos de apoyo para la tabla
@@ -7497,7 +7512,7 @@ const jobTitle = job.titulo ?? job.title ?? undefined;
 
     // Fecha para el filtro del período (tomamos inicio del trabajo)
     const date = String(
-      job.fechaInicio ?? job.inicio ?? job.createdAt ?? job.fecha ?? job.date ?? new Date().toISOString()
+      job.fecha_inicio ?? job.fechaInicio ?? job.inicio ?? job.createdAt ?? job.fecha ?? job.date ?? new Date().toISOString()
     );
 
     // Solo un registro por trabajo (id marcado como -tbe)
@@ -7510,7 +7525,8 @@ const jobTitle = job.titulo ?? job.title ?? undefined;
       patient,
       service,
       jobTitle,
-      isTBE: true
+      isTBE: true,
+      payrollPaid: job.payroll_paid===true
     });
   });
 
@@ -7519,56 +7535,43 @@ const jobTitle = job.titulo ?? job.title ?? undefined;
 }
 
   async function assignDoctorForJob(jobId, doctorId){
-    try{
-      await api(`/trabajos-laboratorio/${jobId}`, { method:'PUT', body: JSON.stringify({ doctor_id: Number(doctorId) }) });
-    }catch{
-      const m = lsMapLoad(); m[jobId]=doctorId; lsMapSave(m);
-    }
+    await api(`/trabajos-laboratorio/${jobId}`,{method:'PATCH',body:JSON.stringify({doctor_id:doctorId ? Number(doctorId):null})});
   }
 
-  function ObjetivosPanel({ onClose }){
+  function ObjetivosPanel({ onClose, viewRequest }:{onClose:()=>void;viewRequest:any}){
     const week = React.useMemo(()=>getWeekRange(),[]);
     const month = React.useMemo(()=>getMonthRange(),[]);
 
-    const [periodo, setPeriodo] = React.useState('semana');
-    const [from, setFrom] = React.useState(week.from);
-    const [to, setTo] = React.useState(week.to);
+    const [periodo, setPeriodo] = React.useState(viewRequest?.id?'custom':'semana');
+    const [from, setFrom] = React.useState(viewRequest?.from||week.from);
+    const [to, setTo] = React.useState(viewRequest?.to||week.to);
     const [loading, setLoading] = React.useState(true);
     const [err, setErr] = React.useState(null);
     const [mode, setMode] = React.useState('backend');
 
     // === Tabs ===
-    const [activeTab, setActiveTab] = React.useState('objetivos'); // 'objetivos' | 'reportes'
+    const [activeTab, setActiveTab] = React.useState(viewRequest?.objectivesTab||'objetivos'); // 'objetivos' | 'reportes'
     const [reportSummary, setReportSummary] = React.useState({ rows: [], totals: null });
     const [reportLoading, setReportLoading] = React.useState(false);
     const [reportErr, setReportErr] = React.useState(null);
     const [reportDetailsMap, setReportDetailsMap] = React.useState({}); // doctorId -> { payments, expenses }
     const [selectedReportDoctor, setSelectedReportDoctor] = React.useState(null);
+React.useEffect(()=>{if(viewRequest?.id){setPeriodo('custom');setFrom(viewRequest.from);setTo(viewRequest.to);setActiveTab(viewRequest.objectivesTab||'objetivos')}},[viewRequest]);
+
 
 
     const [doctors, setDoctors] = React.useState([]);
     const [payments, setPayments] = React.useState([]);
     const [objetivos, setObjetivos] = React.useState([]);
    // EXISTENTE
-const [labAbonos, setLabAbonos] = React.useState([]);
+const [labAbonos, setLabAbonos] = React.useState<any[]>([]);
 
 // ⬇️ INSERTA ESTO AQUÍ (helpers de "Pagado")
 const LAB_PAID_KEY = 'dentalux_labjob_paid_v1';
-const paidLoad = () => { try { return JSON.parse(localStorage.getItem(LAB_PAID_KEY) || '{}'); } catch { return {}; } };
-const paidSave = (m: Record<string, boolean>) => { try { localStorage.setItem(LAB_PAID_KEY, JSON.stringify(m)); } catch {} };
+const paidLoad = () => { try { return JSON.parse(localStorage.getItem(scopedStorageKey(LAB_PAID_KEY)) || '{}'); } catch { return {}; } };
+const paidSave = (m: Record<string, boolean>) => { try { localStorage.setItem(scopedStorageKey(LAB_PAID_KEY), JSON.stringify(m)); } catch {} };
 
 // EXISTENTE (déjalo tal cual)
-const [labPaidMap, setLabPaidMap] = React.useState<Record<string, boolean>>(() => paidLoad());
-const toggleLabPaid = React.useCallback((id: string) => {
-  setLabPaidMap(prev => {
-    const next = { ...prev, [id]: !prev[id] };
-    paidSave(next);
-    return next;
-  });
-}, []);
-
-
-
     const [editValues, setEditValues] = React.useState({});
 // === Ajustes de doctores para Objetivos (estado + helpers + editor) ===
 const DEFAULT_COMISION_PCT = 0.20; // 20%
@@ -7730,6 +7733,12 @@ function DoctorQuickEdit({ doctor, settings, onChange }:{
 }, [from, to]);
 
 
+React.useEffect(()=>{
+  const changed=(event:Event)=>{if(['productivity_changed','payments_changed','expenses_changed','doctors_changed','laboratory_changed'].includes((event as CustomEvent).detail?.type))void reloadAll()};
+  window.addEventListener('cliniqone:f1-data-changed',changed);
+  return ()=>window.removeEventListener('cliniqone:f1-data-changed',changed);
+},[reloadAll]);
+
 // ==============================
 // REPORTES (Objetivos)
 // ==============================
@@ -7765,13 +7774,13 @@ async function reportesFetchDetails(from, to, doctorId){
     const labAbonosPorDoctor = React.useMemo(() => {
   const acc: Record<string, number> = {};
   labAbonos.forEach(a => {
-    if (labPaidMap[a.id]) return;         // ⛔ excluir pagados
+    if (a.payrollPaid) return;         // excluir marcas persistidas de nómina
     const did = String(a.doctorId || '');
     if (!did) return;
     acc[did] = (acc[did] || 0) + (a.amount || 0);
   });
   return acc;
-}, [labAbonos, labPaidMap]);
+}, [labAbonos]);
 
 
    const rows = React.useMemo(() => {
@@ -8066,20 +8075,12 @@ return doctors
   )}
 
   {labAbonos.map(a => {
-    // Estado "pagado" guardado en localStorage (sin estados extra)
-    const paidMap = (() => {
-      try { return JSON.parse(localStorage.getItem('dentalux_labjob_paid_v1') || '{}'); }
-      catch { return {}; }
-    })();
-    const isPaid = !!paidMap[a.id];
-
-    const onTogglePaid = () => {
-      try {
-        const next = { ...paidMap, [a.id]: !isPaid };
-        localStorage.setItem('dentalux_labjob_paid_v1', JSON.stringify(next));
-      } catch {}
-      // Forzar re-render sin cambiar datos (para que se vea el check/sombreado)
-      setLabAbonos(prev => [...prev]);
+    const isPaid=a.payrollPaid===true;
+    const onTogglePaid=async()=>{
+      try{
+        await api(`/trabajos-laboratorio/${a.jobId}`,{method:'PATCH',body:JSON.stringify({payroll_paid:!isPaid})});
+        setLabAbonos(prev=>prev.map(row=>row.jobId===a.jobId?{...row,payrollPaid:!isPaid}:row));
+      }catch(error:any){setErr(error.message || 'No se guardó la marca de nómina')}
     };
 
     return (
@@ -8104,10 +8105,10 @@ return doctors
             value={a.doctorId || ''}
             onChange={async (e) => {
               const did = e.target.value;
-              await assignDoctorForJob(a.jobId, did);
-              setLabAbonos(prev =>
-                prev.map(x => x.jobId === a.jobId ? { ...x, doctorId: did } : x)
-              );
+              try {
+                await assignDoctorForJob(a.jobId, did);
+                setLabAbonos(prev => prev.map(x => x.jobId === a.jobId ? { ...x, doctorId: did } : x));
+              } catch(error:any) {setErr(error.message || 'No se guardó la asignación del doctor')}
             }}
           >
             <option value="">— Asignar doctor —</option>
@@ -8412,6 +8413,13 @@ function DoctorQuickEdit({ doctor, settings, onChange }:{
 
   function ObjetivosButtonAndPanel(){
     const [open, setOpen] = React.useState(false);
+    const [viewRequest,setViewRequest]=React.useState<any>(null);
+    React.useEffect(()=>{const view=(event:Event)=>{const r=(event as CustomEvent).detail;if(r?.module==='objetivos'){setViewRequest(r);setOpen(true)}};window.addEventListener('cliniqone:f1-operation-view',view);return ()=>window.removeEventListener('cliniqone:f1-operation-view',view)},[]);
+    React.useEffect(()=>{
+      const navigate=(event:Event)=>{if((event as CustomEvent).detail?.target==='objetivos')setOpen(true)};
+      window.addEventListener('cliniqone:f1-navigate',navigate);
+      return ()=>window.removeEventListener('cliniqone:f1-navigate',navigate);
+    },[]);
     if (typeof document === 'undefined') return null;
     return (
       <>
@@ -8422,7 +8430,7 @@ function DoctorQuickEdit({ doctor, settings, onChange }:{
         >
           🎯 Objetivos
         </button>
-        {open && <ObjetivosPanel onClose={()=>setOpen(false)} />}
+        {open && <ObjetivosPanel viewRequest={viewRequest} onClose={()=>setOpen(false)} />}
       </>
     );
   }
@@ -8430,13 +8438,18 @@ function DoctorQuickEdit({ doctor, settings, onChange }:{
   if (typeof document !== 'undefined'){
     const ROOT_ID = 'objetivos-floating-root-v3';
     let mounting = false;
+    let objectivesRoot:any=null;
+    let mountedScope="";
 
     const syncObjetivosForSession = () => {
       const legacy = document.getElementById('objetivos-floating-root');
       if (legacy?.parentElement) legacy.parentElement.removeChild(legacy);
 
-      const existing = document.getElementById(ROOT_ID);
-      if (!isSuperAdminSession()) {
+      let existing = document.getElementById(ROOT_ID);
+      const scope=sessionScope();
+      if(existing && scope!==mountedScope){ objectivesRoot?.unmount(); objectivesRoot=null; existing.remove(); existing=null; }
+      if (!isSuperAdminSession() || scope==='unauthenticated') {
+        objectivesRoot?.unmount(); objectivesRoot=null;
         if (existing?.parentElement) existing.parentElement.removeChild(existing);
         return;
       }
@@ -8449,7 +8462,9 @@ function DoctorQuickEdit({ doctor, settings, onChange }:{
 
       import('react-dom/client').then((m)=>{
         const root = m.createRoot(el);
-        root.render(React.createElement(ObjetivosButtonAndPanel, {}));
+        if(sessionScope()!==scope){root.unmount();el.remove();mounting=false;return;}
+        objectivesRoot=root; mountedScope=scope; mounting=false;
+        root.render(React.createElement(ObjetivosButtonAndPanel, {key:scope}));
       }).catch(()=>{
         const btn = document.createElement('button');
         btn.textContent = '🎯 Objetivos';

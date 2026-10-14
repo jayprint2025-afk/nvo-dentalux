@@ -1,17 +1,25 @@
 'use strict';
 
 const tools = [
+{type:'function',name:'open_operation_view',description:'Abre la pantalla real con filtros: Agenda por fecha/doctor, Caja o reportes por período, laboratorio por estado/laboratorio, WhatsApp por dirección/período y Objetivos por período/pestaña. Para períodos relativos calcula fechas locales. No sustituye las consultas SQL.',parameters:{type:'object',properties:{module:{type:'string',enum:['agenda','caja','reportes','laboratorio','whatsapp','objetivos']},date:{type:'string'},from:{type:'string'},to:{type:'string'},doctor_id:{type:['number','null']},laboratory_id:{type:['string','null']},lab_filter:{type:'string',enum:['todos','pendientes','entregados']},direction:{type:'string',enum:['all','incoming','outgoing']},objectives_tab:{type:'string',enum:['objetivos','reportes']}},required:['module']}},
+  {type:'function',name:'add_medical_document',description:'Vincula una fotografía, radiografía o documento mediante una URL proporcionada por el usuario al expediente de esta empresa. Nunca inventes la URL; si el archivo es local, pide adjuntarlo mediante la pantalla.',parameters:{type:'object',properties:{record_id:{type:'number'},name:{type:'string'},url:{type:'string'},type:{type:'string',enum:['radiografia','fotografia','documento']},description:{type:'string'},date:{type:'string'},doctor_id:{type:'number'},branch_key:{type:'string'}},required:['record_id','name','url']}},
+  {type:'function',name:'delete_medical_document',description:'Elimina un documento del expediente de esta empresa solamente después de confirmación explícita del usuario.',parameters:{type:'object',properties:{document_id:{type:'number'},confirmed:{type:'boolean'}},required:['document_id','confirmed']}},
+
+  {type:'function',name:'open_medical_document',description:'Solicita visualizar o descargar un documento ya registrado en el expediente del paciente. Consulta get_medical_record para identificarlo. No inventa archivos ni afirma descarga completada.',parameters:{type:'object',properties:{record_id:{type:'number'},patient:{type:'string'},document_id:{type:'number'},document_action:{type:'string',enum:['view','download']},branch_key:{type:'string'}},required:['document_id','document_action']}},
+  {type:'function',name:'search_medical_patients',description:'Busca pacientes reales por nombre o teléfono en los expedientes de la empresa actual; devuelve identificadores para evitar ambigüedad.',parameters:{type:'object',properties:{query:{type:'string'},branch_key:{type:'string'}},required:['query']}},
+  {type:'function',name:'open_inventory_view',description:'Abre equipos, materiales, fórmulas, compras o estadísticas de inventario; permite filtros y exportar el JSON del inventario cargado en la pantalla.',parameters:{type:'object',properties:{tab:{type:'string',enum:['equipment','materials','formulas','purchases','analytics']},query:{type:'string'},category:{type:'string'},stock:{type:'string',enum:['critical','low','medium','good']},export:{type:'boolean'}}}},
+  {type:'function',name:'open_medical_record',description:'Abre el expediente clínico y la pestaña solicitada; puede preparar impresión completa o de un consentimiento existente. No afirma impresión física.',parameters:{type:'object',properties:{record_id:{type:'number'},patient:{type:'string'},tab:{type:'string',enum:['datos','historia','odontograma','tratamientos','consentimientos','radiografias']},print_preview:{type:'boolean'},consent_id:{type:'number'},branch_key:{type:'string'}},required:[]}},
 
   {
     type: 'function',
     name: 'open_module',
-    description: 'Abre un módulo de la aplicación CliniqOne para el usuario. Úsala cuando el usuario diga abre, ve a, llévame a o muéstrame un módulo.',
+    description: 'Abre un módulo de la aplicación CliniqOne para el usuario. Úsala cuando el usuario diga abre, ve a, llévame a o muéstrame un módulo. Objetivos y Metas corresponden a objetivos; Productividad y Reportes corresponden a reportes. Son paneles distintos.',
     parameters: {
       type: 'object',
       properties: {
         module: {
           type: 'string',
-          enum: ['agenda','caja','reportes','laboratorio','whatsapp','facturacion','empresas','inventario','expediente'],
+          enum: ['objetivos', 'agenda','caja','reportes','laboratorio','whatsapp','facturacion','empresas','inventario','expediente'],
         },
       },
       required: ['module'],
@@ -35,7 +43,7 @@ const tools = [
     parameters: {
       type: 'object', properties: {
         branch_key: { type: 'string' }, date: { type: 'string' }, exact_time: { type: 'string' },
-        doctor_id: { type: ['string','number'] }, duration_hours: { type: 'number' }, limit: { type: 'number' },
+        doctor_id: { type: ['string','number'] }, duration_hours: { type: 'number' }, limit: { type: 'number' }, appointment_id:{type:'number'},
       }, required: ['date'],
     },
   },
@@ -325,6 +333,7 @@ const tools = [
         amount: { type: 'number' },
         date: { type: 'string' },
         note: { type: 'string' },
+        payment_method:{type:'string',enum:['Efectivo','Transferencia','Tarjeta','Cheque']},
         branch_key: { type: 'string' },
       },
       required: ['work_id','amount'],
@@ -396,14 +405,17 @@ const tools = [
   { type:'function', name:'delete_expense', description:'Elimina un gasto existente. Requiere confirmación explícita.', parameters:{type:'object',properties:{expense_id:{type:'number'},confirmed:{type:'boolean'},branch_key:{type:'string'}},required:['expense_id','confirmed']}},
 
   // ===== Laboratorio avanzado =====
-  { type:'function', name:'update_laboratory', description:'Edita nombre o contacto de un laboratorio dental.', parameters:{type:'object',properties:{laboratory_id:{type:'number'},name:{type:'string'},contact:{type:'string'},branch_key:{type:'string'}},required:['laboratory_id']}},
-  { type:'function', name:'delete_laboratory', description:'Elimina un laboratorio únicamente si no tiene trabajos asociados. Pide confirmación.', parameters:{type:'object',properties:{laboratory_id:{type:'number'},confirmed:{type:'boolean'},branch_key:{type:'string'}},required:['laboratory_id','confirmed']}},
+  { type:'function', name:'update_laboratory', description:'Edita nombre o contacto de un laboratorio dental.', parameters:{type:'object',properties:{laboratory_id:{type:['number','string']},name:{type:'string'},contact:{type:'string'},branch_key:{type:'string'}},required:['laboratory_id']}},
+  { type:'function', name:'delete_laboratory', description:'Elimina un laboratorio únicamente si no tiene trabajos asociados. Pide confirmación.', parameters:{type:'object',properties:{laboratory_id:{type:['number','string']},confirmed:{type:'boolean'},branch_key:{type:'string'}},required:['laboratory_id','confirmed']}},
+  {type:'function',name:'get_objectives_payroll_report',description:'Consulta las cifras del panel Objetivos: meta exacta del período, ingreso, comisión configurada, sueldo base, 20% del TBE de trabajos Entregados no marcados como pagados, progreso y nómina. No realiza pagos.',parameters:{type:'object',properties:{from:{type:'string'},to:{type:'string'},doctor_id:{type:'number'},branch_key:{type:'string'}},required:['from','to']}},
+  {type:'function',name:'mark_lab_payroll_paid',description:'Cambia la marca Pagado/Pendiente de nómina del trabajo que aparece en Objetivos. Es solo una marca contable persistida: no realiza pagos ni sustituye register_laboratory_payout o register_lab_payment.',parameters:{type:'object',properties:{work_id:{type:'string'},paid:{type:'boolean'},branch_key:{type:'string'}},required:['work_id','paid']}},
+  {type:'function',name:'assign_lab_work_doctor',description:'Asigna o retira el doctor responsable de un trabajo de laboratorio para su seguimiento y objetivos. Persiste en el servidor; no usa un mapa local.',parameters:{type:'object',properties:{work_id:{type:'string'},doctor_id:{type:['number','null']},branch_key:{type:'string'}},required:['work_id','doctor_id']}},
   { type:'function', name:'update_lab_work', description:'Edita cualquier dato de un trabajo de laboratorio: paciente, laboratorio, servicio, presupuesto, fechas, etapa o notas.', parameters:{type:'object',properties:{work_id:{type:'string'},patient:{type:'string'},laboratory_id:{type:['number','string']},service_id:{type:['number','string']},budget:{type:'number'},start_date:{type:'string'},due_date:{type:'string'},stage:{type:'string'},notes:{type:'string'},branch_key:{type:'string'}},required:['work_id']}},
   { type:'function', name:'delete_lab_work', description:'Elimina un trabajo de laboratorio y sus abonos asociados solo después de confirmación explícita.', parameters:{type:'object',properties:{work_id:{type:'string'},confirmed:{type:'boolean'},branch_key:{type:'string'}},required:['work_id','confirmed']}},
   { type:'function', name:'list_lab_payments', description:'Lista los abonos de un trabajo de laboratorio y calcula total abonado y saldo.', parameters:{type:'object',properties:{work_id:{type:'string'},branch_key:{type:'string'}},required:['work_id']}},
 
   // ===== Expediente clínico completo =====
-  { type:'function', name:'get_medical_record', description:'Consulta el expediente clínico completo de un paciente: datos personales, historia clínica, odontograma, tratamientos, consentimientos y documentos. No inventa campos ausentes.', parameters:{type:'object',properties:{patient:{type:'string'},branch_key:{type:'string'}},required:['patient']}},
+  { type:'function', name:'get_medical_record', description:'Consulta el expediente clínico completo de un paciente: datos personales, historia clínica, odontograma, tratamientos, consentimientos y documentos. No inventa campos ausentes.', parameters:{type:'object',properties:{record_id:{type:'number'},patient:{type:'string'},branch_key:{type:'string'}},required:[]}},
   { type:'function', name:'create_medical_record', description:'Crea un expediente médico dental nuevo. Solo nombre es obligatorio; reúne o solicita datos adicionales según lo que el usuario quiera registrar.', parameters:{type:'object',properties:{patient:{type:'string'},phone:{type:'string'},email:{type:'string'},birth_date:{type:'string'},age:{type:'number'},gender:{type:'string',enum:['masculino','femenino','otro']},address:{type:'string'},occupation:{type:'string'},marital_status:{type:'string'},emergency_contact:{type:'string'},emergency_phone:{type:'string'},appointment_id:{type:'number'},branch_key:{type:'string'}},required:['patient']}},
   { type:'function', name:'update_medical_record', description:'Actualiza datos personales del expediente médico de un paciente identificado por expediente.', parameters:{type:'object',properties:{record_id:{type:'number'},patient:{type:'string'},phone:{type:'string'},email:{type:'string'},birth_date:{type:'string'},age:{type:'number'},gender:{type:'string'},address:{type:'string'},occupation:{type:'string'},marital_status:{type:'string'},emergency_contact:{type:'string'},emergency_phone:{type:'string'},branch_key:{type:'string'}},required:['record_id']}},
   { type:'function', name:'upsert_clinical_history', description:'Crea o actualiza la historia clínica dental del expediente: motivo, enfermedad actual, antecedentes, hábitos, alergias, medicamentos, examen, diagnóstico, plan y observaciones.', parameters:{type:'object',properties:{record_id:{type:'number'},history_id:{type:'number'},appointment_id:{type:'number'},reason:{type:'string'},current_illness:{type:'string'},personal_history:{type:'string'},family_history:{type:'string'},dental_history:{type:'string'},harmful_habits:{type:'string'},allergies:{type:'string'},current_medications:{type:'string'},extraoral_exam:{type:'string'},intraoral_exam:{type:'string'},presumptive_diagnosis:{type:'string'},treatment_plan:{type:'string'},observations:{type:'string'},doctor_id:{type:['number','string']},date:{type:'string'},branch_key:{type:'string'}},required:['record_id']}},
@@ -412,7 +424,7 @@ const tools = [
   { type:'function', name:'update_dental_treatment', description:'Actualiza un tratamiento dental ya registrado.', parameters:{type:'object',properties:{treatment_id:{type:'number'},date:{type:'string'},tooth_number:{type:'number'},procedure:{type:'string'},description:{type:'string'},materials:{type:'string'},duration_minutes:{type:'number'},cost:{type:'number'},status:{type:'string'},observations:{type:'string'},doctor_id:{type:['number','string']},branch_key:{type:'string'}},required:['treatment_id']}},
   { type:'function', name:'delete_dental_treatment', description:'Elimina un tratamiento dental solo después de confirmación explícita.', parameters:{type:'object',properties:{treatment_id:{type:'number'},confirmed:{type:'boolean'},branch_key:{type:'string'}},required:['treatment_id','confirmed']}},
   { type:'function', name:'create_informed_consent', description:'Crea un consentimiento informado en el expediente. Solicita el tipo de tratamiento si falta.', parameters:{type:'object',properties:{record_id:{type:'number'},appointment_id:{type:'number'},treatment_type:{type:'string'},treatment_description:{type:'string'},risks_benefits:{type:'string'},alternatives:{type:'string'},estimated_cost:{type:'number'},date:{type:'string'},patient_signed:{type:'boolean'},doctor_signed:{type:'boolean'},witness_name:{type:'string'},witness_id:{type:'string'},doctor_id:{type:['number','string']},branch_key:{type:'string'}},required:['record_id','treatment_type']}},
-  { type:'function', name:'update_consent_signatures', description:'Actualiza firma de paciente y/o doctor en un consentimiento informado.', parameters:{type:'object',properties:{consent_id:{type:'number'},patient_signed:{type:'boolean'},doctor_signed:{type:'boolean'},branch_key:{type:'string'}},required:['consent_id']}},
+  { type:'function', name:'update_consent_signatures', description:'Actualiza la marca de firma registrada del paciente/doctor según instrucción expresa. No crea una firma digital ni demuestra consentimiento legal.', parameters:{type:'object',properties:{consent_id:{type:'number'},patient_signed:{type:'boolean'},doctor_signed:{type:'boolean'},branch_key:{type:'string'}},required:['consent_id']}},
   { type:'function', name:'get_medical_statistics', description:'Consulta estadísticas reales de expedientes, historias, tratamientos, consentimientos, documentos y odontograma de la sucursal.', parameters:{type:'object',properties:{branch_key:{type:'string'}}}},
   { type:'function', name:'list_medical_documents', description:'Lista documentos, fotografías y radiografías registrados en un expediente sin descargar archivos pesados.', parameters:{type:'object',properties:{record_id:{type:'number'},branch_key:{type:'string'}},required:['record_id']}},
 
@@ -446,6 +458,7 @@ const tools = [
   { type:'function', name:'delete_invoice', description:'Elimina definitivamente una factura/borrador. Requiere confirmación explícita.', parameters:{type:'object',properties:{invoice_id:{type:'string'},confirmed:{type:'boolean'},branch_key:{type:'string'}},required:['invoice_id','confirmed']}},
   { type:'function', name:'cancel_invoice', description:'Cancela una factura. Requiere confirmación explícita y puede incluir motivo.', parameters:{type:'object',properties:{invoice_id:{type:'string'},reason:{type:'string'},confirmed:{type:'boolean'},branch_key:{type:'string'}},required:['invoice_id','confirmed']}},
   { type:'function', name:'stamp_invoice', description:'Timbrado fiscal real mediante el conector PAC/Facturama existente. Requiere confirmación explícita y no declara éxito si no recibe respuesta válida del PAC.', parameters:{type:'object',properties:{invoice_id:{type:'string'},confirmed:{type:'boolean'},branch_key:{type:'string'}},required:['invoice_id','confirmed']}},
+  {type:'function',name:'download_invoice',description:'Solicita descargar PDF, XML o ZIP de una factura con identificador CFDI real mediante la sesión autenticada de la app. No afirma que la descarga haya terminado.',parameters:{type:'object',properties:{invoice_id:{type:'string'},format:{type:'string',enum:['pdf','xml','zip']},branch_key:{type:'string'}},required:['invoice_id','format']}},
   { type:'function', name:'get_invoice_download_links', description:'Devuelve rutas seguras para descargar PDF, XML o ZIP de una factura timbrada usando su identificador/UUID.', parameters:{type:'object',properties:{invoice_id:{type:'string'},branch_key:{type:'string'}},required:['invoice_id']}},
 
 
@@ -454,7 +467,8 @@ const tools = [
   { type:'function', name:'select_branch', description:'Solicita al cliente cambiar la sucursal activa después de verificar que pertenece a la empresa.', parameters:{type:'object',properties:{branch_key:{type:'string'}},required:['branch_key']}},
   { type:'function', name:'get_dashboard_summary', description:'Obtiene un resumen ejecutivo tenant-safe de una sucursal: citas, pacientes, ingresos, gastos, neto, inventario y laboratorio para un periodo.', parameters:{type:'object',properties:{branch_key:{type:'string'},from:{type:'string'},to:{type:'string'}}}},
   { type:'function', name:'compare_branches', description:'Compara productividad operativa y financiera entre sucursales de la misma empresa.', parameters:{type:'object',properties:{branch_keys:{type:'array',items:{type:'string'}},from:{type:'string'},to:{type:'string'}}}},
-  { type:'function', name:'apply_inventory_formula', description:'Descuenta de inventario los consumos de una fórmula de tratamiento de forma transaccional usando la ruta oficial del backend.', parameters:{type:'object',properties:{items:{type:'array',items:{type:'object',properties:{item:{type:'string'},quantity:{type:'number'}},required:['item','quantity']}},branch_key:{type:'string'}},required:['items']}},
+  {type:'function',name:'list_inventory_formulas',description:'Consulta las fórmulas reales y sus materiales/cantidades, iguales a las de Inventario.',parameters:{type:'object',properties:{}}},
+  { type:'function', name:'apply_inventory_formula', description:'Aplica la misma fórmula de la pantalla de inventario, por nombre de treatment o mediante items explícitos, y descuenta sus consumos de forma transaccional usando la ruta oficial del backend.', parameters:{type:'object',properties:{treatment:{type:'string'},items:{type:'array',items:{type:'object',properties:{item:{type:'string'},quantity:{type:'number'}},required:['item','quantity']}},branch_key:{type:'string'}},required:[]}},
   { type:'function', name:'get_whatsapp_status', description:'Verifica si el canal WhatsApp de la sucursal está configurado y activo sin exponer tokens.', parameters:{type:'object',properties:{branch_key:{type:'string'}}}},
   { type:'function', name:'list_whatsapp_messages', description:'Consulta historial real de WhatsApp filtrable por dirección, teléfono y fechas.', parameters:{type:'object',properties:{direction:{type:'string',enum:['all','incoming','outgoing']},phone:{type:'string'},from:{type:'string'},to:{type:'string'},limit:{type:'number'},branch_key:{type:'string'}}}},
   { type:'function', name:'get_whatsapp_stats', description:'Obtiene totales de mensajes enviados/recibidos y señales de confirmaciones/cancelaciones en un periodo.', parameters:{type:'object',properties:{from:{type:'string'},to:{type:'string'},branch_key:{type:'string'}}}},
@@ -466,4 +480,7 @@ const tools = [
 
 ];
 
-module.exports = { tools };
+for(const tool of tools){
+ if(['list_recent_payments','list_expenses'].includes(tool.name))Object.assign(tool.parameters.properties,{date:{type:'string'},from_date:{type:'string'},to_date:{type:'string'},doctor_id:{type:'number'},payment_method:{type:'string',enum:['Efectivo','Transferencia','Tarjeta']},...(tool.name==='list_recent_payments'?{patient:{type:'string'}}:{query:{type:'string'}})});
+}
+module.exports = { tools:require('./action-scope').excludeTools(tools) };
