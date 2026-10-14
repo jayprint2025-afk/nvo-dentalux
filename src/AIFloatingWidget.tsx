@@ -1804,7 +1804,7 @@ const buildLeadReport = React.useCallback(() => {
       // La activaciÃ³n por voz no abre el panel flotante.
       followupTimeoutMs: 5000,
       inactivityTimeoutMs: 15000,
-      maxSessionMs: 120000,
+      maxSessionMs: 0, // Sin límite total; cierre únicamente por inactividad real o manual.
       wakeStabilizationMs: wakeSettings.stabilizationMs,
       // V48: Sherpa + CAMPPlus ya validaron frase e identidad en onWake.
       // El controller conserva su fail-closed interno, pero esta callback SOLO

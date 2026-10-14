@@ -490,11 +490,13 @@ export class F1AudioSessionController {
 
   private armMaxSession(): void {
     if (this.maxSessionTimer != null) window.clearTimeout(this.maxSessionTimer);
+    const duration=this.options.maxSessionMs ?? 120_000;
+    if(duration<=0)return;
     const generation = this.sessionGeneration;
     this.maxSessionTimer = window.setTimeout(() => {
       if (generation !== this.sessionGeneration) return;
       void this.enqueue(() => this.finishConversation("max-session"));
-    }, this.options.maxSessionMs ?? 120_000);
+    }, duration);
   }
 
   private clearInactivityTimer(): void {
