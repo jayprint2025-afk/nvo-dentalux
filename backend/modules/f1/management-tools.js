@@ -1373,7 +1373,7 @@ async function callInternalApiF1(ctx, path, { method='GET', body=null, branchKey
   const base=text(process.env.F1_INTERNAL_API_BASE||process.env.RENDER_EXTERNAL_URL||process.env.PUBLIC_BASE_URL).replace(/\/$/,'');
   if(!base) throw new Error('No está configurada la URL interna del backend');
   if(!ctx.authorization) throw new Error('La operación requiere una sesión autenticada');
-  const headers={Authorization:ctx.authorization,'x-sucursal':branchKey||ctx.branch_key||'sucursal_1'};
+  const headers={Authorization:ctx.authorization,'x-sucursal':branchKey||ctx.branch_key||'sucursal_1','x-hana-source':'voice'};
   if(body!==null) headers['Content-Type']='application/json';
   const response=await fetch(base+path,{method,headers,body:body===null?undefined:JSON.stringify(body)});
   const raw=await response.text();

@@ -109,7 +109,9 @@ function allowWakeVerifyAttempt(ctx) {
   return true;
 }
 
-async function transcribeWakeCandidate(wavBuffer) {
+const usageMeter=require('../usage/meter');
+const {attachRealtime}=require('../usage/realtime');
+async function transcribeWakeCandidate(wavBuffer,q,ctx) {
   const key = process.env.OPENAI_API_KEY;
   if (!key) throw new Error('Falta OPENAI_API_KEY');
   const model = process.env.F1_WAKE_TRANSCRIBE_MODEL || process.env.F1_TRANSCRIBE_MODEL || 'gpt-4o-mini-transcribe';
@@ -140,6 +142,7 @@ async function transcribeWakeCandidate(wavBuffer) {
   if (!upstream.ok) throw new Error(`Wake transcription ${upstream.status}: ${text.slice(0, 500)}`);
   let parsed = {};
   try { parsed = JSON.parse(text); } catch {}
+  await usageMeter.recordOpenAI(q,ctx,parsed,{model,channel:'hana',source:'wake_transcription',kind:'audio'});
   const transcript = String(parsed?.text || '').trim();
   // V22 diagnóstico seguro: registra únicamente metadatos y la transcripción
   // devuelta por el verificador. Nunca registra el audio PCM/WAV ni credenciales.
@@ -261,7 +264,7 @@ function bookingHelpReply() {
   ].join('\n');
 }
 
-async function callChatModel({ messages, ctx, memoryContext = '' }) {
+async function callChatModel({ q, messages, ctx, memoryContext = '' }) {
   const key = process.env.OPENAI_API_KEY;
   if (!key) throw new Error('Falta OPENAI_API_KEY');
   const model = process.env.F1_TEXT_MODEL || 'gpt-4.1-mini';
@@ -277,7 +280,9 @@ async function callChatModel({ messages, ctx, memoryContext = '' }) {
     }),
   });
   if (!response.ok) throw new Error(`OpenAI ${response.status}: ${await response.text()}`);
-  return response.json();
+  const payload=await response.json();
+  await usageMeter.recordOpenAI(q,ctx,payload,{model,channel:'hana',source:'text'});
+  return payload;
 }
 
 async function executeF1Tool(q, ctx, name, args = {}) {
@@ -463,7 +468,7 @@ function setupF1Routes(app, q, deps) {
         branch_key: req.body?.branch_key,
       });
       const briefing = buildDailyBriefingText(report, ctx);
-      const audio = await synthesizeDailyBriefing(briefing);
+      const audio = await synthesizeDailyBriefing(briefing,q,ctx);
 
       res.setHeader('Content-Type', audio.contentType);
       res.setHeader('Content-Length', String(audio.buffer.length));
@@ -518,7 +523,7 @@ function setupF1Routes(app, q, deps) {
       // Procesar hasta que el modelo entregue texto final evita responder “Listo”
       // antes de que la acción realmente se haya ejecutado.
       for (let round = 0; round < 6; round += 1) {
-        const payload = await callChatModel({ messages: conversation, ctx, memoryContext });
+        const payload = await callChatModel({ q, messages: conversation, ctx, memoryContext });
         assistant = payload.choices?.[0]?.message || {};
         conversation.push(assistant);
 
@@ -615,7 +620,7 @@ function setupF1Routes(app, q, deps) {
       }
 
       const wav = pcm16Base64ToWav(pcmBase64, req.body?.sample_rate || 16000);
-      const transcript = await transcribeWakeCandidate(wav);
+      const transcript = await transcribeWakeCandidate(wav,q,ctx);
       const match = matchWakePhrase(transcript);
       console.log('[HANNA WAKE V25] verdict', {
         accepted: match.accepted,
@@ -753,7 +758,14 @@ function setupF1Routes(app, q, deps) {
       });
       if (!upstream.ok) return res.status(upstream.status).type('text/plain').send(body);
       const location = upstream.headers.get('location');
-      if (location) res.setHeader('x-openai-call-location', location);
+      if (location) {
+        res.setHeader('x-openai-call-location', location);
+        const monitor=attachRealtime({q:q.forTenant?q.forTenant(ctx.tenant_id):q,ctx,location,key,model:session.model,transcribeModel:session.audio.input.transcription.model});
+        if(monitor)await monitor.ready;
+      } else {
+        console.error('[HANA/USAGE] Realtime sin Location: cobertura de uso incompleta');
+        await usageMeter.recordOpenAI(q,ctx,{}, {model:session.model,channel:'realtime',source:'coverage_gap'});
+      }
       res.status(201).type('application/sdp').send(body);
     } catch (error) {
       res.status(500).json({ error: error.message });

@@ -1,5 +1,6 @@
 import {eventsForTool} from './lib/f1-data-events';
 import React from "react";
+import UsageCostsPanel from './components/UsageCostsPanel';
 import { MessagesSquare, Send, X, Trash2, Mic, MicOff, Bell, CalendarDays, Volume2, Settings2,
   Search, Filter, Lock, Unlock, MessageCircle, Instagram, RefreshCw, User, Inbox } from "lucide-react";
 import { api, setSucursal, downloadAppFile } from "./lib/api";
@@ -491,7 +492,7 @@ export default function AIFloatingWidget(props: { apiBase?: string; sucursalId?:
 
   const [open, setOpen] = React.useState(false);
   const [closing, setClosing] = React.useState(false);
-  const [tab, setTab] = React.useState<"f1" | "portals" | "messenger" | "whatsapp" | "instagram" | "convs" | "chat" | "ventas">("f1");
+  const [tab, setTab] = React.useState<"f1" | "portals" | "messenger" | "whatsapp" | "instagram" | "convs" | "chat" | "ventas" | "usage">("f1");
 
   // Robot flotante (draggable) + persistencia
   const ROBOT_SIZE = 92; // grande y visible
@@ -2456,6 +2457,7 @@ const buildLeadReport = React.useCallback(() => {
           <div className="flex border-b overflow-x-auto bg-white">
             {[
               { id: "f1", label: "F1 GestiÃ³n", icon: <Mic className="w-4 h-4"/> },
+              { id: "usage", label: "Uso y costos", icon: <Volume2 className="w-4 h-4"/> },
               { id: "portals", label: "Portales", icon: <Inbox className="w-4 h-4"/> },
               { id: "messenger", label: "Messenger AI", icon: <MessageCircle className="w-4 h-4 text-blue-600"/> },
               { id: "whatsapp", label: "WhatsApp AI", icon: <MessagesSquare className="w-4 h-4 text-emerald-600"/> },
@@ -2854,7 +2856,7 @@ const buildLeadReport = React.useCallback(() => {
                   </div>
                 </div>
               </div>
-            ) : (tab === "portals" || tab === "messenger" || tab === "whatsapp" || tab === "instagram") ? (
+            ) : tab === "usage" ? (<UsageCostsPanel API_BASE={API_BASE} headers={headers} />) : (tab === "portals" || tab === "messenger" || tab === "whatsapp" || tab === "instagram") ? (
               <F1MultichannelCenter API_BASE={API_BASE} headers={headers} initialChannel={tab as any} />
             ) : tab === "convs" ? (
               <div className="h-full p-3 overflow-auto">

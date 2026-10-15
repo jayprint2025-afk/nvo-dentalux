@@ -799,7 +799,9 @@ async function findOneAcrossDbs(sql, params) {
 router.use((req, _res, next) => {
   const p = poolForReq(req);
   const key = pickDbKey(req);
-  return als.run({ pool: p, dbKey: key, tenantId: req.auth?.tenantId || null }, next);
+  const usageExcluded=String(req.path||'').startsWith('/jarvis');
+  const usageSource=req.path==='/broadcast/confirmations'?'reminders':req.path==='/survey/appointment-attended'?'survey':String(req.get('x-hana-source')||'')==='voice'?'voice':String(req.path||'').startsWith('/send-')?'manual':'virtual_assistant';
+  return als.run({ pool:p,dbKey:key,tenantId:req.auth?.tenantId||null,usageSource,usageExcluded },next);
 });
 
 // ===================== Helpers base =====================
@@ -1434,6 +1436,8 @@ const CONTACTS_NAME_COLUMN  = process.env.CONTACTS_NAME_COLUMN || APPT_NAME_COLU
 const CONTACTS_PHONE_COLUMN = process.env.CONTACTS_PHONE_COLUMN || process.env.APPT_PHONE_COLUMN || 'phone';
 
 // --- WhatsApp senders ---
+const UsageMeter=require('../modules/usage/meter');
+const {tenantQuery}=require('../modules/usage/db');
 async function waPost(payload, { context = '' } = {}) {
   const store = als.getStore();
   const outboundPhoneNumberId = String(store?.waPhoneNumberId || PHONE_NUMBER_ID || '').trim();
@@ -1497,6 +1501,10 @@ async function waPost(payload, { context = '' } = {}) {
     throw new Error(`WhatsApp API returned OK but without message id: ${JSON.stringify(data)}`);
   }
 
+  if(store?.tenantId && !store?.usageExcluded){
+    const market=String(payload.to||'').startsWith('52')?'MX':null;
+    await UsageMeter.acceptedMessage(tenantQuery(store.pool||poolDB1,store.tenantId),{tenant_id:store.tenantId},{id:data.messages[0].id,channel:'whatsapp',source:store.usageSource||'virtual_assistant',market,phoneNumberId:outboundPhoneNumberId});
+  }
   return data;
 }
 function sendWhatsAppText({ to, text }) {
@@ -1804,6 +1812,12 @@ router.post('/webhook', async (req, res) => {
     console.log('📥 WEBHOOK RECEIVED');
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     
+    await UsageMeter.safe(()=>require('../modules/usage/whatsapp-status').ingestStatuses(req,{
+      resolveChannel:resolveRegisteredWhatsappReceptionist,
+      queryForTenant:tenant=>tenantQuery(poolDB1,tenant),
+      secret:process.env.WHATSAPP_APP_SECRET||process.env.META_APP_SECRET||process.env.FB_APP_SECRET
+    }));
+
     const entry = req.body?.entry?.[0];
     const a = entry?.changes?.[0]?.value;
     const phoneNumberId = String(a?.metadata?.phone_number_id || '').trim() || null;
@@ -1953,6 +1967,7 @@ router.post('/webhook', async (req, res) => {
       return null;
     });
     if (jarvisThread) {
+      if(als.getStore())als.getStore().usageExcluded=true;
       await logJarvisWa({
         thread: jarvisThread,
         direction: 'incoming',
@@ -3541,7 +3556,7 @@ Responde solo con un número del 1 al 5.`;
 
 
 // --- Broadcast HOY ---
-router.post('/broadcast/confirmations', async (req, res) => {
+async function broadcastConfirmations(req, res) {
   try {
     // Esta ruta ya está protegida por JWT en server.js.
     // WA_BROADCAST_SECRET se usa únicamente en /api/whatsapp/cron/confirmations.
@@ -3786,7 +3801,13 @@ Después escribe *Confirmar* en el mensaje de la cita.`;
       code: e?.code || 'BROADCAST_ERROR'
     });
   }
+}
+router.post('/broadcast/confirmations',broadcastConfirmations);
+const cronConfirmations=require('../modules/usage/cron-confirmations').createCronHandler({
+  q,getStore:()=>als.getStore(),runWithStore:(store,work)=>als.run(store,work),broadcast:broadcastConfirmations
 });
+router.get('/cron/confirmations',cronConfirmations);
+router.post('/cron/confirmations',cronConfirmations);
 
 // ===================== Panel: mensajes =====================
 router.get('/messages', async (req, res) => {

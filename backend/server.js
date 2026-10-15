@@ -24,6 +24,8 @@ const { Pool } = require('pg');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { f1EventBus } = require('./modules/f1/event-bus');
+const usageMeter = require('./modules/usage/meter');
+const {tenantQuery} = require('./modules/usage/db');
 
 
 // =========================================================
@@ -81,8 +83,9 @@ const app = express();
 const PORT = Number(process.env.PORT || 4001);
 
 app.set('trust proxy', 1);
-app.use(express.json({ limit: '20mb' }));
+app.use(express.json({ limit: '20mb', verify(req,_res,buf) { if(String(req.originalUrl||'').includes('/webhook')) req.rawBody=Buffer.from(buf); } }));
 app.use(express.urlencoded({ extended: true, limit: '20mb' }));
+morgan.token('url',req=>String(req.originalUrl||req.url||'').replace(/([?&]secret=)[^&]*/gi,'$1REDACTED'));
 app.use(morgan('combined'));
 
 const allowedOrigins = String(process.env.FRONTEND_ORIGIN || '')
@@ -188,6 +191,7 @@ async function q(text, params = []) {
   }
 }
 
+q.forTenant=tenantId=>tenantQuery(getCurrentPool(),tenantId);
 q.withTransaction=require('./modules/query-transaction').createTransactionRunner({getPool:getCurrentPool,getContext:()=>als.getStore(),runWithContext:(context,work)=>als.run(context,work)});
 
 // Las rutas antiguas /api/melissa también usan la misma base física.
@@ -4283,6 +4287,17 @@ function getPublicBaseUrl(req) {
   return `${proto}://${host}`;
 }
 
+async function meterClinicMessenger(pageId,id) {
+  if(!id)return;
+  await usageMeter.safe(async()=>{
+    const route=await resolveMessengerAssistantRoute(pageId);
+    if(route.type!=='clinic'||!route.tenantId)return;
+    const scoped=tenantQuery(poolDB1,route.tenantId),ctx={tenant_id:route.tenantId};
+    await usageMeter.acceptedMessage(scoped,ctx,{id,channel:'messenger',source:'virtual_assistant'});
+    await usageMeter.messengerRated(scoped,ctx,id);
+  });
+}
+
 async function fbSendText(psid, text, pageId) {
   const token = await getFbPageToken(pageId);
   if (!token) {
@@ -4312,7 +4327,7 @@ async function fbSendText(psid, text, pageId) {
   const j = await r.json().catch(() => ({}));
   if (!r.ok) {
     console.error('❌ Error enviando a Messenger:', r.status, j);
-  }
+  } else { await meterClinicMessenger(pageId,j.message_id); }
 }
 
 async function fbSendImage(psid, imageUrl, pageId) {
@@ -4344,6 +4359,7 @@ async function fbSendImage(psid, imageUrl, pageId) {
   });
   const j = await r.json().catch(() => ({}));
   if (!r.ok) console.error('❌ Error enviando imagen a Messenger:', r.status, j);
+  else await meterClinicMessenger(pageId,j.message_id);
 }
 
 async function callAiChatFromServer({ phone, message, channel, extra = {} }, req) {
@@ -7233,6 +7249,7 @@ app.post('/api/f1/channels/conversations/:id/messages', authRequired, ah(async (
 try {
   const { setupF1Routes } = require('./modules/f1');
   setupF1Routes(app, q, { authRequired, getTenantId, getSucursal });
+  require('./modules/usage/routes').setupUsageRoutes(app,q,{authRequired,getTenantId});
 } catch (error) {
   console.error('❌ No se pudo montar F1 Copilot:', error);
 }
@@ -7260,6 +7277,7 @@ ensureWhatsAppTenantIsolationSchema().catch((e) => {
 app.use('/api/whatsapp', (req, res, next) => {
   const isWebhook = req.path === '/webhook';
   if (isWebhook) return next();
+  if(req.path==='/cron/confirmations')return require('./modules/usage/cron-confirmations').cronAccess(req,res,next);
   return authRequired(req, res, next);
 }, whatsappRoutes);
 console.log('✅ Rutas de WhatsApp montadas con JWT obligatorio (excepto webhook Meta)');

@@ -83,7 +83,7 @@ function buildDailyBriefingText(report, ctx = {}) {
   return parts.join(' ').replace(/\s+/g, ' ').trim();
 }
 
-async function synthesizeDailyBriefing(input) {
+async function synthesizeDailyBriefing(input,q,ctx) {
   const apiKey = String(process.env.OPENAI_API_KEY || '').trim();
   if (!apiKey) {
     const error = new Error('Falta OPENAI_API_KEY');
@@ -122,6 +122,8 @@ async function synthesizeDailyBriefing(input) {
   }
 
   const arrayBuffer = await response.arrayBuffer();
+  // Audio/speech devuelve bytes, no usage: registrar pendiente, sin inventar tokens.
+  if(q&&ctx)await require('../usage/meter').recordOpenAI(q,ctx,{id:response.headers.get('x-request-id')||undefined},{model:process.env.F1_TTS_MODEL||'gpt-4o-mini-tts',channel:'hana',source:'briefing_audio'});
   return {
     buffer: Buffer.from(arrayBuffer),
     contentType: response.headers.get('content-type') || 'audio/mpeg',

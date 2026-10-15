@@ -103,6 +103,7 @@ function mergeModelState(state,patch) {
   return Memory.mergeState(state,{conversation_summary:summary});
 }
 
+const UsageMeter=require('../usage/meter');
 async function callModel(messages) {
   const key = process.env.RECEPTIONIST_V5_API_KEY || process.env.OPENAI_API_KEY || '';
   if (!key) throw new Error('Falta RECEPTIONIST_V5_API_KEY');
@@ -137,6 +138,7 @@ async function callModel(messages) {
 
       if (response.ok) {
         const payload = await response.json();
+        await UsageMeter.recordContext(payload,process.env.RECEPTIONIST_V5_MODEL||'gpt-4.1-mini');
         const parsed=parseJson(payload?.choices?.[0]?.message?.content);
         if(!parsed || typeof parsed.reply!=='string' || !parsed.reply.trim())throw new Error('Respuesta de modelo vacía o inválida');
         return safePlan(parsed);
@@ -1448,7 +1450,10 @@ function nearbyAvailabilityReply(slots, requestedTime) {
 }
 
 
-async function runAgent(q, ctx, incoming, userText, knowledge) {
+async function runAgent(q,ctx,incoming,userText,knowledge){
+ return UsageMeter.withContext(q,ctx,()=>runAgentImpl(q,ctx,incoming,userText,knowledge));
+}
+async function runAgentImpl(q, ctx, incoming, userText, knowledge) {
   const state = Memory.initialState(incoming);
   ObjectivePlanner.ensureGoal(state);
 
