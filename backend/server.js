@@ -7277,7 +7277,10 @@ ensureWhatsAppTenantIsolationSchema().catch((e) => {
 app.use('/api/whatsapp', (req, res, next) => {
   const isWebhook = req.path === '/webhook';
   if (isWebhook) return next();
-  if(req.path==='/cron/confirmations')return require('./modules/usage/cron-confirmations').cronAccess(req,res,next);
+  if(req.path==='/cron/confirmations'){
+    const cron=require('./modules/usage/cron-confirmations');
+    return cron.cronAccess(req,res,next,process.env,()=>cron.discoverActiveTenants(poolDB1));
+  }
   return authRequired(req, res, next);
 }, whatsappRoutes);
 console.log('✅ Rutas de WhatsApp montadas con JWT obligatorio (excepto webhook Meta)');
