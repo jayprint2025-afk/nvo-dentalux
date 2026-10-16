@@ -1,10 +1,13 @@
 'use strict';
 // USD por millón. Modelos exactos: no aplicar tarifas de un modelo a otro.
 const OPENAI_RATES={
+ 'gpt-4o-mini-tts':{text_input:0.60,audio_output:12},
  'gpt-realtime':{text_input:4,text_cached:0.40,text_output:16,audio_input:32,audio_cached:0.40,audio_output:64},
  'gpt-4.1-mini':{text_input:0.40,text_cached:0.10,text_output:1.60},
  'gpt-4o-mini-transcribe':{text_input:1.25,audio_input:1.25,text_output:5}
 };
+OPENAI_RATES['gpt-4o-mini-tts-2025-12-15']=OPENAI_RATES['gpt-4o-mini-tts'];
+OPENAI_RATES['gpt-4o-mini-tts-2025-03-20']=OPENAI_RATES['gpt-4o-mini-tts'];
 const RATE_DATE='2026-10-14';
 OPENAI_RATES['gpt-4.1-mini-2025-04-14']=OPENAI_RATES['gpt-4.1-mini'];
 OPENAI_RATES['gpt-4o-mini-transcribe-2025-03-20']=OPENAI_RATES['gpt-4o-mini-transcribe'];
@@ -18,6 +21,10 @@ function tokens(usage,kind='text'){
  if(!usage||usage.type==='duration')return null;
  const rawInput=usage.input_tokens??usage.prompt_tokens,rawOutput=usage.output_tokens??usage.completion_tokens;
  if(rawInput==null||rawOutput==null||!Number.isFinite(rawInput)||!Number.isFinite(rawOutput)||rawInput<0||rawOutput<0)return null;
+ if(kind==='tts'){
+  if(!Number.isSafeInteger(rawInput)||!Number.isSafeInteger(rawOutput)||usage.total_tokens!==rawInput+rawOutput)return null;
+  return {text_input:rawInput,audio_output:rawOutput};
+ }
  const input=usage.input_token_details||usage.prompt_tokens_details||{};
  const output=usage.output_token_details||{};
  const cached=input.cached_tokens_details||{};

@@ -109,6 +109,7 @@ async function synthesizeDailyBriefing(input,q,ctx) {
       voice: process.env.F1_TTS_VOICE || process.env.F1_VOICE || 'marin',
       input: text.slice(0, 4096),
       response_format: 'mp3',
+      ...(/^gpt-4o-mini-tts(?:-\d{4}-\d{2}-\d{2})?$/.test(process.env.F1_TTS_MODEL||'gpt-4o-mini-tts')?{stream_format:'sse'}:{}),
       speed: Number(process.env.F1_TTS_SPEED || 1),
       instructions: 'Habla en español mexicano, con tono profesional, amable y ejecutivo. Lee cifras y horarios con claridad.',
     }),
@@ -121,13 +122,16 @@ async function synthesizeDailyBriefing(input,q,ctx) {
     throw error;
   }
 
-  const arrayBuffer = await response.arrayBuffer();
-  // Audio/speech devuelve bytes, no usage: registrar pendiente, sin inventar tokens.
-  if(q&&ctx)await require('../usage/meter').recordOpenAI(q,ctx,{id:response.headers.get('x-request-id')||undefined},{model:process.env.F1_TTS_MODEL||'gpt-4o-mini-tts',channel:'hana',source:'briefing_audio'});
-  return {
-    buffer: Buffer.from(arrayBuffer),
-    contentType: response.headers.get('content-type') || 'audio/mpeg',
-  };
+  const model=process.env.F1_TTS_MODEL||'gpt-4o-mini-tts';
+  const id=response.headers.get('x-request-id')||undefined;
+  let speech;
+  try{speech=await require('../usage/speech-response').readSpeechResponse(response);}
+  catch(error){
+    if(q&&ctx)await require('../usage/meter').recordOpenAI(q,ctx,{id},{model,channel:'hana',source:'briefing_audio',kind:'tts'});
+    throw error;
+  }
+  if(q&&ctx)await require('../usage/meter').recordOpenAI(q,ctx,{id,usage:speech.usage},{model,channel:'hana',source:'briefing_audio',kind:'tts'});
+  return {buffer:speech.buffer,contentType:speech.contentType};
 }
 
 module.exports = {
