@@ -11,7 +11,12 @@ export default function UsageCostsPanel({API_BASE,headers}:Props){
  const initial=new Intl.DateTimeFormat('en-CA',{timeZone:'America/Mexico_City',year:'numeric',month:'2-digit'}).formatToParts(new Date());
  const [month,setMonth]=React.useState(`${initial.find(x=>x.type==='year')?.value}-${initial.find(x=>x.type==='month')?.value}`);
  const endpoint=API_BASE.replace(/\/$/,'')+'/api/usage';
- const requestHeaders=React.useMemo(()=>({...headers,Authorization:'Bearer '+(localStorage.getItem('dentalux_auth_token')||''),'Content-Type':'application/json'}),[headers]);
+ const requestHeaders=React.useMemo(()=>{
+  const normalized=new Headers(headers);
+  normalized.set('Authorization','Bearer '+(localStorage.getItem('dentalux_auth_token')||''));
+  normalized.set('Content-Type','application/json');
+  return Object.fromEntries(normalized.entries());
+ },[headers]);
  React.useEffect(()=>{
   let alive=true,inFlight=false;const controller=new AbortController();
   const load=async()=>{if(inFlight)return;inFlight=true;try{

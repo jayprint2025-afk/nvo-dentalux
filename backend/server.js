@@ -3912,7 +3912,20 @@ async function ensureCoreTenantSchema() {
   // El SKU ya no debe ser único globalmente: cada empresa/sucursal puede usar el mismo SKU.
   const inventoryExists = await q(`SELECT to_regclass('public.inventory') AS name`);
   if (inventoryExists.rows[0]?.name) {
-    await q(`ALTER TABLE inventory ALTER COLUMN quantity TYPE NUMERIC USING quantity::numeric`);
+    // No reconstruir ni eliminar vistas del cliente durante el arranque.
+    // Si ya es numeric, incluso con precisión, no necesita conversión.
+    await q(`DO $$
+      BEGIN
+        IF EXISTS (SELECT 1 FROM information_schema.columns
+          WHERE table_schema='public' AND table_name='inventory'
+            AND column_name='quantity' AND data_type<>'numeric') THEN
+          BEGIN
+            ALTER TABLE public.inventory ALTER COLUMN quantity TYPE NUMERIC USING quantity::numeric;
+          EXCEPTION WHEN feature_not_supported OR dependent_objects_still_exist THEN
+            RAISE WARNING 'inventory.quantity conserva su tipo actual por una vista dependiente; conversión a numeric pendiente de migración explícita';
+          END;
+        END IF;
+      END $$`);
     await q(`
       DO $$
       DECLARE constraint_name TEXT;

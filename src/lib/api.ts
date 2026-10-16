@@ -50,12 +50,11 @@ export async function api(endpoint: string, options: RequestInit = {}) {
   let token = '';
   try { token = localStorage.getItem(AUTH_TOKEN_KEY) || ''; } catch {}
 
-  const headers: HeadersInit = {
-    'Content-Type': 'application/json',
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    'x-sucursal': currentSucursal,
-    ...(options.headers || {}),
-  };
+  const headers = new Headers(options.headers);
+  if (!headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
+  else if (headers.get('Content-Type')?.split(',').every(v => v.trim().toLowerCase() === 'application/json')) headers.set('Content-Type', 'application/json');
+  if (token && !headers.has('Authorization')) headers.set('Authorization', `Bearer ${token}`);
+  if (!headers.has('x-sucursal')) headers.set('x-sucursal', currentSucursal);
 
   try {
     const response = await fetch(url, {
