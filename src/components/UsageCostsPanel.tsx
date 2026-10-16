@@ -21,7 +21,8 @@ export default function UsageCostsPanel({API_BASE,headers}:Props){
   let alive=true,inFlight=false;const controller=new AbortController();
   const load=async()=>{if(inFlight)return;inFlight=true;try{
    const token=localStorage.getItem('dentalux_auth_token')||'';
-   const r=await fetch(endpoint+'?period='+month,{headers:{...requestHeaders,Authorization:'Bearer '+token},signal:controller.signal});const j=await r.json();
+   const activeHeaders=new Headers(requestHeaders);activeHeaders.set('Authorization','Bearer '+token);
+   const r=await fetch(endpoint+'?period='+month,{headers:activeHeaders,signal:controller.signal});const j=await r.json();
    if(!r.ok||!j.ok)throw Error(j.error||'No se pudo consultar el consumo');
    if(alive&&token===(localStorage.getItem('dentalux_auth_token')||'')){setData({...j,_sessionToken:token});setError('');}
   }catch(e:any){if(alive&&e.name!=='AbortError')setError(e.message);}finally{inFlight=false;}};
@@ -31,7 +32,7 @@ export default function UsageCostsPanel({API_BASE,headers}:Props){
  const edit=()=>{setDraft({...data.plan,rates:{...data.plan.rates,meta:{...(data.plan.rates?.meta||{})}}});setEditing(true);};
  const save=async()=>{setSaving(true);try{
   if(data?._sessionToken!==(localStorage.getItem('dentalux_auth_token')||''))throw Error('Cambió la sesión. Abre de nuevo la configuración de la empresa actual.');
-  const activeHeaders={...requestHeaders,Authorization:'Bearer '+data._sessionToken};
+  const activeHeaders=new Headers(requestHeaders);activeHeaders.set('Authorization','Bearer '+data._sessionToken);
   const body={...draft};for(const k of ['included_mxn','monthly_rent_mxn','markup_pct','usd_mxn'])body[k]=Number(body[k]);
   const r=await fetch(endpoint+'/plan?period='+month,{method:'PUT',headers:activeHeaders,body:JSON.stringify(body)});const j=await r.json();
   if(!r.ok||!j.ok)throw Error(j.error||'No se guardó');
