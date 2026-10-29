@@ -7,7 +7,11 @@ async function readSpeechResponse(response){
  const audio=[];let size=0,usage,done=false,pending='',data=[];
  const decoder=new TextDecoder();
  const dispatch=()=>{
-  if(!data.length)return;const payload=JSON.parse(data.join('\n'));data=[];
+  if(!data.length)return;const raw=data.join('\n');data=[];
+  // El terminador SSE no es JSON. El evento speech.audio.done sigue siendo
+  // obligatorio para aceptar el audio y conservar su usage del proveedor.
+  if(raw.trim()==='[DONE]')return;
+  const payload=JSON.parse(raw);
   if(payload.type==='error'||payload.error)throw Error('El proveedor reportó un error al generar el audio');
   if(payload.type==='speech.audio.delta'){
    if(done||typeof payload.audio!=='string'||!payload.audio.length||! /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(payload.audio))throw Error('Fragmento de audio inválido');
