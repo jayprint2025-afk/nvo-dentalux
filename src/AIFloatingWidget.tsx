@@ -641,7 +641,10 @@ export default function AIFloatingWidget(props: { apiBase?: string; sucursalId?:
   const [wakeSettingsRevision, setWakeSettingsRevision] = React.useState(0);
   const voiceProfileServiceRef = React.useRef(new VoiceProfileService(API_BASE));
   const [voiceProfile, setVoiceProfile] = React.useState<VoiceProfile | null>(null);
-  const [voiceProfileName, setVoiceProfileName] = React.useState("Jonathan");
+  const [voiceProfiles,setVoiceProfiles]=React.useState<VoiceProfile[]>([]);
+  const [selectedVoiceProfileId,setSelectedVoiceProfileId]=React.useState('');
+  const recognizedSpeakerRef=React.useRef<any>(null);
+  const [voiceProfileName, setVoiceProfileName] = React.useState("");
   const [voiceProfileBusy, setVoiceProfileBusy] = React.useState(false);
   const [voiceProfileMessage, setVoiceProfileMessage] = React.useState("");
   const [voiceProfileVerification, setVoiceProfileVerification] =
@@ -686,18 +689,22 @@ export default function AIFloatingWidget(props: { apiBase?: string; sucursalId?:
       tenantId: identity.tenant,
       userId: identity.user,
       branchKey: sucursalId || "sucursal_1",
+      profileId:selectedVoiceProfileId||undefined,
     };
-  }, [sucursalId,voiceSessionToken]);
+  }, [sucursalId,voiceSessionToken,selectedVoiceProfileId]);
+
+  const voiceRuntimeScope=React.useMemo<VoiceProfileScope>(()=>({tenantId:voiceProfileScope.tenantId,userId:voiceProfileScope.userId,branchKey:voiceProfileScope.branchKey}),[voiceProfileScope.tenantId,voiceProfileScope.userId,voiceProfileScope.branchKey]);
 
   React.useEffect(() => {
     let cancelled = false;
 
     const refresh=()=>{
       if(cancelled||voiceProfileCaptureRef.current)return;
-      void voiceProfileServiceRef.current.load(voiceProfileScope).then(profile=>{
-        if(cancelled)return;setVoiceProfile(profile);
+      void voiceProfileServiceRef.current.list(voiceProfileScope).then(profiles=>{
+        const profile=profiles.find(p=>p.profileId===selectedVoiceProfileId)||profiles[0]||null;
+        if(cancelled)return;setVoiceProfiles(profiles);setVoiceProfile(profile);setSelectedVoiceProfileId(profile?.profileId||'');
         if(profile){setVoiceProfileName(profile.displayName);setVoiceProfileMessage(`Perfil sincronizado con tu cuenta: ${profile.samples.length} muestras.`);}
-        else setVoiceProfileMessage('Registra tu voz una vez; se sincronizará con tus otros dispositivos.');
+        else {setVoiceProfileName('');setVoiceProfileMessage('Crea un perfil por persona y registra sus 5 muestras.');}
       }).catch(error=>{if(!cancelled)setVoiceProfileMessage(error instanceof Error?error.message:String(error));});
     };
     refresh();
@@ -1597,7 +1604,7 @@ const buildLeadReport = React.useCallback(() => {
         voiceProfileName,
         ()=>setVoiceProfileMessage('Grabando 3.5 segundos: di “Oye Hanna”, “Oye Jana” u “Oye Ana” con tu voz natural…'),
       );
-      setVoiceProfile(profile);
+      setVoiceProfile(profile);setVoiceProfiles(await voiceProfileServiceRef.current.list(voiceProfileScope));
       setVoiceProfileMessage(
         `Muestra ${profile.samples.length} sincronizada para ${profile.displayName}. Disponible en tus otros dispositivos.`,
       );
@@ -1669,13 +1676,30 @@ const buildLeadReport = React.useCallback(() => {
     if(!window.confirm('¿Eliminar el perfil de voz de tu cuenta en todos tus dispositivos?'))return;
     voiceProfileCaptureRef.current=true;setVoiceProfileBusy(true);
     try{
-      await voiceProfileServiceRef.current.remove(voiceProfileScope);
+      await voiceProfileServiceRef.current.remove(voiceProfileScope);setSelectedVoiceProfileId('');setVoiceProfiles(await voiceProfileServiceRef.current.list(voiceProfileScope));
       setVoiceProfile(null);setVoiceProfileVerification(null);setVoiceProfileMessage('Perfil eliminado de tu cuenta.');
     }catch(error){setVoiceProfileMessage(error instanceof Error?error.message:String(error));}
     finally{voiceProfileCaptureRef.current=false;setVoiceProfileBusy(false);}
   },[voiceProfileScope]);
 
+  const createVoicePerson=async()=>{
+    if(voiceProfileCaptureRef.current)return;
+    const name=window.prompt('Nombre de la nueva persona (sus muestras serán independientes):');if(!name?.trim())return;
+    voiceProfileCaptureRef.current=true;setVoiceProfileBusy(true);
+    try{const p=await voiceProfileServiceRef.current.create(voiceProfileScope,name);setSelectedVoiceProfileId(p.profileId||'');setVoiceProfile(p);setVoiceProfileName(p.displayName);setVoiceProfiles(await voiceProfileServiceRef.current.list(p.scope));setVoiceProfileMessage('Nuevo perfil creado. Graba 5 muestras de '+p.displayName+'.');}
+    catch(e){setVoiceProfileMessage(e instanceof Error?e.message:String(e));}
+    finally{voiceProfileCaptureRef.current=false;setVoiceProfileBusy(false);}
+  };
+  const replaceVoiceSamples=async()=>{
+    if(!voiceProfile||voiceProfileCaptureRef.current||!window.confirm('¿Reemplazar SOLO las muestras de '+voiceProfile.displayName+'? Tendrás que grabar 5 nuevas. Los demás perfiles se conservan.'))return;
+    voiceProfileCaptureRef.current=true;setVoiceProfileBusy(true);
+    try{const p=await voiceProfileServiceRef.current.replaceSamples(voiceProfile);setVoiceProfile(p);setVoiceProfiles(await voiceProfileServiceRef.current.list(p.scope));setVoiceProfileMessage('Graba las 5 muestras nuevas de '+p.displayName+'.');}
+    catch(e){setVoiceProfileMessage(e instanceof Error?e.message:String(e));}
+    finally{voiceProfileCaptureRef.current=false;setVoiceProfileBusy(false);}
+  };
+
   const connectVoice = React.useCallback(async () => {
+    recognizedSpeakerRef.current=null;
     await unlockF1Audio();
     await sessionControllerRef.current?.startManualConversation();
   }, [unlockF1Audio]);
@@ -1715,16 +1739,8 @@ const buildLeadReport = React.useCallback(() => {
 
           wakeVerificationInFlightRef.current = true;
           try {
-            if (!voiceProfile?.enabled || (voiceProfile?.samples?.length ?? 0) < 5) {
-              setLastWakeIdentity("V43B: registra 5 muestras activas diciendo Oye Hana");
-              setF1VoiceEngineDetail("V46 · Sherpa detectó frase · bloqueado: faltan 5 muestras CAMPPlus");
-              (f1VoiceEngineRef.current as any)?.suppressWakeFor?.(80);
-              wakeVerificationCooldownUntilRef.current = Date.now() + 80;
-              return;
-            }
-
             const result: any = await voiceProfileServiceRef.current.verifyWakeSamples(
-              voiceProfileScope,
+              voiceRuntimeScope,
               audioWindow,
               sampleRate,
             );
@@ -1745,7 +1761,7 @@ const buildLeadReport = React.useCallback(() => {
               similarity,
               required,
               sherpaConfidence: Number((event as any)?.confidence || 0),
-              samples: voiceProfile.samples.length,
+              samples: result.sampleCount||0,
               medianSimilarity: Number(result?.medianSimilarity || 0),
               matchingSamples: Number(result?.matchingSamples || 0),
               requiredMatches: Number(result?.requiredMatches || 0),
@@ -1754,7 +1770,7 @@ const buildLeadReport = React.useCallback(() => {
             });
 
             if (!accepted) {
-              setLastWakeIdentity(`Oye Hana detectado · voz rechazada ${pct}%/${requiredPct}%`);
+              setLastWakeIdentity(`Oye Hana · ${result.ambiguous?"identidad ambigua entre perfiles":"voz no reconocida"} ${pct}%`);
               setF1VoiceEngineDetail(`V54 · voz rechazada (${pct}%) · rearmando escucha…`);
 
               // V54 REJECT -> CLEAN LISTEN:
@@ -1773,7 +1789,8 @@ const buildLeadReport = React.useCallback(() => {
               return;
             }
 
-            setLastWakeIdentity(`Oye Hana · propietario ${pct}%`);
+            recognizedSpeakerRef.current={...result,verifiedAt:Date.now()};
+            setLastWakeIdentity(`Oye Hana · ${result.displayName} ${pct}%`);
             setF1VoiceEngineDetail("V46 · Sherpa + CAMPPlus aprobados · iniciando…");
 
             await controller.wakeDetected({
@@ -1821,15 +1838,14 @@ const buildLeadReport = React.useCallback(() => {
       // CAMPPlus sobre el mismo audio. Esto elimina la doble verificacion que
       // dejaba el estado en "muestra de voz requerida" despues de aprobar al dueno.
       minimumWakeConfidence: F1_MIN_WAKE_CONFIDENCE,
-      verifyWakeIdentity: async () => ({
-        accepted: true,
-        similarity: 1,
-        displayName: voiceProfile?.displayName || "Usuario",
-        reason: "v48_sherpa_campplus_already_verified",
-      }),
+      verifyWakeIdentity: async () => {
+        const match=recognizedSpeakerRef.current;
+        return {accepted:match?.accepted===true&&Date.now()-match.verifiedAt<5000,similarity:match?.similarity||0,displayName:match?.displayName,reason:'multi_profile_consensus'};
+      },
       createRealtimeClient: ({ greetingText, speakerName }) => new F1RealtimeClient({
         greetingText,
         speakerName,
+        speakerProfileId:recognizedSpeakerRef.current?.profileId,
         apiBase: API_BASE,
         branchKey: sucursalId || "sucursal_1",
         getToken: () => localStorage.getItem("dentalux_auth_token") || "",
@@ -1927,8 +1943,7 @@ const buildLeadReport = React.useCallback(() => {
     sucursalId,
     executeRealtimeTool,
     wakeSettingsRevision,
-    voiceProfile,
-    voiceProfileScope,
+    voiceRuntimeScope,
   ]);
 
   const toggleF1VoiceEngine = React.useCallback(() => {
@@ -2708,13 +2723,14 @@ const buildLeadReport = React.useCallback(() => {
 
                         <div className="mt-4 border-t pt-3">
                           <div className="text-xs font-semibold">
-                            Perfil de voz del usuario
+                            Perfiles de voz autorizados
                           </div>
                           <div className="mt-1 text-[10px] text-gray-500">
-                            CAMPPlus V46 · Guardado por empresa, usuario y sucursal en este
-                            dispositivo. Registra 5 muestras nuevas.
+                            Un perfil por persona, con 5 muestras independientes. Se sincronizan entre dispositivos de esta cuenta y empresa. La voz no cambia los permisos de la cuenta.
                           </div>
 
+                          <div className="mt-3 flex gap-2"><select aria-label="Persona del perfil de voz" disabled={voiceProfileBusy} value={selectedVoiceProfileId} onChange={e=>{setSelectedVoiceProfileId(e.target.value);setVoiceProfileVerification(null);}} className="border rounded p-2 text-xs flex-1"><option value="">Selecciona una persona</option>{voiceProfiles.map(p=><option key={p.profileId} value={p.profileId}>{p.displayName} · {p.samples.length}/5{p.needsReview?' · revisar muestras anteriores':''}</option>)}</select><button disabled={voiceProfileBusy} onClick={()=>void createVoicePerson()} className="rounded bg-indigo-600 px-2 text-xs text-white">Nuevo perfil</button></div>
+                          {voiceProfile?.needsReview&&<p className="mt-2 text-xs text-amber-700">Este grupo anterior tiene muestras que podrían estar mezcladas. No autoriza activación. Crea perfiles separados o reemplaza sus muestras; no se han borrado automáticamente.</p>}
                           <label className="mt-3 block text-[11px] text-gray-600">
                             Nombre
                             <input
@@ -2728,7 +2744,7 @@ const buildLeadReport = React.useCallback(() => {
                           </label>
 
                           <div className="mt-3 rounded-lg border bg-white p-2 text-[11px] text-gray-600">
-                            Muestras V44 registradas: {voiceProfile?.samples.length ?? 0} / 5
+                            Muestras de esta persona: {voiceProfile?.samples.length ?? 0} / 5
                             {voiceProfile?.updatedAt
                               ? ` Â· Actualizado ${new Date(
                                   voiceProfile.updatedAt,
@@ -2739,13 +2755,13 @@ const buildLeadReport = React.useCallback(() => {
                           <div className="mt-2 grid grid-cols-2 gap-2">
                             <button
                               type="button"
-                              disabled={voiceProfileBusy}
+                              disabled={voiceProfileBusy||!voiceProfile||voiceProfile.needsReview||(voiceProfile.samples.length>=5)}
                               onClick={() => void recordVoiceProfileSample()}
                               className="rounded-lg bg-emerald-600 px-2 py-2 text-xs text-white disabled:opacity-50"
                             >
                               {voiceProfileBusy
                                 ? "Grabandoâ€¦"
-                                : 'Grabar muestra V44'}
+                                : 'Grabar muestra de esta persona'}
                             </button>
                             <button
                               type="button"
@@ -2760,6 +2776,7 @@ const buildLeadReport = React.useCallback(() => {
                             </button>
                           </div>
 
+                          {voiceProfile&&<button disabled={voiceProfileBusy} onClick={()=>void replaceVoiceSamples()} className="mt-2 border rounded px-2 py-1 text-xs">Reemplazar muestras de esta persona</button>}
                           {voiceProfile && (
                             <div className="mt-3 rounded-lg border bg-slate-50 p-2 text-[11px] text-gray-600">
                               Seguridad de voz: CAMPPlus usa consenso automatico entre
@@ -2805,7 +2822,7 @@ const buildLeadReport = React.useCallback(() => {
                               onClick={() => void saveVoiceProfileSettings()}
                               className="rounded-lg border bg-white px-2 py-1.5 text-xs"
                             >
-                              Guardar perfil
+                              Guardar nombre del perfil seleccionado
                             </button>
                           </div>
                         </div>

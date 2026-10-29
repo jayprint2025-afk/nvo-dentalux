@@ -149,6 +149,7 @@ export class F1AudioSessionController {
       if (this.sm.state === "WAKE_LISTENING") {
         this.move("WAKE_DETECTED", "Conversación iniciada manualmente");
       }
+      this.activeSpeakerName=undefined;this.activeGreetingText="Te escucho";
       await this.openRealtime(true);
     });
   }

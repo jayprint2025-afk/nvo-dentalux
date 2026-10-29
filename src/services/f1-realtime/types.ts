@@ -67,6 +67,7 @@ export interface RealtimeCallbacks {
 export interface F1RealtimeClientOptions {
   greetingText: string;
   speakerName?: string;
+  speakerProfileId?: string;
   apiBase: string;
   branchKey: string;
   getToken(): string;
@@ -87,6 +88,7 @@ export interface F1AudioSessionControllerOptions {
   createRealtimeClient(context: {
     greetingText: string;
     speakerName?: string;
+  speakerProfileId?: string;
   }): import("./F1RealtimeClient").F1RealtimeClient;
   onSnapshot(snapshot: F1AudioSnapshot): void;
   onOpenWidget?(): void;

@@ -159,7 +159,7 @@ export class F1RealtimeClient {
       await pc.setLocalDescription(offer);
 
       const response = await fetch(
-        `${this.options.apiBase}/api/f1/realtime/call?branch_key=${encodeURIComponent(this.options.branchKey)}`,
+        `${this.options.apiBase}/api/f1/realtime/call?branch_key=${encodeURIComponent(this.options.branchKey)}${this.options.speakerProfileId?`&speaker_profile_id=${encodeURIComponent(this.options.speakerProfileId)}`:""}`,
         {
           method: "POST",
           headers: {

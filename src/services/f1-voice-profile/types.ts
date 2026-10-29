@@ -2,6 +2,7 @@ export type VoiceProfileScope = {
   tenantId: string;
   userId: string;
   branchKey: string;
+  profileId?: string;
 };
 
 export type VoiceFingerprint = {
@@ -18,6 +19,8 @@ export type VoiceProfileSample = {
 };
 
 export type VoiceProfile = {
+  profileId?: string;
+  needsReview?: boolean;
   cloudRevision?: number;
   key: string;
   engineVersion?: "campplus-v44";

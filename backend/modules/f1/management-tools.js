@@ -1530,6 +1530,7 @@ async function registerLaboratoryPayoutF1(q,ctx,args={}){
 
 
 const handlers = {
+  get_facebook_conversations: require('./facebook-conversations').facebookConversations,
   open_operation_view:(_q,_ctx,args)=>require('./operation-view').operationView(args),
   list_branches: listBranchesF1,
   select_branch: selectBranchF1,

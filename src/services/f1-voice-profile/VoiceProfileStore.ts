@@ -15,6 +15,14 @@ export function voiceProfileKey(scope: VoiceProfileScope): string {
 export class VoiceProfileStore {
   private dbPromise: Promise<IDBDatabase> | null = null;
 
+  async getCollection(scope:VoiceProfileScope):Promise<VoiceProfile[]>{
+    const value:any=await this.get(scope);if(!value)return [];
+    return Array.isArray(value.voiceProfiles)?value.voiceProfiles:[{...value,profileId:'00000000-0000-4000-8000-000000000001',needsReview:value.samples?.length!==5,enabled:value.samples?.length===5&&value.enabled===true}];
+  }
+  async putCollection(scope:VoiceProfileScope,profiles:VoiceProfile[]):Promise<void>{
+    await this.put({key:voiceProfileKey(scope),scope,voiceProfiles:profiles} as any);
+  }
+
   async get(scope: VoiceProfileScope): Promise<VoiceProfile | null> {
     const db = await this.open();
     const key = voiceProfileKey(scope);
