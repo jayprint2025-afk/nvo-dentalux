@@ -23,13 +23,25 @@ async function planFor(q,tenant,period){
 }
 async function record(q,ctx,event){
  const tenant=tenantOf(ctx);if(!tenant)throw new Error('Consumo sin empresa: no se atribuye a otra');
- const when=event.at||new Date(),period=P.periodAt(when),plan=await planFor(q,tenant,period);
+ let when=event.at||new Date(),period=P.periodAt(when);
+ // Un reporte tardío completa el mes original, con su plan y tipo de cambio.
+ if(event.provider==='openai'&&event.key){
+  const previous=(await q(`SELECT occurred_at,period FROM hana_usage_events WHERE tenant_id=$1::uuid AND event_key=$2
+   AND provider='openai' AND status='usage_unavailable' AND cost_usd IS NULL AND cost_mxn IS NULL`,[tenant,event.key])).rows[0];
+  if(previous){when=previous.occurred_at;period=previous.period;}
+ }
+ const plan=await planFor(q,tenant,period);
  const price=event.provider==='openai'?P.costForTokens(event.model,event.counters,plan.rates?.openai):null;
  const usd=price?.usd??event.usd??null;
  const mxn=event.mxn??(usd!=null&&plan.usd_mxn?usd*Number(plan.usd_mxn):null);
  await q(`INSERT INTO hana_usage_events(tenant_id,event_key,period,occurred_at,provider,channel,source,model,status,counters,cost_usd,cost_mxn,rating,metadata)
  VALUES($1::uuid,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12,$13::jsonb,$14::jsonb)
- ON CONFLICT(tenant_id,event_key) DO NOTHING`,[tenant,event.key,period,when,event.provider,event.channel,event.source,event.model||null,event.status||'measured',JSON.stringify(event.counters||{}),usd,mxn,JSON.stringify({rates:price?.rates||null,usd_mxn:plan.usd_mxn||null,tariff_date:P.RATE_DATE}),JSON.stringify(event.metadata||{})]);
+ ON CONFLICT(tenant_id,event_key) DO UPDATE SET
+ model=EXCLUDED.model,status=EXCLUDED.status,counters=EXCLUDED.counters,cost_usd=EXCLUDED.cost_usd,
+ cost_mxn=EXCLUDED.cost_mxn,rating=EXCLUDED.rating,metadata=hana_usage_events.metadata||EXCLUDED.metadata
+ WHERE hana_usage_events.provider='openai' AND EXCLUDED.provider='openai'
+ AND hana_usage_events.status='usage_unavailable' AND EXCLUDED.status='measured'
+ AND hana_usage_events.cost_usd IS NULL AND hana_usage_events.cost_mxn IS NULL`,[tenant,event.key,period,when,event.provider,event.channel,event.source,event.model||null,event.status||'measured',JSON.stringify(event.counters||{}),usd,mxn,JSON.stringify({rates:price?.rates||null,usd_mxn:plan.usd_mxn||null,tariff_date:P.RATE_DATE}),JSON.stringify(event.metadata||{})]);
  return true;
 }
 async function recordOpenAI(q,ctx,payload,{channel='hana',source='text',key,kind='text',model}={}){

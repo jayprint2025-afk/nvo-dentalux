@@ -22,6 +22,24 @@ function validatePlan(body){
  }
  return out;
 }
+function pendingBreakdown(rows){
+ const groups=new Map();
+ for(const event of rows){
+  if(event.cost_mxn!=null)continue;
+  let reason='tariff_missing';
+  if(event.provider==='openai'&&event.status==='usage_unavailable')reason='tokens_missing';
+  else if(event.cost_usd!=null)reason='exchange_missing';
+  else if(event.provider==='meta'&&event.channel==='whatsapp'&&!event.metadata?.verified_delivery)reason='delivery_pending';
+  else if(event.provider==='meta'&&event.channel==='whatsapp'&&event.rating?.billable==null)reason='billing_pending';
+  const key=JSON.stringify([event.channel,event.source,reason]),stamp=new Date(event.occurred_at).getTime();
+  const group=groups.get(key)||{channel:event.channel,source:event.source,reason,count:0,first_at:null,last_at:null};group.count++;
+  if(Number.isFinite(stamp)){
+   const at=new Date(stamp).toISOString();if(!group.first_at||at<group.first_at)group.first_at=at;if(!group.last_at||at>group.last_at)group.last_at=at;
+  }
+  groups.set(key,group);
+ }
+ return [...groups.values()];
+}
 function setupUsageRoutes(app,q,{authRequired,getTenantId}){
  app.use('/api/usage',authRequired);
  app.use('/api/usage',(req,res,next)=>{res.set('Cache-Control','no-store');next();});
@@ -41,13 +59,15 @@ function setupUsageRoutes(app,q,{authRequired,getTenantId}){
   try{
    const {tenant,query}=await scope(req),month=period(req),plan=await M.planFor(query,tenant,month);
    const rows=(await query('SELECT * FROM hana_usage_events WHERE tenant_id=$1::uuid AND period=$2 ORDER BY occurred_at',[tenant,month])).rows;
-   const sessions=(await query(`SELECT CASE WHEN status='connected' AND updated_at<NOW()-INTERVAL '90 seconds' THEN 'coverage_incomplete' ELSE status END AS status,
+   const sessions=(await query(`SELECT CASE WHEN status IN ('starting','connected','connected_after_gap') AND updated_at<NOW()-INTERVAL '90 seconds' THEN 'monitor_stale' ELSE status END AS status,
     COUNT(*)::integer AS count FROM hana_usage_sessions WHERE tenant_id=$1::uuid AND period=$2 GROUP BY 1`,[tenant,month])).rows;
    const first=(await query('SELECT MIN(occurred_at) AS since FROM hana_usage_events WHERE tenant_id=$1::uuid',[tenant])).rows[0]?.since||null;
    const summary=P.totals(rows,plan);
-   const gaps=sessions.filter(s=>!['connected','closed'].includes(s.status)).reduce((n,s)=>n+Number(s.count),0);
+   const gaps=sessions.filter(s=>!['starting','connected','closed'].includes(s.status)).reduce((n,s)=>n+Number(s.count),0);
    const missing=M.missingRecords(tenant,month);
+   const active=sessions.filter(s=>['starting','connected'].includes(s.status)).reduce((n,s)=>n+Number(s.count),0);
    res.json({ok:true,tenant_id:tenant,period:month,plan,summary:{...summary,complete:summary.complete&&gaps===0&&missing===0},sessions,coverage_gaps:gaps,missing_records:missing,measuring_since:first,
+    measurement_version:'usage-monitor-v2',pending_details:pendingBreakdown(rows),active_sessions:active,
     can_configure:req.auth?.role==='superadmin',reference_rates:P.OPENAI_RATES,reference_date:P.RATE_DATE,
     notes:['Costo calculado con uso reportado por proveedores; no sustituye su factura.','Meta sin tarifa verificada o sin confirmación de entrega aparece pendiente.','No se reconstruye consumo anterior a la instalación.']});
   }catch(error){res.status(error.status||(error.code==='42P01'?503:400)).json({ok:false,error:error.code==='42P01'?'Falta ejecutar sql/001_usage.sql':error.message});}
@@ -81,4 +101,4 @@ function setupUsageRoutes(app,q,{authRequired,getTenantId}){
   }catch(error){res.status(error.status||400).json({ok:false,error:error.message});}
  });
 }
-module.exports={setupUsageRoutes,validatePlan};
+module.exports={setupUsageRoutes,validatePlan,pendingBreakdown};
