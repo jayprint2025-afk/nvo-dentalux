@@ -1,3 +1,4 @@
+import UsageCostsPanel from './components/UsageCostsPanel';
 import {applyOperationView} from './lib/f1-operation-view';
 import {scopedStorageKey,sessionScope} from './lib/tenant-scope';
 import React, { useEffect, useMemo, useState } from "react";
@@ -1315,6 +1316,9 @@ const emptyChannelForm = {
 };
 
 function EmpresasModule({ isSuperAdmin }: { isSuperAdmin: boolean }) {
+  const [usageCompany,setUsageCompany]=React.useState<Empresa|null>(null);
+  const usageHeaders=React.useMemo(()=>({}),[]);
+  const usageApiBase=String(import.meta.env.VITE_API_BASE||'https://localhost:5173/').replace(/\/$/,'');
   const [empresas, setEmpresas] = React.useState<Empresa[]>([]);
   const [loading, setLoading] = React.useState(false);
   const [showForm, setShowForm] = React.useState(false);
@@ -1957,10 +1961,11 @@ function EmpresasModule({ isSuperAdmin }: { isSuperAdmin: boolean }) {
               <tr key={empresa.id} className="border-t">
                 <td className="p-3"><div className="font-medium">{empresa.name}</div><div className="text-xs text-gray-500">{empresa.branchName}</div></td>
                 <td className="p-3"><div>{empresa.ownerName}</div><div className="text-xs text-gray-500">{empresa.ownerEmail}</div></td>
-                <td className="p-3 font-medium">$20 USD/mes</td>
+                <td className="p-3 font-medium">Consultar renta y consumo</td>
                 <td className="p-3"><span className={`px-2 py-1 rounded-full text-xs font-medium ${empresa.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>{empresa.status === 'active' ? 'Activa' : 'Suspendida'}</span></td>
                 <td className="p-3">
                   <div className="flex flex-wrap gap-2">
+                    {isSuperAdmin && <button onClick={()=>setUsageCompany(empresa)} className="px-3 py-1.5 border border-indigo-300 text-indigo-700 bg-indigo-50 rounded flex items-center gap-1"><DollarSign className="w-3 h-3" /> Renta y consumo</button>}
                     {isSuperAdmin && <button onClick={() => openEdit(empresa)} className="px-3 py-1.5 border rounded flex items-center gap-1"><Edit className="w-3 h-3" /> Editar</button>}
                     {isSuperAdmin && <button onClick={() => openChannels(empresa)} className="px-3 py-1.5 border border-blue-300 text-blue-700 bg-blue-50 rounded flex items-center gap-1"><MessageCircle className="w-3 h-3" /> Canales</button>}
                     <button onClick={() => openAIConfig(empresa)} className="px-3 py-1.5 border border-violet-300 text-violet-700 bg-violet-50 rounded flex items-center gap-1"><Bot className="w-3 h-3" /> IA y sucursales</button>
@@ -1977,6 +1982,13 @@ function EmpresasModule({ isSuperAdmin }: { isSuperAdmin: boolean }) {
           </tbody>
         </table>
       </div>
+
+      {isSuperAdmin && usageCompany && <div className="fixed inset-0 z-[10030] bg-black/50 p-3 flex items-center justify-center" role="dialog" aria-modal="true" aria-label={'Renta y consumo de '+usageCompany.name}>
+        <div className="bg-white rounded-2xl w-full max-w-5xl max-h-[94vh] overflow-y-auto">
+          <div className="sticky top-0 z-10 bg-white border-b p-4 flex justify-between items-center"><h3 className="font-semibold">Renta y consumo · {usageCompany.name}</h3><button aria-label="Cerrar renta y consumo" onClick={()=>setUsageCompany(null)} className="p-2"><X className="w-5 h-5" /></button></div>
+          <UsageCostsPanel key={usageCompany.id} API_BASE={usageApiBase} headers={usageHeaders} tenantId={String(usageCompany.id)} companyName={usageCompany.name}/>
+        </div>
+      </div>}
 
       {isSuperAdmin && salesOpen && (
         <div className="fixed inset-0 z-[10020] bg-black/50 p-3 md:p-6">
