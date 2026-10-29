@@ -12,9 +12,12 @@ export class CampPlusSpeakerExtractor {
   private sessionPromise: Promise<ort.InferenceSession> | null = null;
 
   async fromBlob(blob: Blob): Promise<VoiceFingerprint> {
-    const context = new AudioContext({ sampleRate: TARGET_SAMPLE_RATE });
+    const AudioContextClass=window.AudioContext||(window as any).webkitAudioContext;
+    if(!AudioContextClass)throw Error('Este navegador no puede procesar audio. Usa Chrome o Safari actualizado.');
+    let context:AudioContext;
+    try{context=new AudioContextClass({sampleRate:TARGET_SAMPLE_RATE});}catch{context=new AudioContextClass();}
     try {
-      const decoded = await context.decodeAudioData(await blob.arrayBuffer());
+      const decoded = await this.bounded(context.decodeAudioData(await blob.arrayBuffer()),15000,"El navegador no pudo decodificar la muestra. Intenta grabar de nuevo.");
       const mono = decoded.getChannelData(0);
       return await this.fromSamples(mono, decoded.sampleRate);
     } finally {
@@ -29,7 +32,7 @@ export class CampPlusSpeakerExtractor {
       throw new Error("Muy poca voz útil para verificar al propietario.");
     }
     const { data, frames } = this.fbank(speech);
-    const session = await this.session();
+    const session = await this.bounded(this.session(),45000,"No se pudo cargar CAMPPlus a tiempo. Revisa la conexión y vuelve a intentar.");
     const output = await session.run({
       [session.inputNames[0]]: new ort.Tensor("float32", data, [1, frames, MEL_BINS]),
     });
@@ -57,9 +60,15 @@ export class CampPlusSpeakerExtractor {
     return out;
   }
 
+  private async bounded<T>(work:Promise<T>,ms:number,message:string):Promise<T>{
+    let timer:number|undefined;
+    try{return await Promise.race([work,new Promise<never>((_,reject)=>{timer=window.setTimeout(()=>reject(Error(message)),ms);})]);}
+    finally{window.clearTimeout(timer);}
+  }
+
   private session(): Promise<ort.InferenceSession> {
     if (!this.sessionPromise) {
-      this.sessionPromise = ort.InferenceSession.create(MODEL_URL, { executionProviders: ["wasm"] });
+      this.sessionPromise = ort.InferenceSession.create(MODEL_URL, { executionProviders: ["wasm"] }).catch(error=>{this.sessionPromise=null;throw error;});
     }
     return this.sessionPromise;
   }

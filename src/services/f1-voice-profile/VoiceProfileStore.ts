@@ -72,9 +72,11 @@ export class VoiceProfileStore {
         }
       };
 
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () =>
-        reject(request.error ?? new Error("No fue posible abrir IndexedDB"));
+      request.onsuccess = () => {
+        request.result.onversionchange=()=>{request.result.close();this.dbPromise=null;};
+        resolve(request.result);
+      };
+      request.onerror = () => {this.dbPromise=null;reject(request.error ?? new Error("No fue posible abrir IndexedDB"));};
     });
 
     return this.dbPromise;

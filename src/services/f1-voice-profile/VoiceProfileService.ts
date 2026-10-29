@@ -1,4 +1,4 @@
-import { restoreValidatedOwnerProfile } from "./ValidatedOwnerProfile";
+import { VoiceProfileCloud } from "./VoiceProfileCloud";
 import { CampPlusSpeakerExtractor } from "./CampPlusSpeakerExtractor";
 import { VoiceProfileRecorder } from "./VoiceProfileRecorder";
 import { VoiceProfileStore, voiceProfileKey } from "./VoiceProfileStore";
@@ -23,23 +23,39 @@ export class VoiceProfileService {
   private readonly recorder = new VoiceProfileRecorder();
   private readonly extractor = new CampPlusSpeakerExtractor();
 
-  async load(scope: VoiceProfileScope, options: { useValidatedOwnerPreset?: boolean } = {}): Promise<VoiceProfile | null> {
-    let profile = await this.store.get(scope);
-    if (!profile) return null;
-    if (options.useValidatedOwnerPreset) {
-      const restored = await restoreValidatedOwnerProfile(profile);
-      if (restored !== profile) await this.store.put(restored);
-      profile = restored;
+  private cloud: VoiceProfileCloud | null;
+  private synchronized=new Set<string>();
+  constructor(apiBase?:string){this.cloud=apiBase?new VoiceProfileCloud(apiBase):null;}
+  async load(scope: VoiceProfileScope, _options: { useValidatedOwnerPreset?: boolean } = {}): Promise<VoiceProfile | null> {
+    const local=await this.store.get(scope);
+    if(!this.cloud)return local;
+    const remote=await this.cloud.get(scope);
+    if(remote){
+      remote.samples=remote.samples.map(sample=>({...sample,audio:local?.samples.find(s=>s.id===sample.id)?.audio||sample.audio}));
+      await this.store.put(remote);this.synchronized.add(voiceProfileKey(scope));return remote;
     }
-    const compatible = this.isCompatible(profile);
-    if (compatible) return profile;
-    return { ...profile, engineVersion: "campplus-v44", enabled: true, samples: [], centroid: [], acceptanceThreshold: DISPLAY_REQUIRED };
+    if(this.cloud.version(scope)===0&&local?.engineVersion==='campplus-v44'&&local.samples?.length){
+      const saved=await this.cloud.put(local);
+      if(saved){saved.samples=saved.samples.map(sample=>({...sample,audio:local.samples.find(s=>s.id===sample.id)?.audio||sample.audio}));await this.store.put(saved);}
+      this.synchronized.add(voiceProfileKey(scope));return saved;
+    }
+    if(local)await this.store.delete(scope);
+    this.synchronized.add(voiceProfileKey(scope));return null;
+  }
+  private async persist(profile:VoiceProfile):Promise<VoiceProfile>{
+    if(this.cloud){
+      const saved=await this.cloud.put(profile);
+      if(!saved)throw Error('El servidor no confirmó el perfil.');
+      saved.samples=saved.samples.map(sample=>({...sample,audio:profile.samples.find(s=>s.id===sample.id)?.audio||sample.audio}));
+      await this.store.put(saved);return saved;
+    }
+    await this.store.put(profile);return profile;
   }
 
-  async addEnrollmentSample(scope: VoiceProfileScope, displayName: string): Promise<VoiceProfile> {
-    const blob = await this.recorder.record(3500);
+  async addEnrollmentSample(scope: VoiceProfileScope, displayName: string,onRecordingStarted?:()=>void): Promise<VoiceProfile> {
+    const current = await this.load(scope);
+    const blob = await this.recorder.record(3500,onRecordingStarted);
     const fingerprint = await this.extractor.fromBlob(blob);
-    const current = await this.store.get(scope);
     const now = new Date().toISOString();
     const compatible = current?.engineVersion === "campplus-v44"
       ? (current.samples ?? []).filter((sample) => sample.fingerprint.values.length === EMBEDDING_SIZE)
@@ -47,6 +63,7 @@ export class VoiceProfileService {
     const samples = [...compatible, { id: crypto.randomUUID(), createdAt: now, fingerprint, audio: blob }].slice(-10);
     const profile: VoiceProfile = {
       key: voiceProfileKey(scope), scope,
+      cloudRevision:current?.cloudRevision??this.cloud?.version(scope),
       engineVersion: "campplus-v44",
       displayName: String(displayName || "Usuario").trim() || "Usuario",
       enabled: true,
@@ -56,8 +73,7 @@ export class VoiceProfileService {
       centroid: this.robustCentroid(samples.map((sample) => sample.fingerprint.values)),
       acceptanceThreshold: DISPLAY_REQUIRED,
     };
-    await this.store.put(profile);
-    return profile;
+    return this.persist(profile);
   }
 
   async test(scope: VoiceProfileScope): Promise<VoiceProfileVerification> {
@@ -69,6 +85,7 @@ export class VoiceProfileService {
   }
 
   async verifyWakeSamples(scope: VoiceProfileScope, samples: Float32Array, sampleRate: number): Promise<any> {
+    if(this.cloud&&!this.synchronized.has(voiceProfileKey(scope)))await this.load(scope);
     const profile = await this.store.get(scope);
     if (!profile || !profile.enabled || !this.isCompatible(profile)) {
       return { accepted: false, similarity: 0, requiredSimilarity: DISPLAY_REQUIRED, profileRequired: true };
@@ -94,11 +111,13 @@ export class VoiceProfileService {
       acceptanceThreshold: DISPLAY_REQUIRED,
       updatedAt: new Date().toISOString(),
     };
-    await this.store.put(next);
-    return next;
+    return this.persist(next);
   }
 
-  async remove(scope: VoiceProfileScope): Promise<void> { await this.store.delete(scope); }
+  async remove(scope: VoiceProfileScope): Promise<void> {
+    if(this.cloud){await this.cloud.get(scope);await this.cloud.delete(scope);}
+    await this.store.delete(scope);
+  }
 
   private isCompatible(profile: VoiceProfile): boolean {
     const compatible = profile.samples?.filter((sample) => sample.fingerprint.values.length === EMBEDDING_SIZE) ?? [];

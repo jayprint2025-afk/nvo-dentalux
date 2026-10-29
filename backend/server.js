@@ -436,7 +436,7 @@ app.use((req, _res, next) => {
       'origin': req.headers.origin
     }, null, 2));
     console.log('Query params:', req.query);
-    const safeBody = { ...(req.body || {}) };
+    const safeBody = req.path === '/api/f1/voice-profile' ? { voiceProfile: '[HUELLA DE VOZ OCULTA]' } : { ...(req.body || {}) };
     if ('password' in safeBody) safeBody.password = '[OCULTA]';
     if ('password_hash' in safeBody) safeBody.password_hash = '[OCULTA]';
     // V28: never dump raw wake audio/Base64 into Render logs.

@@ -639,7 +639,7 @@ export default function AIFloatingWidget(props: { apiBase?: string; sucursalId?:
   const [wakeSettingsDraft, setWakeSettingsDraft] =
     React.useState<F1WakeSettings>(() => loadF1WakeSettings());
   const [wakeSettingsRevision, setWakeSettingsRevision] = React.useState(0);
-  const voiceProfileServiceRef = React.useRef(new VoiceProfileService());
+  const voiceProfileServiceRef = React.useRef(new VoiceProfileService(API_BASE));
   const [voiceProfile, setVoiceProfile] = React.useState<VoiceProfile | null>(null);
   const [voiceProfileName, setVoiceProfileName] = React.useState("Jonathan");
   const [voiceProfileBusy, setVoiceProfileBusy] = React.useState(false);
@@ -677,6 +677,8 @@ export default function AIFloatingWidget(props: { apiBase?: string; sucursalId?:
     return h;
   }, [sucursalId, dbKey, appId, waPhoneNumberId]);
 
+  const voiceSessionToken=localStorage.getItem("dentalux_auth_token")||"";
+  const voiceProfileCaptureRef=React.useRef(false);
   const voiceProfileScope = React.useMemo<VoiceProfileScope>(() => {
     const token = localStorage.getItem("dentalux_auth_token") || "";
     const identity = decodeJwtIdentity(token);
@@ -685,29 +687,23 @@ export default function AIFloatingWidget(props: { apiBase?: string; sucursalId?:
       userId: identity.user,
       branchKey: sucursalId || "sucursal_1",
     };
-  }, [sucursalId]);
+  }, [sucursalId,voiceSessionToken]);
 
   React.useEffect(() => {
     let cancelled = false;
 
-    void voiceProfileServiceRef.current
-      .load(voiceProfileScope, { useValidatedOwnerPreset: true })
-      .then((profile) => {
-        if (cancelled) return;
-        setVoiceProfile(profile);
-        if (profile?.displayName) setVoiceProfileName(profile.displayName);
-      })
-      .catch((error) => {
-        if (!cancelled) {
-          setVoiceProfileMessage(
-            error instanceof Error ? error.message : String(error),
-          );
-        }
-      });
-
-    return () => {
-      cancelled = true;
+    const refresh=()=>{
+      if(cancelled||voiceProfileCaptureRef.current)return;
+      void voiceProfileServiceRef.current.load(voiceProfileScope).then(profile=>{
+        if(cancelled)return;setVoiceProfile(profile);
+        if(profile){setVoiceProfileName(profile.displayName);setVoiceProfileMessage(`Perfil sincronizado con tu cuenta: ${profile.samples.length} muestras.`);}
+        else setVoiceProfileMessage('Registra tu voz una vez; se sincronizará con tus otros dispositivos.');
+      }).catch(error=>{if(!cancelled)setVoiceProfileMessage(error instanceof Error?error.message:String(error));});
     };
+    refresh();
+    const timer=window.setInterval(()=>{if(!document.hidden)refresh();},60000);
+    const focus=()=>{if(!document.hidden)refresh();};document.addEventListener('visibilitychange',focus);
+    return()=>{cancelled=true;window.clearInterval(timer);document.removeEventListener('visibilitychange',focus);};
   }, [voiceProfileScope]);
 
   const loadConvs = React.useCallback(async () => {
@@ -1586,9 +1582,11 @@ const buildLeadReport = React.useCallback(() => {
   }, []);
 
   const recordVoiceProfileSample = React.useCallback(async () => {
+    if(voiceProfileCaptureRef.current)return;
+    voiceProfileCaptureRef.current=true;
     try {
       setVoiceProfileBusy(true);
-      setVoiceProfileMessage('Di una frase normal de 2 a 3 segundos con tu voz natural…');
+      setVoiceProfileMessage('Sincronizando perfil y preparando micrófono…');
       setVoiceProfileVerification(null);
 
       const shouldRestart = f1VoiceEngineEnabled;
@@ -1597,10 +1595,11 @@ const buildLeadReport = React.useCallback(() => {
       const profile = await voiceProfileServiceRef.current.addEnrollmentSample(
         voiceProfileScope,
         voiceProfileName,
+        ()=>setVoiceProfileMessage('Grabando 3.5 segundos: di “Oye Hanna”, “Oye Jana” u “Oye Ana” con tu voz natural…'),
       );
       setVoiceProfile(profile);
       setVoiceProfileMessage(
-        `Muestra ${profile.samples.length} guardada para ${profile.displayName}.`,
+        `Muestra ${profile.samples.length} sincronizada para ${profile.displayName}. Disponible en tus otros dispositivos.`,
       );
 
       if (shouldRestart) await sessionControllerRef.current?.enable();
@@ -1612,11 +1611,14 @@ const buildLeadReport = React.useCallback(() => {
         await sessionControllerRef.current?.enable().catch(() => undefined);
       }
     } finally {
+      voiceProfileCaptureRef.current=false;
       setVoiceProfileBusy(false);
     }
   }, [f1VoiceEngineEnabled, voiceProfileName, voiceProfileScope]);
 
   const testVoiceProfile = React.useCallback(async () => {
+    if(voiceProfileCaptureRef.current)return;
+    voiceProfileCaptureRef.current=true;
     try {
       setVoiceProfileBusy(true);
       setVoiceProfileMessage('Di una frase normal para verificar tu identidad…');
@@ -1641,6 +1643,7 @@ const buildLeadReport = React.useCallback(() => {
         await sessionControllerRef.current?.enable().catch(() => undefined);
       }
     } finally {
+      voiceProfileCaptureRef.current=false;
       setVoiceProfileBusy(false);
     }
   }, [
@@ -1651,30 +1654,26 @@ const buildLeadReport = React.useCallback(() => {
   ]);
 
   const saveVoiceProfileSettings = React.useCallback(async () => {
-    if (!voiceProfile) {
-      setVoiceProfileMessage("Primero registra una muestra de voz.");
-      return;
-    }
-
-    const updated = await voiceProfileServiceRef.current.update(voiceProfile, {
-      displayName: voiceProfileName,
-      enabled: voiceProfile.enabled,
-      acceptanceThreshold: voiceProfile.acceptanceThreshold,
-    });
-    setVoiceProfile(updated);
-    setVoiceProfileMessage("Perfil de voz actualizado.");
-  }, [voiceProfile, voiceProfileName]);
+    if(!voiceProfile){setVoiceProfileMessage('Primero registra tu voz.');return;}
+    if(voiceProfileCaptureRef.current)return;
+    voiceProfileCaptureRef.current=true;setVoiceProfileBusy(true);
+    try{
+      const updated=await voiceProfileServiceRef.current.update(voiceProfile,{displayName:voiceProfileName,enabled:voiceProfile.enabled,acceptanceThreshold:voiceProfile.acceptanceThreshold});
+      setVoiceProfile(updated);setVoiceProfileMessage('Perfil de voz sincronizado con tu cuenta.');
+    }catch(error){setVoiceProfileMessage(error instanceof Error?error.message:String(error));}
+    finally{voiceProfileCaptureRef.current=false;setVoiceProfileBusy(false);}
+  },[voiceProfile,voiceProfileName]);
 
   const removeVoiceProfile = React.useCallback(async () => {
-    if (!window.confirm("Â¿Eliminar todas las muestras de este perfil de voz?")) {
-      return;
-    }
-
-    await voiceProfileServiceRef.current.remove(voiceProfileScope);
-    setVoiceProfile(null);
-    setVoiceProfileVerification(null);
-    setVoiceProfileMessage("Perfil de voz eliminado.");
-  }, [voiceProfileScope]);
+    if(voiceProfileCaptureRef.current)return;
+    if(!window.confirm('¿Eliminar el perfil de voz de tu cuenta en todos tus dispositivos?'))return;
+    voiceProfileCaptureRef.current=true;setVoiceProfileBusy(true);
+    try{
+      await voiceProfileServiceRef.current.remove(voiceProfileScope);
+      setVoiceProfile(null);setVoiceProfileVerification(null);setVoiceProfileMessage('Perfil eliminado de tu cuenta.');
+    }catch(error){setVoiceProfileMessage(error instanceof Error?error.message:String(error));}
+    finally{voiceProfileCaptureRef.current=false;setVoiceProfileBusy(false);}
+  },[voiceProfileScope]);
 
   const connectVoice = React.useCallback(async () => {
     await unlockF1Audio();

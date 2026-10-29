@@ -18,6 +18,7 @@ export type VoiceProfileSample = {
 };
 
 export type VoiceProfile = {
+  cloudRevision?: number;
   key: string;
   engineVersion?: "campplus-v44";
   scope: VoiceProfileScope;

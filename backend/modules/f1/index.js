@@ -296,6 +296,7 @@ async function executeF1Tool(q, ctx, name, args = {}) {
 function setupF1Routes(app, q, deps) {
   const { authRequired, getTenantId, getSucursal } = deps;
   app.use('/api/f1', authRequired);
+  require('./voice-profile-sync').setupVoiceProfileSync(app,q);
 
   // F1-011B: historial reciente del Event Bus, aislado por empresa y sucursal.
   // Sirve para validar que Agenda está publicando sus movimientos.
